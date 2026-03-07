@@ -6,26 +6,29 @@ package sqlc
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"time"
 )
 
 type Querier interface {
-	ApprovePlan(ctx context.Context, arg ApprovePlanParams) (Plan, error)
+	ApprovePlan(ctx context.Context, arg ApprovePlanParams) error
+	GetConfigSnapshotByID(ctx context.Context, id int64) (ConfigSnapshot, error)
 	GetDocumentByID(ctx context.Context, id int64) (Document, error)
 	GetDocumentBySHA(ctx context.Context, sha256 string) (Document, error)
+	GetEvaluationByID(ctx context.Context, id int64) (Evaluation, error)
 	GetLatestParseRunByDocumentID(ctx context.Context, documentID int64) (ParseRun, error)
 	GetMarketSnapshotBySymbolDate(ctx context.Context, arg GetMarketSnapshotBySymbolDateParams) (MarketSnapshot, error)
+	GetParseRunByID(ctx context.Context, id int64) (ParseRun, error)
 	GetPlanByID(ctx context.Context, id int64) (Plan, error)
 	GetSignalByID(ctx context.Context, id int64) (Signal, error)
-	InsertConfigSnapshot(ctx context.Context, arg InsertConfigSnapshotParams) (ConfigSnapshot, error)
-	InsertDocument(ctx context.Context, arg InsertDocumentParams) (Document, error)
-	InsertEvaluation(ctx context.Context, arg InsertEvaluationParams) (Evaluation, error)
-	InsertMarketSnapshot(ctx context.Context, arg InsertMarketSnapshotParams) (MarketSnapshot, error)
-	InsertParseRun(ctx context.Context, arg InsertParseRunParams) (ParseRun, error)
-	InsertPlan(ctx context.Context, arg InsertPlanParams) (Plan, error)
-	InsertSignal(ctx context.Context, arg InsertSignalParams) (Signal, error)
-	ListApprovedPlansForTradeDateWithoutEvaluation(ctx context.Context, tradeDate pgtype.Date) ([]Plan, error)
+	InsertConfigSnapshot(ctx context.Context, arg InsertConfigSnapshotParams) (sql.Result, error)
+	InsertDocument(ctx context.Context, arg InsertDocumentParams) (sql.Result, error)
+	InsertEvaluation(ctx context.Context, arg InsertEvaluationParams) (sql.Result, error)
+	InsertMarketSnapshot(ctx context.Context, arg InsertMarketSnapshotParams) error
+	InsertParseRun(ctx context.Context, arg InsertParseRunParams) (sql.Result, error)
+	InsertPlan(ctx context.Context, arg InsertPlanParams) (sql.Result, error)
+	InsertSignal(ctx context.Context, arg InsertSignalParams) (sql.Result, error)
+	ListApprovedPlansForTradeDateWithoutEvaluation(ctx context.Context, tradeDate time.Time) ([]Plan, error)
 	ListDocuments(ctx context.Context, limit int32) ([]Document, error)
 	ListDocumentsByStatus(ctx context.Context, arg ListDocumentsByStatusParams) ([]Document, error)
 	ListEvaluations(ctx context.Context, limit int32) ([]Evaluation, error)

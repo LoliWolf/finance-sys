@@ -25,7 +25,7 @@ func Validate(cfg *Config) error {
 	require(strings.HasPrefix(cfg.Service.HTTP.APIPrefix, "/"), "service.http.api_prefix must start with /")
 	require(cfg.Service.Worker.Concurrency > 0, "service.worker.concurrency must be positive")
 	require(cfg.Database.DSN != "", "database.dsn is required")
-	require(cfg.Database.Driver == "postgres", "database.driver must be postgres")
+	require(cfg.Database.Driver == "mysql", "database.driver must be mysql")
 	require(cfg.ObjectStorage.Endpoint != "", "object_storage.endpoint is required")
 	require(cfg.Redis.Addr != "", "redis.addr is required")
 	require(cfg.NacosClient.PollIntervalSeconds > 0, "nacos_client.poll_interval_seconds must be positive")

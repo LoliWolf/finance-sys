@@ -1,6 +1,6 @@
 version: "2"
 sql:
-  - engine: "postgresql"
+  - engine: "mysql"
     schema:
       - "../migrations/000001_init.up.sql"
     queries:
@@ -9,6 +9,6 @@ sql:
       go:
         package: "sqlc"
         out: "../internal/repository/sqlc"
-        sql_package: "pgx/v5"
+        sql_package: "database/sql"
         emit_json_tags: true
         emit_interface: true

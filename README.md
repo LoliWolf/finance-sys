@@ -15,7 +15,7 @@
 - 确定性规则引擎生成交易计划
 - 计划审批、次日评估、专家 scorecard 汇总
 - Nacos 单 JSON 配置加载、热更新、last-good-cache、配置快照入库
-- PostgreSQL + `pgx/v5` + `sqlc` 类型安全查询
+- MySQL + `database/sql` + `sqlc` 类型安全查询
 - Redis、MinIO、Cron 调度、Docker 本地环境
 
 ## 目录结构
@@ -72,7 +72,7 @@
 - 后端主系统统一为 Go 1.22
 - HTTP 路由使用 `chi/v5`
 - 日志使用 `slog`，输出 JSON
-- 数据库访问使用 `pgx/v5` + `sqlc`
+- 数据库访问使用 `database/sql` + `go-sql-driver/mysql` + `sqlc`
 - 迁移目录使用 `migrations/`，兼容 `golang-migrate`
 - Redis 使用 `redis/go-redis/v9`
 - MinIO 使用 `minio-go/v7`
@@ -84,7 +84,7 @@
 ## 核心流程
 
 1. 文档进入系统并计算 SHA256 去重。
-2. 原始文件写入 MinIO，元信息写入 PostgreSQL。
+2. 原始文件写入 MinIO，元信息写入 MySQL。
 3. Parser 解析正文、sections、chunks、tables。
 4. 抽取模块生成结构化专家信号。
 5. 市场数据 provider 拉取 T 日行情快照。
@@ -127,7 +127,7 @@
 
 依赖：
 
-- PostgreSQL
+- MySQL
 - Redis
 - MinIO
 - 可选 Nacos
@@ -168,7 +168,7 @@ sqlc generate -f sqlc/sqlc.yaml
 执行数据库迁移：
 
 ```bash
-migrate -path migrations -database "postgres://expert_trade:change_me@localhost:5432/expert_trade?sslmode=disable" up
+migrate -path migrations -database "mysql://expert_trade:change_me@tcp(localhost:3306)/expert_trade" up
 ```
 
 ## 测试状态

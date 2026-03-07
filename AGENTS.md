@@ -23,7 +23,7 @@
 - 后端主系统必须保持 Go 1.22
 - HTTP Router 使用 `chi/v5`
 - 日志基础使用 `slog`
-- 数据库访问必须使用 `pgx/v5` + `sqlc`
+- 数据库访问必须使用 `database/sql` + `go-sql-driver/mysql` + `sqlc`
 - 不允许引入 GORM
 - 业务配置只能来自 Nacos 单个 JSON 文档
 - LLM 只允许做抽取，不允许直接生成入场价、止损价、止盈价、仓位

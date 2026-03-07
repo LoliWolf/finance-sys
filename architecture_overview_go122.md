@@ -63,7 +63,7 @@ parser         & validation   provider chain   & reports
    +-- native Go parsers for docx/html/txt/eml
 
                    |
-            PostgreSQL / Redis / MinIO
+            MySQL / Redis / MinIO
 ```
 
 ## 3. 处理链路
@@ -227,7 +227,7 @@ deploy
 ## 11. 本地启动建议
 
 最小开发环境：
-- PostgreSQL
+- MySQL
 - Redis
 - MinIO
 - API

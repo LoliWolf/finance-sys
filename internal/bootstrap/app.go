@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -25,14 +26,14 @@ import (
 	"finance-sys/internal/storage"
 	"finance-sys/internal/telemetry"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/redis/go-redis/v9"
 )
 
 type App struct {
 	Runtime           *config.Runtime
 	Logger            *slog.Logger
-	DB                *pgxpool.Pool
+	DB                *sql.DB
 	Redis             *redis.Client
 	Repository        *repository.Repository
 	ObjectStorage     storage.ObjectStorage
@@ -145,20 +146,20 @@ func loadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snap
 	return snapshot, nil, err
 }
 
-func openDB(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
-	poolConfig, err := pgxpool.ParseConfig(cfg.Database.DSN)
+func openDB(ctx context.Context, cfg *config.Config) (*sql.DB, error) {
+	db, err := sql.Open("mysql", cfg.Database.DSN)
 	if err != nil {
 		return nil, err
 	}
-	poolConfig.MaxConns = int32(cfg.Database.MaxOpenConns)
-	poolConfig.MinConns = int32(cfg.Database.MaxIdleConns)
-	poolConfig.MaxConnLifetime = time.Duration(cfg.Database.ConnMaxLifetimeMinutes) * time.Minute
-	poolConfig.MaxConnIdleTime = time.Duration(cfg.Database.ConnMaxIdleTimeMinutes) * time.Minute
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
+	db.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	db.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLifetimeMinutes) * time.Minute)
+	db.SetConnMaxIdleTime(time.Duration(cfg.Database.ConnMaxIdleTimeMinutes) * time.Minute)
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
-	return pool, nil
+	return db, nil
 }
 
 func openRedis(cfg *config.Config) *redis.Client {

@@ -106,8 +106,8 @@
     "path": "/metrics"
   },
   "database": {
-    "driver": "postgres",
-    "dsn": "postgres://expert_trade:change_me@localhost:5432/expert_trade?sslmode=disable",
+    "driver": "mysql",
+    "dsn": "expert_trade:change_me@tcp(localhost:3306)/expert_trade?parseTime=true&multiStatements=true&charset=utf8mb4",
     "max_open_conns": 20,
     "max_idle_conns": 10,
     "conn_max_lifetime_minutes": 30,

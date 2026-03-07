@@ -1,16 +1,17 @@
 version: "3.9"
 
 services:
-  postgres:
-    image: postgres:16
+  mysql:
+    image: mysql:8.4
     environment:
-      POSTGRES_DB: expert_trade
-      POSTGRES_USER: expert_trade
-      POSTGRES_PASSWORD: change_me
+      MYSQL_DATABASE: expert_trade
+      MYSQL_USER: expert_trade
+      MYSQL_PASSWORD: change_me
+      MYSQL_ROOT_PASSWORD: change_me
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
 
   redis:
     image: redis:7
@@ -42,7 +43,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.api
     depends_on:
-      - postgres
+      - mysql
       - redis
       - minio
     ports:
@@ -60,7 +61,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.worker
     depends_on:
-      - postgres
+      - mysql
       - redis
       - minio
     environment:
@@ -72,5 +73,5 @@ services:
       NACOS_PASSWORD: nacos
 
 volumes:
-  postgres_data:
+  mysql_data:
   minio_data:
