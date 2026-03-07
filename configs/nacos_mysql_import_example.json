@@ -1,0 +1,291 @@
+{
+  "meta": {
+    "app_name": "expert-doc-trade-workflow",
+    "app_code": "expert-doc-trade",
+    "env": "prod",
+    "version": "2.0.0-go122-mysql",
+    "timezone": "Asia/Shanghai",
+    "config_version": 1,
+    "owner": "quant-research",
+    "description": "专家文档到次日交易计划工作流，MySQL 版本 Nacos 配置示例"
+  },
+  "service": {
+    "name": "expert-doc-trade",
+    "env": "prod",
+    "timezone": "Asia/Shanghai",
+    "http": {
+      "host": "0.0.0.0",
+      "port": 18080,
+      "api_prefix": "/api/v1",
+      "read_timeout_ms": 30000,
+      "write_timeout_ms": 30000,
+      "idle_timeout_ms": 60000,
+      "shutdown_timeout_seconds": 20,
+      "max_header_bytes": 1048576,
+      "cors": {
+        "enabled": true,
+        "allow_origins": [
+          "http://localhost:3000",
+          "https://your-admin.example.com"
+        ],
+        "allow_methods": [
+          "GET",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ],
+        "allow_headers": [
+          "*"
+        ]
+      }
+    },
+    "worker": {
+      "concurrency": 8,
+      "graceful_shutdown_seconds": 30,
+      "job_poll_interval_seconds": 5,
+      "temporary_dir": "/data/expert-trade/tmp"
+    }
+  },
+  "runtime": {
+    "trade_calendar": "CN_A_SHARE",
+    "default_asset_universe": [
+      "A_SHARE",
+      "ETF",
+      "INDEX"
+    ],
+    "max_parallel_jobs": 8,
+    "idempotency_enabled": true,
+    "raw_response_archive_enabled": true,
+    "default_benchmark_symbol": "000300.SH",
+    "allow_auto_approval": false,
+    "skills_runtime_dependency_allowed": false
+  },
+  "nacos_client": {
+    "refresh_mode": "polling",
+    "poll_interval_seconds": 30,
+    "fail_fast": true,
+    "cache_last_good_config": true,
+    "cache_dir": "/data/expert-trade/cache",
+    "validate_schema_on_refresh": true,
+    "write_config_snapshot_to_db": true
+  },
+  "security": {
+    "auth": {
+      "enabled": true,
+      "mode": "static_token",
+      "static_tokens": [
+        "replace-with-internal-token"
+      ],
+      "header_name": "Authorization",
+      "token_prefix": "Bearer "
+    },
+    "webhook_signature": {
+      "enabled": false,
+      "shared_secret": "replace-with-webhook-secret"
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json",
+    "include_caller": false,
+    "include_stacktrace": true,
+    "fields": [
+      "request_id",
+      "job_run_id",
+      "document_id",
+      "signal_id",
+      "plan_id",
+      "provider",
+      "rule_version",
+      "config_version"
+    ]
+  },
+  "metrics": {
+    "enabled": true,
+    "namespace": "expert_trade",
+    "path": "/metrics"
+  },
+  "database": {
+    "driver": "mysql",
+    "dsn": "expert_trade:change_me@tcp(mysql.internal:3306)/expert_trade?parseTime=true&multiStatements=true&charset=utf8mb4",
+    "max_open_conns": 30,
+    "max_idle_conns": 10,
+    "conn_max_lifetime_minutes": 30,
+    "conn_max_idle_time_minutes": 10,
+    "statement_timeout_ms": 30000,
+    "migrations_dir": "migrations"
+  },
+  "redis": {
+    "addr": "redis.internal:6379",
+    "password": "",
+    "db": 0,
+    "key_prefix": "expert-trade:",
+    "dial_timeout_ms": 3000,
+    "read_timeout_ms": 3000,
+    "write_timeout_ms": 3000
+  },
+  "object_storage": {
+    "backend": "minio",
+    "endpoint": "minio.internal:9000",
+    "access_key": "replace-with-minio-access-key",
+    "secret_key": "replace-with-minio-secret-key",
+    "secure": false,
+    "bucket_documents": "expert-documents",
+    "bucket_raw_market": "expert-market-raw",
+    "bucket_reports": "expert-reports",
+    "bucket_dead_letters": "expert-dead-letters"
+  },
+  "distributed_lock": {
+    "backend": "redis",
+    "ttl_seconds": 600,
+    "renew_interval_seconds": 60
+  },
+  "http_clients": {
+    "default_timeout_ms": 10000,
+    "max_idle_conns": 100,
+    "max_idle_conns_per_host": 20,
+    "idle_conn_timeout_ms": 90000,
+    "retry": {
+      "max_attempts": 2,
+      "base_backoff_ms": 300,
+      "max_backoff_ms": 3000
+    }
+  },
+  "document_ingestion": {
+    "watch_local_dirs": [
+      "/data/expert-trade/inbox"
+    ],
+    "watch_minio_prefixes": [
+      "incoming/"
+    ],
+    "api_upload_enabled": true,
+    "allowed_extensions": [
+      ".pdf",
+      ".docx",
+      ".txt",
+      ".md",
+      ".html",
+      ".eml"
+    ],
+    "max_file_size_mb": 100,
+    "sha256_dedup": true,
+    "source_defaults": {
+      "source_type": "manual",
+      "source_name": "default",
+      "author": "",
+      "institution": ""
+    }
+  },
+  "document_parsing": {
+    "pdf": {
+      "text_extractors": [
+        "pdftotext_cli",
+        "mutool_cli"
+      ],
+      "prefer_text_extraction_first": true,
+      "ocr_fallback_when_text_density_below": 0.15,
+      "ocr_fallback_when_garbled_ratio_above": 0.2,
+      "keep_page_text": true,
+      "extract_tables": true
+    },
+    "ocr": {
+      "enabled": true,
+      "mode": "http_service",
+      "provider": "paddleocr",
+      "service_url": "http://paddleocr.internal:8089/ocr",
+      "timeout_ms": 120000,
+      "max_pages_per_document": 300,
+      "dpi": 200,
+      "languages": [
+        "ch",
+        "en"
+      ]
+    },
+    "table_extraction": {
+      "enabled": true,
+      "mode": "best_effort",
+      "allow_external_bridge": true,
+      "store_raw_blocks": true
+    },
+    "docx": {
+      "enabled": true
+    },
+    "html": {
+      "enabled": true,
+      "remove_scripts": true,
+      "remove_styles": true
+    },
+    "email": {
+      "enabled": true,
+      "prefer_plain_text": true
+    },
+    "cleaning": {
+      "remove_headers_footers": true,
+      "remove_disclaimer_blocks": true,
+      "remove_duplicate_lines": true,
+      "normalize_whitespace": true
+    },
+    "chunking": {
+      "enabled": true,
+      "target_chars": 1000,
+      "overlap_chars": 150
+    },
+    "dead_letter": {
+      "enabled": true,
+      "prefix": "parse-dead-letter/"
+    }
+  },
+  "llm": {
+    "enabled": false,
+    "provider": "mock",
+    "endpoint": "",
+    "api_key": "",
+    "model": "mock-extractor-v1",
+    "timeout_ms": 20000,
+    "max_retries": 1,
+    "json_schema_validation": true
+  },
+  "market": {
+    "primary_provider": "eastmoney_http",
+    "fallback_providers": [
+      "sina_http"
+    ],
+    "cache_ttl_seconds": 300,
+    "provider_timeout_ms": 6000,
+    "max_retries": 2,
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "half_open_after_seconds": 60
+    },
+    "rate_limit": {
+      "requests_per_second": 5,
+      "burst": 10
+    }
+  },
+  "rules": {
+    "version": "ruleset-v1",
+    "default_strategy": "OPEN_GAP_FILTER",
+    "risk": {
+      "max_position_pct": 0.1,
+      "max_gap_pct": 0.03,
+      "default_stop_atr": 1.5,
+      "default_take_profit_atr": 2.5,
+      "min_avg_turnover_cny": 50000000
+    }
+  },
+  "approval": {
+    "manual_required": true,
+    "default_approver": "research_lead"
+  },
+  "evaluation": {
+    "entry_grace_minutes": 30,
+    "benchmark_symbol": "000300.SH",
+    "minute_bar_interval": "1m"
+  },
+  "reporting": {
+    "daily_enabled": true,
+    "weekly_enabled": true,
+    "report_bucket_prefix": "reports/"
+  }
+}
