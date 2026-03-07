@@ -1,0 +1,76 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: expert_trade
+      POSTGRES_USER: expert_trade
+      POSTGRES_PASSWORD: change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    environment:
+      MODE: standalone
+      NACOS_AUTH_ENABLE: "false"
+    ports:
+      - "8848:8848"
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    ports:
+      - "18080:18080"
+    environment:
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_NAMESPACE: public
+      NACOS_GROUP: DEFAULT_GROUP
+      NACOS_DATA_ID: expert-doc-trade-dev.json
+      NACOS_USERNAME: nacos
+      NACOS_PASSWORD: nacos
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    environment:
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_NAMESPACE: public
+      NACOS_GROUP: DEFAULT_GROUP
+      NACOS_DATA_ID: expert-doc-trade-dev.json
+      NACOS_USERNAME: nacos
+      NACOS_PASSWORD: nacos
+
+volumes:
+  postgres_data:
+  minio_data:

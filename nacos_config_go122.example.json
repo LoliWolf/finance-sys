@@ -1,0 +1,606 @@
+{
+  "meta": {
+    "app_name": "expert-doc-trade-workflow",
+    "app_code": "expert-doc-trade",
+    "env": "prod",
+    "version": "2.0.0-go122",
+    "timezone": "Asia/Shanghai",
+    "config_version": 2,
+    "owner": "quant-research",
+    "description": "专家文档到次日交易计划与验证平台，Go 1.22 后端，全部业务配置存放于单一 Nacos JSON 文档"
+  },
+  "bootstrap_note": {
+    "description": "以下字段不建议存放到 Nacos 内部，应用启动时通过环境变量提供",
+    "required_env": [
+      "NACOS_SERVER_ADDR",
+      "NACOS_NAMESPACE",
+      "NACOS_GROUP",
+      "NACOS_DATA_ID",
+      "NACOS_USERNAME",
+      "NACOS_PASSWORD"
+    ]
+  },
+  "service": {
+    "name": "expert-doc-trade",
+    "env": "prod",
+    "timezone": "Asia/Shanghai",
+    "http": {
+      "host": "0.0.0.0",
+      "port": 18080,
+      "api_prefix": "/api/v1",
+      "read_timeout_ms": 30000,
+      "write_timeout_ms": 30000,
+      "idle_timeout_ms": 60000,
+      "shutdown_timeout_seconds": 20,
+      "max_header_bytes": 1048576,
+      "cors": {
+        "enabled": true,
+        "allow_origins": [
+          "http://localhost:3000",
+          "http://127.0.0.1:3000"
+        ],
+        "allow_methods": [
+          "GET",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ],
+        "allow_headers": [
+          "*"
+        ]
+      }
+    },
+    "worker": {
+      "concurrency": 8,
+      "graceful_shutdown_seconds": 30,
+      "job_poll_interval_seconds": 5,
+      "temporary_dir": "/var/lib/expert-trade/tmp"
+    }
+  },
+  "runtime": {
+    "trade_calendar": "CN_A_SHARE",
+    "default_asset_universe": [
+      "A_SHARE",
+      "ETF",
+      "INDEX"
+    ],
+    "max_parallel_jobs": 8,
+    "idempotency_enabled": true,
+    "raw_response_archive_enabled": true,
+    "default_benchmark_symbol": "000300.SH",
+    "allow_auto_approval": false,
+    "skills_runtime_dependency_allowed": false
+  },
+  "nacos_client": {
+    "refresh_mode": "polling",
+    "poll_interval_seconds": 30,
+    "fail_fast": true,
+    "cache_last_good_config": true,
+    "cache_dir": "/var/lib/expert-trade/config-cache",
+    "validate_schema_on_refresh": true,
+    "write_config_snapshot_to_db": true
+  },
+  "security": {
+    "auth": {
+      "enabled": true,
+      "mode": "static_token",
+      "static_tokens": [
+        "replace-with-internal-token"
+      ],
+      "header_name": "Authorization",
+      "token_prefix": "Bearer "
+    },
+    "webhook_signature": {
+      "enabled": false,
+      "shared_secret": "replace-with-webhook-secret"
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json",
+    "include_caller": false,
+    "include_stacktrace": true,
+    "fields": [
+      "request_id",
+      "job_run_id",
+      "document_id",
+      "signal_id",
+      "plan_id",
+      "provider",
+      "rule_version",
+      "config_version"
+    ]
+  },
+  "metrics": {
+    "enabled": true,
+    "namespace": "expert_trade",
+    "path": "/metrics"
+  },
+  "database": {
+    "driver": "postgres",
+    "dsn": "postgres://expert_trade:change_me@postgresql.internal:5432/expert_trade?sslmode=disable",
+    "max_open_conns": 20,
+    "max_idle_conns": 10,
+    "conn_max_lifetime_minutes": 30,
+    "conn_max_idle_time_minutes": 10,
+    "statement_timeout_ms": 30000,
+    "migrations_dir": "migrations"
+  },
+  "redis": {
+    "addr": "redis.internal:6379",
+    "password": "",
+    "db": 0,
+    "key_prefix": "expert-trade:",
+    "dial_timeout_ms": 3000,
+    "read_timeout_ms": 3000,
+    "write_timeout_ms": 3000
+  },
+  "object_storage": {
+    "backend": "minio",
+    "endpoint": "minio.internal:9000",
+    "access_key": "minio_access_key",
+    "secret_key": "minio_secret_key",
+    "secure": false,
+    "bucket_documents": "expert-documents",
+    "bucket_raw_market": "expert-market-raw",
+    "bucket_reports": "expert-reports",
+    "bucket_dead_letters": "expert-dead-letters"
+  },
+  "distributed_lock": {
+    "backend": "redis",
+    "ttl_seconds": 600,
+    "renew_interval_seconds": 60
+  },
+  "http_clients": {
+    "default_timeout_ms": 10000,
+    "max_idle_conns": 100,
+    "max_idle_conns_per_host": 20,
+    "idle_conn_timeout_ms": 90000,
+    "retry": {
+      "max_attempts": 2,
+      "base_backoff_ms": 300,
+      "max_backoff_ms": 3000
+    }
+  },
+  "document_ingestion": {
+    "watch_local_dirs": [
+      "/data/inbox"
+    ],
+    "watch_minio_prefixes": [
+      "incoming/"
+    ],
+    "api_upload_enabled": true,
+    "allowed_extensions": [
+      ".pdf",
+      ".docx",
+      ".txt",
+      ".md",
+      ".html",
+      ".eml"
+    ],
+    "max_file_size_mb": 100,
+    "sha256_dedup": true,
+    "source_defaults": {
+      "source_type": "manual",
+      "source_name": "default",
+      "author": "",
+      "institution": ""
+    }
+  },
+  "document_parsing": {
+    "pdf": {
+      "text_extractors": [
+        "pdftotext_cli",
+        "mutool_cli"
+      ],
+      "prefer_text_extraction_first": true,
+      "ocr_fallback_when_text_density_below": 0.15,
+      "ocr_fallback_when_garbled_ratio_above": 0.2,
+      "keep_page_text": true,
+      "extract_tables": true
+    },
+    "ocr": {
+      "enabled": true,
+      "mode": "http_service",
+      "provider": "paddleocr",
+      "service_url": "http://paddleocr-service.internal:8089/ocr",
+      "timeout_ms": 120000,
+      "max_pages_per_document": 300,
+      "dpi": 200,
+      "languages": [
+        "ch",
+        "en"
+      ]
+    },
+    "table_extraction": {
+      "enabled": true,
+      "mode": "best_effort",
+      "allow_external_bridge": true,
+      "store_raw_blocks": true
+    },
+    "docx": {
+      "enabled": true
+    },
+    "html": {
+      "enabled": true,
+      "remove_scripts": true,
+      "remove_styles": true
+    },
+    "email": {
+      "enabled": true,
+      "prefer_plain_text": true
+    },
+    "cleaning": {
+      "remove_headers_footers": true,
+      "remove_disclaimer_blocks": true,
+      "remove_duplicate_lines": true,
+      "normalize_whitespace": true
+    },
+    "chunking": {
+      "strategy": "token_aware",
+      "chunk_size": 1200,
+      "chunk_overlap": 150,
+      "min_chunk_chars": 80
+    },
+    "external_tools": {
+      "pdftotext_path": "/usr/bin/pdftotext",
+      "mutool_path": "/usr/bin/mutool"
+    }
+  },
+  "llm": {
+    "default_provider": "openai_compatible",
+    "timeout_seconds": 60,
+    "max_retries": 1,
+    "strict_json_schema": true,
+    "providers": {
+      "extractor": {
+        "type": "openai_compatible",
+        "base_url": "http://llm-gateway.internal/v1",
+        "api_key": "replace-with-internal-key",
+        "model": "qwen2.5-72b-instruct",
+        "temperature": 0.1,
+        "max_tokens": 4096
+      },
+      "summarizer": {
+        "type": "openai_compatible",
+        "base_url": "http://llm-gateway.internal/v1",
+        "api_key": "replace-with-internal-key",
+        "model": "qwen2.5-32b-instruct",
+        "temperature": 0.2,
+        "max_tokens": 2048
+      }
+    },
+    "tasks": {
+      "classify_document": {
+        "provider": "extractor",
+        "prompt_template": "classify_document.tmpl"
+      },
+      "extract_signal": {
+        "provider": "extractor",
+        "prompt_template": "extract_signal.tmpl"
+      },
+      "summarize_report": {
+        "provider": "summarizer",
+        "prompt_template": "summarize_report.tmpl"
+      }
+    },
+    "guardrails": {
+      "allow_trade_price_generation": false,
+      "force_schema_validation": true,
+      "dead_letter_on_second_failure": true
+    }
+  },
+  "expert_signal_extraction": {
+    "supported_document_types": [
+      "EXPERT_DAILY_ARTICLE",
+      "RESEARCH_NOTE",
+      "MARKET_COMMENTARY",
+      "SECTOR_NOTE",
+      "STRATEGY_NOTE",
+      "IRRELEVANT"
+    ],
+    "confidence_threshold": 0.68,
+    "allow_theme_level_signal": true,
+    "require_evidence_spans": true,
+    "max_symbols_per_signal": 10,
+    "drop_signal_when_no_evidence": true
+  },
+  "symbol_registry": {
+    "refresh_enabled": true,
+    "refresh_cron": "0 0 7 * * MON-FRI",
+    "source_priority": [
+      "manual_aliases",
+      "eastmoney_http",
+      "sina_http",
+      "akshare_bridge"
+    ],
+    "fuzzy_match_threshold": 0.86,
+    "manual_alias_file": "/data/config/manual_symbol_aliases.json",
+    "canonical_formats": {
+      "stock_sh": "{code}.SH",
+      "stock_sz": "{code}.SZ",
+      "stock_bj": "{code}.BJ",
+      "etf_sh": "{code}.SH",
+      "etf_sz": "{code}.SZ",
+      "index_cn": "{code}.SH"
+    }
+  },
+  "market_data": {
+    "provider_chain": [
+      "eastmoney_http",
+      "sina_http",
+      "akshare_bridge",
+      "baostock_bridge",
+      "mcp_market"
+    ],
+    "archive_raw_payloads": true,
+    "cache": {
+      "enabled": true,
+      "l1_in_memory": true,
+      "l2_redis": true,
+      "ttl_seconds": {
+        "security_master": 86400,
+        "quotes": 10,
+        "daily_bars": 3600,
+        "minute_bars": 300,
+        "trading_calendar": 86400,
+        "corporate_actions": 86400
+      }
+    },
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "half_open_after_seconds": 60
+    },
+    "providers": {
+      "eastmoney_http": {
+        "enabled": true,
+        "kind": "DIRECT_HTTP",
+        "timeout_ms": 8000,
+        "retries": 1,
+        "rate_limit_qps": 2.0,
+        "supports": [
+          "security_master",
+          "realtime_quotes",
+          "daily_bars",
+          "minute_bars",
+          "trading_calendar"
+        ],
+        "archive_prefix": "eastmoney/"
+      },
+      "sina_http": {
+        "enabled": true,
+        "kind": "DIRECT_HTTP",
+        "timeout_ms": 5000,
+        "retries": 1,
+        "rate_limit_qps": 1.5,
+        "supports": [
+          "realtime_quotes",
+          "security_master"
+        ],
+        "archive_prefix": "sina/"
+      },
+      "akshare_bridge": {
+        "enabled": false,
+        "kind": "HTTP_BRIDGE",
+        "base_url": "http://akshare-bridge.internal:8091",
+        "timeout_ms": 15000,
+        "api_key": "replace-akshare-bridge-key",
+        "supports": [
+          "security_master",
+          "realtime_quotes",
+          "daily_bars",
+          "minute_bars",
+          "trading_calendar",
+          "corporate_actions"
+        ],
+        "archive_prefix": "akshare-bridge/"
+      },
+      "baostock_bridge": {
+        "enabled": false,
+        "kind": "HTTP_BRIDGE",
+        "base_url": "http://baostock-bridge.internal:8092",
+        "timeout_ms": 15000,
+        "api_key": "replace-baostock-bridge-key",
+        "supports": [
+          "daily_bars",
+          "minute_bars",
+          "trading_calendar",
+          "corporate_actions"
+        ],
+        "archive_prefix": "baostock-bridge/"
+      },
+      "mcp_market": {
+        "enabled": false,
+        "kind": "MCP",
+        "transport": "http",
+        "base_url": "http://market-mcp.internal:8093",
+        "timeout_ms": 15000,
+        "supports": [
+          "security_master",
+          "realtime_quotes",
+          "daily_bars",
+          "minute_bars",
+          "trading_calendar",
+          "corporate_actions"
+        ],
+        "archive_prefix": "mcp-market/"
+      }
+    },
+    "quality": {
+      "require_minute_bars_for_intraday_eval": true,
+      "fallback_to_daily_when_minute_missing": true,
+      "mark_data_insufficient_when_missing_fields": true
+    }
+  },
+  "plan_generation": {
+    "approval_required": true,
+    "supported_setup_types": [
+      "OPEN_FOLLOW",
+      "OPEN_GAP_FILTER",
+      "PULLBACK_TO_RANGE",
+      "BREAKOUT_ABOVE_PREV_HIGH",
+      "WATCHLIST_ONLY"
+    ],
+    "risk": {
+      "single_position_risk_pct": 0.005,
+      "daily_total_risk_pct": 0.015,
+      "max_open_plans_per_day": 5,
+      "min_avg_turnover_cny": 50000000,
+      "exclude_st": true,
+      "exclude_suspended": true
+    },
+    "atr": {
+      "period_days": 14,
+      "multiplier_stop_loss": 1.0,
+      "multiplier_take_profit": 1.8
+    },
+    "price_rules": {
+      "gap_up_invalid_pct": 0.04,
+      "gap_down_invalid_pct": 0.05,
+      "pullback_entry_buffer_pct": 0.003
+    },
+    "watchlist_only_conditions": {
+      "price_too_extended_5d_pct": 0.12,
+      "liquidity_too_low": true
+    },
+    "rule_version": "ruleset_cn_equity_v1"
+  },
+  "approval": {
+    "enabled": true,
+    "mode": "manual_then_publish",
+    "auto_approve_min_confidence": 0.9,
+    "notify_channels": [
+      "feishu"
+    ],
+    "feishu": {
+      "enabled": true,
+      "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/replace-me",
+      "secret": "replace-feishu-secret"
+    }
+  },
+  "evaluation": {
+    "rule_version": "eval_cn_equity_v1",
+    "statuses": [
+      "INVALIDATED",
+      "NOT_TRIGGERED",
+      "OPEN",
+      "SUCCESS",
+      "WEAK_SUCCESS",
+      "FAIL",
+      "DATA_INSUFFICIENT"
+    ],
+    "default_max_holding_days": 1,
+    "weak_success_close_return_pct": 0.008,
+    "use_benchmark_excess_return": true,
+    "record_mfe_mae": true,
+    "mark_invalid_when_open_gap_exceeds_plan": true
+  },
+  "scorecard": {
+    "recompute_cron": "10 17 * * MON-FRI",
+    "lookback_days": 90,
+    "recent_trades_window": 20,
+    "min_plans_for_ranking": 5
+  },
+  "reporting": {
+    "formats": [
+      "json",
+      "markdown"
+    ],
+    "daily_report_cron": "20 17 * * MON-FRI",
+    "weekly_report_cron": "0 18 * * FRI",
+    "store_to_minio": true,
+    "minio_prefix": "reports/"
+  },
+  "scheduler": {
+    "jobs": {
+      "scan_local_documents": {
+        "enabled": true,
+        "cron": "*/5 * * * *"
+      },
+      "scan_object_storage": {
+        "enabled": true,
+        "cron": "*/10 * * * *"
+      },
+      "parse_pending_documents": {
+        "enabled": true,
+        "cron": "*/2 * * * *"
+      },
+      "extract_signals": {
+        "enabled": true,
+        "cron": "*/3 * * * *"
+      },
+      "generate_trade_plans": {
+        "enabled": true,
+        "cron": "35 20 * * MON-FRI"
+      },
+      "pull_t1_open_quotes": {
+        "enabled": true,
+        "cron": "35 9 * * MON-FRI"
+      },
+      "pull_t1_minute_bars": {
+        "enabled": true,
+        "cron": "45 15 * * MON-FRI"
+      },
+      "evaluate_plans": {
+        "enabled": true,
+        "cron": "10 16 * * MON-FRI"
+      },
+      "refresh_symbol_registry": {
+        "enabled": true,
+        "cron": "0 7 * * MON-FRI"
+      },
+      "recompute_scorecard": {
+        "enabled": true,
+        "cron": "10 17 * * MON-FRI"
+      },
+      "generate_reports": {
+        "enabled": true,
+        "cron": "20 17 * * MON-FRI"
+      },
+      "archive_provider_payloads": {
+        "enabled": true,
+        "cron": "*/30 * * * *"
+      },
+      "cleanup_temp_files": {
+        "enabled": true,
+        "cron": "0 */6 * * *"
+      }
+    }
+  },
+  "alerting": {
+    "enabled": true,
+    "channels": [
+      "feishu"
+    ],
+    "on_job_failure": true,
+    "on_provider_fallback": true,
+    "on_config_refresh_failure": true
+  },
+  "integrations": {
+    "ocr_sidecar": {
+      "enabled": true,
+      "service_url": "http://paddleocr-service.internal:8089"
+    },
+    "akshare_bridge": {
+      "enabled": false,
+      "base_url": "http://akshare-bridge.internal:8091"
+    },
+    "baostock_bridge": {
+      "enabled": false,
+      "base_url": "http://baostock-bridge.internal:8092"
+    },
+    "mcp_market": {
+      "enabled": false,
+      "base_url": "http://market-mcp.internal:8093"
+    }
+  },
+  "feature_flags": {
+    "enable_openapi": true,
+    "enable_admin_reload_config": true,
+    "enable_document_local_scan": true,
+    "enable_object_storage_scan": true,
+    "enable_plan_auto_approval": false,
+    "enable_mock_market_provider": true
+  }
+}

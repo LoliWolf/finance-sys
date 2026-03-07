@@ -1,0 +1,13 @@
+.DS_Store
+.idea/
+.vscode/
+bin/
+dist/
+tmp/
+.gocache/
+coverage.out
+coverage.html
+vendor/
+*.log
+*.test
+*.out
