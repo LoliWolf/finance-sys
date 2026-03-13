@@ -8,12 +8,9 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"time"
 
-	"finance-sys/internal/approval"
 	"finance-sys/internal/config"
 	"finance-sys/internal/domain"
-	"finance-sys/internal/report"
 	"finance-sys/internal/repository"
 	"finance-sys/internal/service"
 
@@ -26,32 +23,23 @@ type ConfigReloader interface {
 }
 
 type Server struct {
-	repo       *repository.Repository
-	runtime    *config.Runtime
-	documents  *service.DocumentService
-	evaluation *service.EvaluationService
-	approval   *approval.Service
-	reports    *report.Service
-	reloader   ConfigReloader
+	repo      *repository.Repository
+	runtime   *config.Runtime
+	documents *service.DocumentService
+	reloader  ConfigReloader
 }
 
 func NewServer(
 	repo *repository.Repository,
 	runtime *config.Runtime,
 	documents *service.DocumentService,
-	evaluation *service.EvaluationService,
-	approvalSvc *approval.Service,
-	reportSvc *report.Service,
 	reloader ConfigReloader,
 ) *Server {
 	return &Server{
-		repo:       repo,
-		runtime:    runtime,
-		documents:  documents,
-		evaluation: evaluation,
-		approval:   approvalSvc,
-		reports:    reportSvc,
-		reloader:   reloader,
+		repo:      repo,
+		runtime:   runtime,
+		documents: documents,
+		reloader:  reloader,
 	}
 }
 
@@ -69,17 +57,12 @@ func (s *Server) Router() http.Handler {
 	}
 
 	router.Get("/healthz", s.handleHealth)
-	router.Get("/metrics", s.handleMetrics)
 	router.Route(apiPrefix, func(r chi.Router) {
 		r.Get("/documents", s.handleListDocuments)
 		r.Post("/documents/upload", s.handleUploadDocument)
-		r.Post("/documents/{id}/process", s.handleProcessDocument)
-		r.Post("/jobs/process-documents", s.handleProcessPendingDocuments)
+		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
+		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
 		r.Get("/plans", s.handleListPlans)
-		r.Post("/plans/{id}/approve", s.handleApprovePlan)
-		r.Get("/evaluations", s.handleListEvaluations)
-		r.Post("/jobs/evaluate", s.handleEvaluateTradeDate)
-		r.Get("/reports/scorecards", s.handleScorecards)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
 	})
 	return router
@@ -94,11 +77,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		payload = map[string]any{"status": "degraded", "error": err.Error()}
 	}
 	writeJSON(w, status, payload)
-}
-
-func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = io.WriteString(w, "expert_trade_up 1\n")
 }
 
 func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
@@ -116,13 +94,14 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("config runtime unavailable"))
 		return
 	}
-	if !cfg.DocumentIngestion.APIUploadEnabled {
+	if !cfg.Document.APIUploadEnabled {
 		writeError(w, http.StatusForbidden, errors.New("api upload disabled"))
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, int64(cfg.DocumentIngestion.MaxFileSizeMB)*1024*1024)
-	if err := r.ParseMultipartForm(int64(cfg.DocumentIngestion.MaxFileSizeMB) * 1024 * 1024); err != nil {
+	limit := int64(cfg.Document.MaxFileSizeMB) * 1024 * 1024
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := r.ParseMultipartForm(limit); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -151,102 +130,68 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		Content:     content,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+
+	response := map[string]any{
+		"duplicate": duplicate,
+		"document":  document,
+	}
+	if cfg.Document.AutoAnalyzeUpload && !duplicate {
+		plans, err := s.documents.AnalyzeDocument(r.Context(), document.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		response["plans"] = plans
+	}
+	if duplicate {
+		if plans, err := s.documents.ListPlansByDocumentID(r.Context(), document.ID); err == nil {
+			response["plans"] = plans
+		}
 	}
 
 	status := http.StatusCreated
 	if duplicate {
 		status = http.StatusOK
 	}
-	writeJSON(w, status, map[string]any{
-		"duplicate": duplicate,
-		"document":  document,
-	})
+	writeJSON(w, status, response)
 }
 
-func (s *Server) handleProcessDocument(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAnalyzeDocument(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.documents.ProcessDocument(r.Context(), id); err != nil {
+	plans, err := s.documents.AnalyzeDocument(r.Context(), id)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "processed"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "planned",
+		"plans":  plans,
+	})
 }
 
-func (s *Server) handleProcessPendingDocuments(w http.ResponseWriter, r *http.Request) {
-	if err := s.documents.ProcessPendingDocuments(r.Context(), 100); err != nil {
+func (s *Server) handleListDocumentPlans(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	items, err := s.documents.ListPlansByDocumentID(r.Context(), id)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) handleListPlans(w http.ResponseWriter, r *http.Request) {
 	items, err := s.repo.ListPlans(r.Context(), 100)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, items)
-}
-
-func (s *Server) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	var payload struct {
-		ApprovedBy string `json:"approved_by"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&payload)
-	if payload.ApprovedBy == "" {
-		payload.ApprovedBy = "api"
-	}
-	if err := s.approval.ApprovePlan(r.Context(), id, payload.ApprovedBy); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
-}
-
-func (s *Server) handleListEvaluations(w http.ResponseWriter, r *http.Request) {
-	items, err := s.repo.ListEvaluations(r.Context(), 100)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, items)
-}
-
-func (s *Server) handleEvaluateTradeDate(w http.ResponseWriter, r *http.Request) {
-	var payload struct {
-		TradeDate string `json:"trade_date"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&payload)
-	tradeDate := time.Now()
-	if payload.TradeDate != "" {
-		parsed, err := time.Parse(time.DateOnly, payload.TradeDate)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		tradeDate = parsed
-	}
-	if err := s.evaluation.EvaluateTradeDate(r.Context(), tradeDate); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "evaluated"})
-}
-
-func (s *Server) handleScorecards(w http.ResponseWriter, r *http.Request) {
-	items, err := s.reports.Scorecards(r.Context(), 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -293,7 +238,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			for _, allowed := range cfg.Service.HTTP.CORS.AllowOrigins {
 				if allowed == origin || allowed == "*" {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+					w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 					w.Header().Set("Access-Control-Allow-Headers", "Authorization,Content-Type")
 					break
 				}
@@ -314,9 +259,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{
-		"error": err.Error(),
-	})
+	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
 func parseID(raw string) (int64, error) {

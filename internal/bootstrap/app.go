@@ -9,42 +9,29 @@ import (
 	"os"
 	"time"
 
-	"finance-sys/internal/approval"
 	"finance-sys/internal/config"
 	"finance-sys/internal/domain"
-	"finance-sys/internal/evaluation"
 	"finance-sys/internal/httpapi"
 	"finance-sys/internal/llm"
-	"finance-sys/internal/market"
 	"finance-sys/internal/nacoscfg"
 	"finance-sys/internal/parser"
-	"finance-sys/internal/report"
 	"finance-sys/internal/repository"
 	"finance-sys/internal/rules"
-	"finance-sys/internal/scheduler"
 	"finance-sys/internal/service"
-	"finance-sys/internal/storage"
 	"finance-sys/internal/telemetry"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/redis/go-redis/v9"
 )
 
 type App struct {
-	Runtime           *config.Runtime
-	Logger            *slog.Logger
-	DB                *sql.DB
-	Redis             *redis.Client
-	Repository        *repository.Repository
-	ObjectStorage     storage.ObjectStorage
-	DocumentService   *service.DocumentService
-	EvaluationService *service.EvaluationService
-	ApprovalService   *approval.Service
-	ReportService     *report.Service
-	HTTPServer        *httpapi.Server
-	Watcher           *nacoscfg.Watcher
-	Reloader          *nacoscfg.Reloader
-	Scheduler         *scheduler.Scheduler
+	Runtime         *config.Runtime
+	Logger          *slog.Logger
+	DB              *sql.DB
+	Repository      *repository.Repository
+	DocumentService *service.DocumentService
+	HTTPServer      *httpapi.Server
+	Watcher         *nacoscfg.Watcher
+	Reloader        *nacoscfg.Reloader
 }
 
 func Build(ctx context.Context) (*App, error) {
@@ -63,16 +50,6 @@ func Build(ctx context.Context) (*App, error) {
 	}
 	repo := repository.New(db)
 
-	redisClient := openRedis(snapshot.Config)
-
-	objectStorage, err := storage.NewMinIOStorage(snapshot.Config.ObjectStorage)
-	if err != nil {
-		return nil, err
-	}
-	if err := objectStorage.EnsureBuckets(ctx); err != nil {
-		logger.Warn("ensure object storage buckets", "error", err.Error())
-	}
-
 	if snapshot.Config.NacosClient.WriteConfigSnapshotToDB {
 		_, _ = repo.InsertConfigSnapshot(ctx, &domain.ConfigSnapshot{
 			ConfigVersion: snapshot.Config.Meta.ConfigVersion,
@@ -83,40 +60,27 @@ func Build(ctx context.Context) (*App, error) {
 	}
 
 	parserService := parser.New()
-	extractor := llm.NewMockExtractor()
-	marketChain := market.NewChain(snapshot.Config.Market, snapshot.Config.ObjectStorage, objectStorage)
+	analyzer := llm.NewModelAnalyzer(runtime, logger)
 	ruleEngine := rules.New()
-	documentService := service.NewDocumentService(repo, runtime, parserService, extractor, marketChain, ruleEngine, objectStorage, logger)
-	evaluationService := service.NewEvaluationService(repo, runtime, marketChain, evaluation.New(), logger)
-	approvalService := approval.NewService(repo)
-	reportService := report.NewService(repo)
+	documentService := service.NewDocumentService(repo, runtime, parserService, analyzer, ruleEngine, logger)
+
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader
 	if loader != nil {
 		watcher = nacoscfg.NewWatcher(loader, runtime, repo, logger)
 		reloader = nacoscfg.NewReloader(loader, runtime, repo)
 	}
-	httpServer := httpapi.NewServer(repo, runtime, documentService, evaluationService, approvalService, reportService, reloader)
-	jobScheduler := scheduler.New(runtime, documentService, evaluationService, logger)
-	if err := jobScheduler.Register(); err != nil {
-		return nil, err
-	}
 
+	httpServer := httpapi.NewServer(repo, runtime, documentService, reloader)
 	return &App{
-		Runtime:           runtime,
-		Logger:            logger,
-		DB:                db,
-		Redis:             redisClient,
-		Repository:        repo,
-		ObjectStorage:     objectStorage,
-		DocumentService:   documentService,
-		EvaluationService: evaluationService,
-		ApprovalService:   approvalService,
-		ReportService:     reportService,
-		HTTPServer:        httpServer,
-		Watcher:           watcher,
-		Reloader:          reloader,
-		Scheduler:         jobScheduler,
+		Runtime:         runtime,
+		Logger:          logger,
+		DB:              db,
+		Repository:      repo,
+		DocumentService: documentService,
+		HTTPServer:      httpServer,
+		Watcher:         watcher,
+		Reloader:        reloader,
 	}, nil
 }
 
@@ -160,15 +124,4 @@ func openDB(ctx context.Context, cfg *config.Config) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
-}
-
-func openRedis(cfg *config.Config) *redis.Client {
-	return redis.NewClient(&redis.Options{
-		Addr:         cfg.Redis.Addr,
-		Password:     cfg.Redis.Password,
-		DB:           cfg.Redis.DB,
-		DialTimeout:  time.Duration(cfg.Redis.DialTimeoutMS) * time.Millisecond,
-		ReadTimeout:  time.Duration(cfg.Redis.ReadTimeoutMS) * time.Millisecond,
-		WriteTimeout: time.Duration(cfg.Redis.WriteTimeoutMS) * time.Millisecond,
-	})
 }

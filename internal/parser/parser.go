@@ -5,13 +5,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"html"
 	"io"
-	"net/mail"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"finance-sys/internal/config"
@@ -19,13 +16,7 @@ import (
 	"finance-sys/internal/utils"
 )
 
-const version = "parser-v1"
-
-var (
-	scriptTagRe = regexp.MustCompile(`(?is)<script.*?</script>`)
-	styleTagRe  = regexp.MustCompile(`(?is)<style.*?</style>`)
-	htmlTagRe   = regexp.MustCompile(`(?s)<[^>]+>`)
-)
+const version = "parser-v2"
 
 type Service struct{}
 
@@ -33,7 +24,7 @@ func New() *Service {
 	return &Service{}
 }
 
-func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cfg config.DocumentParsingConfig) (domain.ParseRun, error) {
+func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cfg config.DocumentConfig) (domain.ParseRun, error) {
 	ext := strings.ToLower(filepath.Ext(fileName))
 	result := domain.ParseRun{
 		Status:        "PARSED",
@@ -46,16 +37,14 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 	var text string
 	var err error
 	switch ext {
-	case ".txt", ".md":
+	case ".txt", ".md", ".csv":
 		text = string(content)
-	case ".html":
-		text = parseHTML(content, cfg.HTML)
-	case ".eml":
-		text, result.RawMetadata, err = parseEmail(content, cfg.Email)
+	case ".doc":
+		text, err = parseDOC(ctx, fileName, content)
 	case ".docx":
 		text, err = parseDOCX(content)
 	case ".pdf":
-		text, result.RequiresOCR, err = parsePDF(ctx, fileName, content, cfg)
+		text, err = parsePDF(ctx, fileName, content)
 	default:
 		err = fmt.Errorf("unsupported extension: %s", ext)
 	}
@@ -66,13 +55,8 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 	}
 
 	result.ContentText = text
-	result.CleanedText = cleanText(text, cfg.Cleaning)
-	result.Sections = buildSections(result.CleanedText)
+	result.CleanedText = cleanText(text)
 	result.Chunks = buildChunks(result.CleanedText, cfg.Chunking)
-	result.TextDensity = calculateDensity(content, result.CleanedText)
-	if result.RequiresOCR {
-		result.Status = "NEEDS_OCR"
-	}
 	return result, nil
 }
 
@@ -80,48 +64,13 @@ func parserName(ext string) string {
 	switch ext {
 	case ".pdf":
 		return "pdf-cli"
+	case ".doc":
+		return "doc-cli"
 	case ".docx":
 		return "docx-native"
-	case ".html":
-		return "html-native"
-	case ".eml":
-		return "email-native"
 	default:
 		return "text-native"
 	}
-}
-
-func parseHTML(content []byte, cfg config.HTMLParsingConfig) string {
-	text := string(content)
-	if cfg.RemoveScripts {
-		text = scriptTagRe.ReplaceAllString(text, " ")
-	}
-	if cfg.RemoveStyles {
-		text = styleTagRe.ReplaceAllString(text, " ")
-	}
-	text = htmlTagRe.ReplaceAllString(text, " ")
-	return html.UnescapeString(text)
-}
-
-func parseEmail(content []byte, cfg config.EmailParsingConfig) (string, map[string]any, error) {
-	message, err := mail.ReadMessage(bytes.NewReader(content))
-	if err != nil {
-		return "", nil, err
-	}
-	body, err := io.ReadAll(message.Body)
-	if err != nil {
-		return "", nil, err
-	}
-	text := string(body)
-	metadata := map[string]any{
-		"subject": message.Header.Get("Subject"),
-		"from":    message.Header.Get("From"),
-		"to":      message.Header.Get("To"),
-	}
-	if cfg.PreferPlainText {
-		return text, metadata, nil
-	}
-	return text, metadata, nil
 }
 
 func parseDOCX(content []byte) (string, error) {
@@ -142,45 +91,63 @@ func parseDOCX(content []byte) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		text := htmlTagRe.ReplaceAllString(string(raw), " ")
-		return html.UnescapeString(text), nil
+		text := strings.NewReplacer(
+			"<w:t>", "",
+			"</w:t>", " ",
+			"<w:tab/>", " ",
+			"<w:br/>", "\n",
+			"</w:p>", "\n",
+		).Replace(string(raw))
+		return stripXMLTags(text), nil
 	}
 	return "", fmt.Errorf("word/document.xml not found")
 }
 
-func parsePDF(ctx context.Context, fileName string, content []byte, cfg config.DocumentParsingConfig) (string, bool, error) {
-	tmpFile, err := os.CreateTemp("", "expert-trade-*.pdf")
+func parseDOC(ctx context.Context, fileName string, content []byte) (string, error) {
+	tmpFile, err := os.CreateTemp("", "finance-sys-*.doc")
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	defer os.Remove(tmpFile.Name())
 	if _, err := tmpFile.Write(content); err != nil {
 		tmpFile.Close()
-		return "", false, err
+		return "", err
 	}
 	if err := tmpFile.Close(); err != nil {
-		return "", false, err
+		return "", err
 	}
 
-	// `pdftotext` stays outside the Go runtime but keeps PDF extraction in the Go-controlled pipeline.
+	cmd := exec.CommandContext(ctx, "antiword", tmpFile.Name())
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("antiword failed for %s: %w", fileName, err)
+	}
+	return string(output), nil
+}
+
+func parsePDF(ctx context.Context, fileName string, content []byte) (string, error) {
+	tmpFile, err := os.CreateTemp("", "finance-sys-*.pdf")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(content); err != nil {
+		tmpFile.Close()
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", err
+	}
+
 	cmd := exec.CommandContext(ctx, "pdftotext", "-layout", tmpFile.Name(), "-")
 	output, err := cmd.Output()
 	if err != nil {
-		if cfg.OCR.Enabled {
-			return "", true, fmt.Errorf("pdftotext failed for %s: %w", fileName, err)
-		}
-		return "", false, fmt.Errorf("pdftotext failed for %s: %w", fileName, err)
+		return "", fmt.Errorf("pdftotext failed for %s: %w", fileName, err)
 	}
-	text := string(output)
-	if calculateDensity(content, text) < cfg.PDF.OCRFallbackWhenTextDensityBelow {
-		if cfg.OCR.Enabled {
-			return text, true, nil
-		}
-	}
-	return text, false, nil
+	return string(output), nil
 }
 
-func cleanText(input string, cfg config.CleaningConfig) string {
+func cleanText(input string) string {
 	lines := strings.Split(input, "\n")
 	seen := make(map[string]struct{})
 	filtered := make([]string, 0, len(lines))
@@ -189,56 +156,27 @@ func cleanText(input string, cfg config.CleaningConfig) string {
 		if line == "" {
 			continue
 		}
-		if cfg.RemoveDisclaimerBlocks && isNoiseLine(line) {
+		if isNoiseLine(line) {
 			continue
 		}
-		if cfg.NormalizeWhitespace {
-			line = utils.NormalizeWhitespace(line)
+		line = utils.NormalizeWhitespace(line)
+		if _, ok := seen[line]; ok {
+			continue
 		}
-		if cfg.RemoveDuplicateLines {
-			if _, ok := seen[line]; ok {
-				continue
-			}
-			seen[line] = struct{}{}
-		}
+		seen[line] = struct{}{}
 		filtered = append(filtered, line)
 	}
 	return strings.Join(filtered, "\n")
 }
 
 func isNoiseLine(line string) bool {
-	noiseTokens := []string{"免责声明", "仅供参考", "版权所有", "风险提示"}
+	noiseTokens := []string{"免责声明", "仅供参考", "版权归", "风险提示"}
 	for _, token := range noiseTokens {
 		if strings.Contains(line, token) {
 			return true
 		}
 	}
 	return false
-}
-
-func buildSections(input string) []domain.Section {
-	if input == "" {
-		return nil
-	}
-	parts := strings.Split(input, "\n")
-	sections := make([]domain.Section, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		sections = append(sections, domain.Section{
-			Heading: inferHeading(part),
-			Text:    part,
-		})
-	}
-	return sections
-}
-
-func inferHeading(text string) string {
-	if len(text) <= 24 {
-		return text
-	}
-	return "body"
 }
 
 func buildChunks(input string, cfg config.ChunkingConfig) []domain.Chunk {
@@ -273,9 +211,20 @@ func buildChunks(input string, cfg config.ChunkingConfig) []domain.Chunk {
 	return chunks
 }
 
-func calculateDensity(raw []byte, text string) float64 {
-	if len(raw) == 0 {
-		return 0
+func stripXMLTags(input string) string {
+	var builder strings.Builder
+	inTag := false
+	for _, r := range input {
+		switch r {
+		case '<':
+			inTag = true
+		case '>':
+			inTag = false
+		default:
+			if !inTag {
+				builder.WriteRune(r)
+			}
+		}
 	}
-	return float64(len(strings.TrimSpace(text))) / float64(len(raw))
+	return builder.String()
 }

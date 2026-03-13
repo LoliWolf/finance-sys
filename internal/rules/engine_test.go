@@ -13,34 +13,26 @@ import (
 
 func TestGeneratePlan(t *testing.T) {
 	engine := rules.New()
-	plan := engine.Generate(domain.ExpertSignal{
-		ID:            10,
-		DocumentID:    11,
-		ExpertName:    "Alice",
-		Symbol:        "600519.SH",
-		Sentiment:     "BULLISH",
-		ConfigVersion: 2,
-	}, domain.MarketSnapshot{
-		ID:       20,
-		Symbol:   "600519.SH",
-		Close:    100,
-		High:     102,
-		Low:      98,
-		Turnover: 100000000,
-		ATR:      3,
+	plan := engine.Generate(domain.PlanIntent{
+		Analyst:        "Alice",
+		Symbol:         "600519.SH",
+		Direction:      "LONG",
+		ReferencePrice: 100,
+		Confidence:     0.8,
+		Thesis:         "渠道改善",
 	}, config.RulesConfig{
-		Version:         "rules-v1",
-		DefaultStrategy: "OPEN_GAP_FILTER",
-		Risk: config.RulesRiskConfig{
-			MaxPositionPct:       0.1,
-			MaxGapPct:            0.03,
-			DefaultStopATR:       1.5,
-			DefaultTakeProfitATR: 2.5,
-			MinAvgTurnoverCNY:    50000000,
-		},
-	}, time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC))
+		Version:              "rules-v2",
+		Strategy:             "TEXT_REFERENCE_PRICE",
+		TradeDateOffsetDays:  1,
+		MaxPositionPct:       0.1,
+		DefaultStopLossPct:   0.03,
+		DefaultTakeProfitPct: 0.06,
+		MinConfidence:        0.65,
+	}, time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC), 2)
 	require.Equal(t, "LONG", plan.Direction)
-	require.Equal(t, "OPEN_GAP_FILTER", plan.Strategy)
-	require.Greater(t, plan.TakeProfit, plan.EntryPrice)
-	require.Less(t, plan.StopLoss, plan.EntryPrice)
+	require.Equal(t, "TEXT_REFERENCE_PRICE", plan.Strategy)
+	require.Equal(t, 100.0, plan.EntryPrice)
+	require.Equal(t, 97.0, plan.StopLoss)
+	require.Equal(t, 106.0, plan.TakeProfit)
+	require.Equal(t, "READY", plan.Status)
 }

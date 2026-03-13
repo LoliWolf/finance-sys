@@ -1,7 +1,4 @@
-DROP TABLE IF EXISTS evaluations;
-DROP TABLE IF EXISTS plans;
-DROP TABLE IF EXISTS market_snapshots;
-DROP TABLE IF EXISTS signals;
+DROP TABLE IF EXISTS trade_candidate_plans;
 DROP TABLE IF EXISTS parse_runs;
 DROP TABLE IF EXISTS documents;
 DROP TABLE IF EXISTS config_snapshots;

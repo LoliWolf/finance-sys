@@ -15,56 +15,57 @@ func New() *Engine {
 	return &Engine{}
 }
 
-func (e *Engine) Generate(signal domain.ExpertSignal, snapshot domain.MarketSnapshot, cfg config.RulesConfig, tradeDate time.Time) domain.TradePlan {
-	atr := snapshot.ATR
-	if atr <= 0 {
-		atr = math.Max(snapshot.High-snapshot.Low, snapshot.Close*0.02)
-	}
-	direction := "LONG"
-	sign := 1.0
-	if signal.Sentiment == "BEARISH" {
-		direction = "SHORT"
-		sign = -1.0
-	}
-
-	entryOffset := math.Min(cfg.Risk.MaxGapPct/2, 0.01)
-	entryPrice := snapshot.Close * (1 + sign*entryOffset)
-	stopLoss := entryPrice - sign*(cfg.Risk.DefaultStopATR*atr)
-	takeProfit := entryPrice + sign*(cfg.Risk.DefaultTakeProfitATR*atr)
-	invalidation := snapshot.Low
-	if direction == "SHORT" {
-		invalidation = snapshot.High
-	}
-
-	positionPct := cfg.Risk.MaxPositionPct
-	strategy := cfg.DefaultStrategy
-	rationale := fmt.Sprintf(
-		"%s by %s using close %.2f, ATR %.2f, turnover %.2f",
-		strategy, signal.ExpertName, snapshot.Close, atr, snapshot.Turnover,
-	)
-	if snapshot.Turnover < cfg.Risk.MinAvgTurnoverCNY {
-		positionPct = positionPct / 2
-		rationale += "; liquidity haircut applied"
+func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan {
+	plan := domain.CandidatePlan{
+		DocumentID:     0,
+		ParseRunID:     0,
+		Analyst:        intent.Analyst,
+		Institution:    intent.Institution,
+		Symbol:         intent.Symbol,
+		AssetType:      intent.AssetType,
+		Market:         intent.Market,
+		Strategy:       cfg.Strategy,
+		Direction:      intent.Direction,
+		TradeDate:      tradeDate,
+		ReferencePrice: round(intent.ReferencePrice),
+		Confidence:     round(intent.Confidence),
+		Status:         "READY",
+		Thesis:         intent.Thesis,
+		Risks:          intent.Risks,
+		Evidence:       intent.Evidence,
+		PricingNote:    intent.ReferencePriceNote,
+		ConfigVersion:  configVersion,
+		RuleVersion:    cfg.Version,
 	}
 
-	return domain.TradePlan{
-		SignalID:          signal.ID,
-		DocumentID:        signal.DocumentID,
-		Symbol:            signal.Symbol,
-		Strategy:          strategy,
-		TradeDate:         tradeDate,
-		Direction:         direction,
-		EntryPrice:        round(entryPrice),
-		StopLoss:          round(stopLoss),
-		TakeProfit:        round(takeProfit),
-		InvalidationPrice: round(invalidation),
-		PositionPct:       round(positionPct),
-		Status:            "PENDING_APPROVAL",
-		Rationale:         rationale,
-		ConfigVersion:     signal.ConfigVersion,
-		RuleVersion:       cfg.Version,
-		MarketSnapshotID:  snapshot.ID,
+	if intent.ReferencePrice <= 0 {
+		plan.Status = "NEEDS_REVIEW"
+		plan.PricingNote = "missing explicit price in source text"
+		return plan
 	}
+
+	entry := intent.ReferencePrice
+	stopFactor := 1 - cfg.DefaultStopLossPct
+	takeFactor := 1 + cfg.DefaultTakeProfitPct
+	if intent.Direction == "SHORT" {
+		stopFactor = 1 + cfg.DefaultStopLossPct
+		takeFactor = 1 - cfg.DefaultTakeProfitPct
+	}
+
+	position := cfg.MaxPositionPct * math.Max(intent.Confidence, cfg.MinConfidence)
+	if position > cfg.MaxPositionPct {
+		position = cfg.MaxPositionPct
+	}
+
+	plan.EntryPrice = round(entry)
+	plan.StopLoss = round(entry * stopFactor)
+	plan.TakeProfit = round(entry * takeFactor)
+	plan.PositionPct = round(position)
+	if intent.Confidence < cfg.MinConfidence {
+		plan.Status = "NEEDS_REVIEW"
+		plan.PricingNote = fmt.Sprintf("confidence %.2f below threshold %.2f", intent.Confidence, cfg.MinConfidence)
+	}
+	return plan
 }
 
 func round(value float64) float64 {

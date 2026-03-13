@@ -1,290 +1,87 @@
 {
-  "meta": { // 配置元信息，用于标识当前配置文档本身；示例：发布新规则时将 config_version 从 1 升到 2
-    "app_name": "expert-doc-trade-workflow", // 应用展示名称；示例：监控面板显示 expert-doc-trade-workflow
-    "app_code": "expert-doc-trade", // 应用内部编码，适合日志、表记录、部署名；示例：expert-doc-trade
-    "env": "dev", // 配置所属环境；示例：dev / test / prod
-    "version": "2.0.0-go122", // 应用版本或配置适配版本；示例：2.0.1-go122
-    "timezone": "Asia/Shanghai", // 默认时区，影响交易日和时间换算；示例：Asia/Shanghai
-    "config_version": 1, // 配置版本号，要求 > 0，会写入信号、快照、评估等记录；示例：2
-    "owner": "quant-research", // 配置责任团队或负责人；示例：quant-research
-    "description": "Go 1.22 expert document to next-day trade workflow" // 配置说明；示例：生产环境专家文档转 T+1 计划配置
+  // 最小可运行配置。系统仅保留：
+  // 文档上传 -> 文本解析 -> LLM/启发式抽取 -> 确定性规则生成 T+1 候选计划
+  "meta": {
+    "app_name": "finance-sys",
+    "env": "dev",
+    "timezone": "Asia/Shanghai",
+    "config_version": 2
   },
-  "service": { // 服务进程本身的运行配置，包含 HTTP 服务和 worker 行为
-    "name": "expert-doc-trade", // 服务名；示例：expert-doc-trade
-    "env": "dev", // 服务环境标识；示例：prod
-    "timezone": "Asia/Shanghai", // 服务时区；示例：Asia/Shanghai
-    "http": { // HTTP API 服务配置
-      "host": "0.0.0.0", // 监听地址；示例：0.0.0.0 表示对外监听
-      "port": 18080, // HTTP 监听端口，要求 > 0；示例：8080
-      "api_prefix": "/api/v1", // API 路由前缀，必须以 / 开头；示例：/api/v1
-      "read_timeout_ms": 30000, // 读取请求超时毫秒数；示例：30000 表示 30 秒
-      "write_timeout_ms": 30000, // 写响应超时毫秒数；示例：30000
-      "idle_timeout_ms": 60000, // keep-alive 空闲连接超时；示例：60000
-      "shutdown_timeout_seconds": 20, // 优雅停机等待秒数；示例：20
-      "max_header_bytes": 1048576, // HTTP Header 最大字节数；示例：1048576 即 1MB
-      "cors": { // 跨域配置，当前由 corsMiddleware 消费
-        "enabled": true, // 是否启用 CORS；示例：前端联调时设为 true
-        "allow_origins": [ // 允许的来源列表；示例：本地前端 http://localhost:3000
-          "http://localhost:3000" // 当前仅允许这个 Origin；示例：也可加 http://127.0.0.1:3000
-        ],
-        "allow_methods": [ // 语义上允许的方法列表；示例：GET/POST/PUT/PATCH/DELETE
-          "GET", // 查询接口；示例：GET /api/v1/plans
-          "POST", // 创建或触发任务；示例：POST /api/v1/documents/upload
-          "PUT", // 全量更新；示例：PUT /api/v1/config
-          "PATCH", // 局部更新；示例：PATCH /api/v1/plans/1
-          "DELETE" // 删除资源；示例：DELETE /api/v1/documents/1
-        ],
-        "allow_headers": [ // 语义上允许的请求头；当前中间件实际写死 Authorization,Content-Type
-          "*" // 示例：允许任意 header 名称
-        ]
+  "service": {
+    "http": {
+      "host": "0.0.0.0",
+      "port": 18080,
+      "api_prefix": "/api/v1",
+      "read_timeout_ms": 30000,
+      "write_timeout_ms": 30000,
+      "idle_timeout_ms": 60000,
+      "shutdown_timeout_seconds": 20,
+      "max_header_bytes": 1048576,
+      "cors": {
+        "enabled": true,
+        "allow_origins": ["http://localhost:3000"]
       }
-    },
-    "worker": { // 后台 worker 配置，影响调度和处理节奏
-      "concurrency": 4, // worker 并发数，校验要求 > 0；示例：4
-      "graceful_shutdown_seconds": 30, // worker 优雅退出等待秒数；示例：30
-      "job_poll_interval_seconds": 5, // 定时轮询待处理文档的间隔秒数，scheduler 使用；示例：5
-      "temporary_dir": "/tmp/expert-trade" // 临时文件目录；示例：/var/lib/expert-trade/tmp
     }
   },
-  "runtime": { // 运行时业务行为开关，影响计划生成与评估默认值
-    "trade_calendar": "CN_A_SHARE", // 交易日历标识；示例：CN_A_SHARE 表示中国 A 股交易日
-    "default_asset_universe": [ // 默认资产范围；示例：限制在股票、ETF、指数
-      "A_SHARE", // A 股；示例：600519.SH
-      "ETF", // ETF；示例：510300.SH
-      "INDEX" // 指数；示例：000300.SH
-    ],
-    "max_parallel_jobs": 4, // 最大并行作业数，scheduler 处理文档时会使用；示例：8
-    "idempotency_enabled": true, // 幂等开关；当前更多是业务语义保留位；示例：true
-    "raw_response_archive_enabled": true, // 是否归档原始响应；当前更多是能力开关语义；示例：true
-    "default_benchmark_symbol": "000300.SH", // 构建市场快照时的默认基准代码；示例：沪深300 000300.SH
-    "allow_auto_approval": false, // 是否允许自动审批；与 approval.manual_required 共同决定计划是否直接 APPROVED
-    "skills_runtime_dependency_allowed": false // 是否允许依赖额外技能运行时；当前为保守关闭；示例：false
+  "nacos_client": {
+    "poll_interval_seconds": 30,
+    "cache_last_good_config": true,
+    "cache_dir": "./configs/.cache",
+    "write_config_snapshot_to_db": true
   },
-  "nacos_client": { // Nacos 客户端行为配置，控制热更新、缓存与快照
-    "refresh_mode": "polling", // 刷新模式；示例：polling 表示轮询拉取
-    "poll_interval_seconds": 30, // 轮询间隔秒数，watcher 使用，要求 > 0；示例：30
-    "fail_fast": false, // 启动时拉取 Nacos 失败是否立即失败；false 时可回退本地示例配置
-    "cache_last_good_config": true, // 是否缓存最近一次有效配置，用于失败回退；示例：true
-    "cache_dir": "/tmp/expert-trade/cache", // 本地配置缓存目录，要求非空；示例：/var/lib/expert-trade/config-cache
-    "validate_schema_on_refresh": true, // 热更新时是否先做结构校验；示例：true
-    "write_config_snapshot_to_db": true // 是否把当前配置快照入库审计，bootstrap 中会使用；示例：true
-  },
-  "security": { // 安全相关配置，目前主要是静态 token 鉴权和 webhook 签名
-    "auth": { // API 鉴权配置，由 authMiddleware 使用
-      "enabled": false, // 是否启用认证；false 时接口不校验 token
-      "mode": "static_token", // 鉴权模式；当前实现是 static_token
-      "static_tokens": [ // 静态 token 列表；请求头值需为 token_prefix + token
-        "dev-token" // 示例：请求头 Authorization: Bearer dev-token
-      ],
-      "header_name": "Authorization", // 鉴权头名称；示例：Authorization
-      "token_prefix": "Bearer " // token 前缀，注意尾部空格；示例：Bearer 
-    },
-    "webhook_signature": { // Webhook 验签配置；当前代码中尚未看到实际消费点，更像预留能力
-      "enabled": false, // 是否启用 webhook 验签；示例：false
-      "shared_secret": "dev-secret" // 共享密钥；示例：replace-with-webhook-secret
+  "security": {
+    "auth": {
+      "enabled": false,
+      "static_tokens": ["dev-token"],
+      "header_name": "Authorization",
+      "token_prefix": "Bearer "
     }
   },
-  "logging": { // 日志配置，目前 logger 初始化时主要使用 level
-    "level": "INFO", // 日志级别，bootstrap 通过它创建 slog logger；示例：DEBUG / INFO / WARN / ERROR
-    "format": "json", // 日志格式；当前项目约定使用 json；示例：json
-    "include_caller": false, // 是否输出调用方；当前更多是语义字段；示例：false
-    "include_stacktrace": true, // 是否输出堆栈；当前更多是语义字段；示例：true
-    "fields": [ // 期望附带的结构化字段名；示例：请求、任务、计划链路追踪字段
-      "request_id", // 请求 ID；示例：HTTP 中间件生成的 request_id
-      "job_run_id", // 作业运行 ID；示例：批处理任务标识
-      "document_id", // 文档 ID；示例：123
-      "signal_id", // 信号 ID；示例：456
-      "plan_id", // 计划 ID；示例：789
-      "provider", // 数据来源；示例：eastmoney_http
-      "rule_version", // 规则版本；示例：ruleset-v1
-      "config_version" // 配置版本；示例：1
-    ]
+  "logging": {
+    "level": "INFO"
   },
-  "metrics": { // 指标暴露配置；当前存在 /metrics 接口，但实现较简化
-    "enabled": true, // 是否启用指标；当前代码未按此开关关闭路由，属语义预留
-    "namespace": "expert_trade", // 指标命名空间；示例：expert_trade
-    "path": "/metrics" // 指标路径；当前代码路由固定为 /metrics，配置字段属语义对齐
+  "database": {
+    "driver": "mysql",
+    "dsn": "expert_trade:change_me@tcp(localhost:3306)/expert_trade?parseTime=true&multiStatements=true&charset=utf8mb4",
+    "max_open_conns": 20,
+    "max_idle_conns": 10,
+    "conn_max_lifetime_minutes": 30,
+    "conn_max_idle_time_minutes": 10
   },
-  "database": { // MySQL 数据库连接池与迁移配置
-    "driver": "mysql", // 数据库驱动，校验必须为 mysql
-    "dsn": "expert_trade:change_me@tcp(localhost:3306)/expert_trade?parseTime=true&multiStatements=true&charset=utf8mb4", // 连接串；示例：user:pass@tcp(db:3306)/expert_trade?parseTime=true
-    "max_open_conns": 20, // 连接池最大打开连接数；openDB 使用
-    "max_idle_conns": 10, // 连接池最大空闲连接数；openDB 使用
-    "conn_max_lifetime_minutes": 30, // 单连接最大存活分钟；openDB 使用
-    "conn_max_idle_time_minutes": 10, // 单连接最大空闲分钟；openDB 使用
-    "statement_timeout_ms": 30000, // 语义上的 SQL 超时设置；当前 openDB 尚未实际应用
-    "migrations_dir": "migrations" // 迁移目录；示例：migrations
-  },
-  "redis": { // Redis 连接配置
-    "addr": "localhost:6379", // Redis 地址，要求非空；示例：redis.internal:6379
-    "password": "", // Redis 密码；示例：your-redis-password
-    "db": 0, // Redis DB 编号；示例：0
-    "key_prefix": "expert-trade:", // 业务 key 前缀；当前连接创建未直接用到，适合缓存 key 命名约束
-    "dial_timeout_ms": 3000, // 建连超时毫秒；openRedis 使用
-    "read_timeout_ms": 3000, // 读取超时毫秒；openRedis 使用
-    "write_timeout_ms": 3000 // 写入超时毫秒；openRedis 使用
-  },
-  "object_storage": { // 对象存储配置，当前使用 MinIO 实现
-    "backend": "minio", // 存储后端类型；当前 NewMinIOStorage 语义上使用 minio
-    "endpoint": "localhost:9000", // MinIO 地址，校验要求非空；示例：minio.internal:9000
-    "access_key": "minioadmin", // 访问 key；示例：minio_access_key
-    "secret_key": "minioadmin", // 密钥；示例：minio_secret_key
-    "secure": false, // 是否启用 HTTPS；示例：生产环境常设为 true
-    "bucket_documents": "expert-documents", // 文档原件存储桶；文档上传和读取都使用它
-    "bucket_raw_market": "expert-market-raws", // 行情原始响应归档桶；Market Chain 语义上使用
-    "bucket_reports": "expert-reports", // 报表输出桶；报表归档时使用
-    "bucket_dead_letters": "expert-dead-letters" // 死信桶；解析失败时 writeDeadLetter 使用
-  },
-  "distributed_lock": { // 分布式锁配置；当前代码中还未看到明确消费点，属于能力预留
-    "backend": "redis", // 锁后端；示例：redis
-    "ttl_seconds": 600, // 锁存活时间；示例：600
-    "renew_interval_seconds": 60 // 锁续约间隔；示例：60
-  },
-  "http_clients": { // 外部 HTTP 客户端通用参数；当前市场层语义上会依赖这类配置，现代码直接消费点有限
-    "default_timeout_ms": 10000, // 默认超时毫秒；示例：10000
-    "max_idle_conns": 100, // 最大空闲连接数；示例：100
-    "max_idle_conns_per_host": 20, // 每个主机最大空闲连接数；示例：20
-    "idle_conn_timeout_ms": 90000, // 空闲连接超时；示例：90000
-    "retry": { // 通用重试策略
-      "max_attempts": 2, // 最大重试次数；示例：2
-      "base_backoff_ms": 300, // 基础退避时间；示例：300
-      "max_backoff_ms": 3000 // 最大退避时间；示例：3000
+  "document": {
+    "api_upload_enabled": true,
+    "auto_analyze_upload": true,
+    "allowed_extensions": [".pdf", ".doc", ".docx", ".txt", ".md", ".csv"],
+    "max_file_size_mb": 50,
+    "sha256_dedup": true,
+    "source_defaults": {
+      "source_type": "manual",
+      "source_name": "upload",
+      "author": "",
+      "institution": ""
+    },
+    "chunking": {
+      "enabled": true,
+      "target_chars": 1000,
+      "overlap_chars": 120
     }
   },
-  "document_ingestion": { // 文档摄取入口配置，影响上传、去重与默认来源信息
-    "watch_local_dirs": [ // 本地目录监听列表；当前代码未见扫描实现，属后续扩展位
-      "/tmp/expert-trade/inbox" // 示例：/data/inbox
-    ],
-    "watch_minio_prefixes": [ // 对象存储前缀监听列表；当前代码未见扫描实现，属扩展位
-      "incoming/" // 示例：incoming/
-    ],
-    "api_upload_enabled": true, // 是否允许 API 上传；handleUploadDocument 会检查
-    "allowed_extensions": [ // 允许的文件扩展名，Validate 会校验只允许预定义集合
-      ".pdf", // PDF 文档；示例：report.pdf
-      ".docx", // Word 文档；示例：note.docx
-      ".txt", // 文本文档；示例：brief.txt
-      ".md", // Markdown 文档；示例：memo.md
-      ".html", // HTML 页面；示例：mail.html
-      ".eml" // 邮件原文；示例：notice.eml
-    ],
-    "max_file_size_mb": 100, // API 上传最大文件大小 MB；上传接口会按它限制 body
-    "sha256_dedup": true, // 是否按 SHA256 去重；IngestDocument 会检查重复文档
-    "source_defaults": { // 文档来源默认值，上传时缺省字段会自动补齐
-      "source_type": "manual", // 默认来源类型；示例：manual / email / crawler
-      "source_name": "default", // 默认来源名称；示例：default / research-mailbox
-      "author": "", // 默认作者；示例：张三
-      "institution": "" // 默认机构；示例：中信证券
-    }
+  "llm": {
+    "enabled": true,
+    "provider": "openai_compatible",
+    "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+    "api_key": "",
+    "model": "qwen2.5:14b-instruct",
+    "timeout_ms": 20000,
+    "max_retries": 2
   },
-  "document_parsing": { // 文档解析配置，直接传入 parser.Parse
-    "pdf": { // PDF 解析策略
-      "text_extractors": [ // 文本提取器优先级列表；示例：先 pdftotext 再 mutool
-        "pdftotext_cli", // pdftotext 命令行工具；示例：pdftotext_cli
-        "mutool_cli" // mutool 命令行工具；示例：mutool_cli
-      ],
-      "prefer_text_extraction_first": true, // 是否优先走文本提取再决定是否 OCR；示例：true
-      "ocr_fallback_when_text_density_below": 0.15, // 当文本密度低于阈值时回退 OCR；示例：0.15
-      "ocr_fallback_when_garbled_ratio_above": 0.2, // 当乱码比例高于阈值时回退 OCR；示例：0.2
-      "keep_page_text": true, // 是否保留逐页文本；示例：true
-      "extract_tables": true // 是否尝试抽取表格；示例：true
-    },
-    "ocr": { // OCR 兜底配置
-      "enabled": false, // 是否启用 OCR；示例：true
-      "mode": "http_service", // OCR 模式；示例：http_service
-      "provider": "paddleocr", // OCR 服务提供方；示例：paddleocr
-      "service_url": "http://localhost:8089/ocr", // OCR 服务地址；示例：http://paddleocr-service.internal:8089/ocr
-      "timeout_ms": 120000, // OCR 超时毫秒；示例：120000
-      "max_pages_per_document": 300, // 单文档最大 OCR 页数；示例：300
-      "dpi": 200, // OCR 栅格化 DPI；示例：200
-      "languages": [ // OCR 识别语言；示例：中英文
-        "ch", // 中文；示例：ch
-        "en" // 英文；示例：en
-      ]
-    },
-    "table_extraction": { // 表格抽取策略
-      "enabled": true, // 是否启用表格抽取；示例：true
-      "mode": "best_effort", // 抽取模式；示例：best_effort 表示尽力而为
-      "allow_external_bridge": true, // 是否允许外部桥接工具参与；示例：true
-      "store_raw_blocks": true // 是否保留原始块数据；示例：true
-    },
-    "docx": { // DOCX 解析开关
-      "enabled": true // 是否启用 docx 解析；示例：true
-    },
-    "html": { // HTML 解析策略
-      "enabled": true, // 是否启用 HTML 解析；示例：true
-      "remove_scripts": true, // 是否移除 script 标签；示例：true
-      "remove_styles": true // 是否移除 style 标签；示例：true
-    },
-    "email": { // 邮件解析策略
-      "enabled": true, // 是否启用 EML 解析；示例：true
-      "prefer_plain_text": true // 是否优先使用纯文本正文；示例：true
-    },
-    "cleaning": { // 文本清洗规则
-      "remove_headers_footers": true, // 是否清理页眉页脚；示例：true
-      "remove_disclaimer_blocks": true, // 是否去掉免责声明块；示例：true
-      "remove_duplicate_lines": true, // 是否去重重复行；示例：true
-      "normalize_whitespace": true // 是否标准化空白字符；示例：true
-    },
-    "chunking": { // 分块配置，Validate 要求 target_chars > 0
-      "enabled": true, // 是否启用 chunk 切分；示例：true
-      "target_chars": 1000, // 目标分块字符数；示例：1000
-      "overlap_chars": 150 // 相邻 chunk 重叠字符数；示例：150
-    },
-    "dead_letter": { // 解析失败死信配置
-      "enabled": true, // 是否启用死信归档；当前 writeDeadLetter 实际未按此开关判断，建议视作语义开关
-      "prefix": "parse-dead-letter/" // 死信对象前缀；示例：parse-dead-letter/
-    }
-  },
-  "llm": { // LLM 抽取配置；当前 bootstrap 固定使用 mock extractor，字段大多为预留
-    "enabled": false, // 是否启用 LLM；示例：false
-    "provider": "mock", // 提供方；示例：mock / openai / azure
-    "endpoint": "", // 接口地址；示例：https://api.example.com/v1/chat/completions
-    "api_key": "", // API Key；示例：replace-with-api-key
-    "model": "mock-extractor-v1", // 模型名；示例：gpt-4.1-mini
-    "timeout_ms": 20000, // 调用超时毫秒；示例：20000
-    "max_retries": 1, // 最大重试次数；示例：1
-    "json_schema_validation": true // 是否校验结构化输出 schema；示例：true
-  },
-  "market": { // 行情 provider 链配置，bootstrap 中传给 market.NewChain
-    "primary_provider": "eastmoney_http", // 主 provider；Validate 要求非空；示例：eastmoney_http
-    "fallback_providers": [ // 兜底 provider 列表；示例：主链失败后改走 sina_http
-      "sina_http" // 兜底源；示例：sina_http
-    ],
-    "cache_ttl_seconds": 300, // 行情缓存 TTL 秒数；示例：300
-    "provider_timeout_ms": 6000, // provider 请求超时；示例：6000
-    "max_retries": 2, // 请求最大重试次数，要求 >= 0；示例：2
-    "circuit_breaker": { // 熔断配置
-      "failure_threshold": 5, // 连续失败阈值，Validate 要求 > 0；示例：5
-      "half_open_after_seconds": 60 // 半开恢复等待秒数；示例：60
-    },
-    "rate_limit": { // 限流配置
-      "requests_per_second": 5, // 每秒请求数；示例：5
-      "burst": 10 // 突发桶大小；示例：10
-    }
-  },
-  "rules": { // 交易规则引擎配置，直接参与计划生成
-    "version": "ruleset-v1", // 规则版本，写入 signal；Validate 要求非空
-    "default_strategy": "OPEN_GAP_FILTER", // 默认策略名；Validate 要求非空；示例：OPEN_GAP_FILTER
-    "risk": { // 风控参数
-      "max_position_pct": 0.1, // 单计划最大仓位比例，范围要求 (0,1]；示例：0.1 表示 10%
-      "max_gap_pct": 0.03, // 最大允许跳空比例；示例：0.03 表示 3%
-      "default_stop_atr": 1.5, // 默认止损 ATR 倍数；要求 > 0；示例：1.5
-      "default_take_profit_atr": 2.5, // 默认止盈 ATR 倍数；要求 > 0；示例：2.5
-      "min_avg_turnover_cny": 50000000 // 最小平均成交额门槛；示例：50000000 表示 5000 万元
-    }
-  },
-  "approval": { // 审批配置，决定是否必须人工审批及默认审批人
-    "manual_required": true, // 是否必须人工审批；若 true，则即使 allow_auto_approval=true 也不会自动通过
-    "default_approver": "research_lead" // 自动审批或补默认值时使用的审批人；示例：research_lead
-  },
-  "evaluation": { // T+1 评估配置
-    "entry_grace_minutes": 30, // 开盘后入场宽限分钟数；Validate 要求 >= 0；示例：30
-    "benchmark_symbol": "000300.SH", // 评估时使用的基准代码；EvaluationService 使用
-    "minute_bar_interval": "1m" // 分钟线粒度；EvaluationService 拉分钟线时使用；示例：1m / 5m
-  },
-  "reporting": { // 报表开关和归档前缀
-    "daily_enabled": true, // 是否启用日报；示例：true
-    "weekly_enabled": true, // 是否启用周报；示例：true
-    "report_bucket_prefix": "reports/" // 报表对象存储前缀，Validate 要求非空；示例：reports/
+  "rules": {
+    "version": "rules-v2",
+    "strategy": "TEXT_REFERENCE_PRICE",
+    "trade_date_offset_days": 1,
+    "max_position_pct": 0.15,
+    "default_stop_loss_pct": 0.03,
+    "default_take_profit_pct": 0.06,
+    "min_confidence": 0.65
   }
 }

@@ -5,7 +5,6 @@
 package sqlc
 
 import (
-	"database/sql"
 	"encoding/json"
 	"time"
 )
@@ -30,49 +29,11 @@ type Document struct {
 	Extension     string    `json:"extension"`
 	ContentType   string    `json:"content_type"`
 	Sha256        string    `json:"sha256"`
-	ObjectKey     string    `json:"object_key"`
 	Status        string    `json:"status"`
 	ConfigVersion int64     `json:"config_version"`
+	RawContent    []byte    `json:"raw_content"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
-}
-
-type Evaluation struct {
-	ID                 int64     `json:"id"`
-	PlanID             int64     `json:"plan_id"`
-	TradeDate          time.Time `json:"trade_date"`
-	Status             string    `json:"status"`
-	EntryPrice         float64   `json:"entry_price"`
-	ExitPrice          float64   `json:"exit_price"`
-	ClosePrice         float64   `json:"close_price"`
-	PnlPct             float64   `json:"pnl_pct"`
-	MfePct             float64   `json:"mfe_pct"`
-	MaePct             float64   `json:"mae_pct"`
-	BenchmarkReturnPct float64   `json:"benchmark_return_pct"`
-	ExcessReturnPct    float64   `json:"excess_return_pct"`
-	Reason             string    `json:"reason"`
-	DataQualityFlag    string    `json:"data_quality_flag"`
-	ConfigVersion      int64     `json:"config_version"`
-	CreatedAt          time.Time `json:"created_at"`
-}
-
-type MarketSnapshot struct {
-	ID                 int64     `json:"id"`
-	Symbol             string    `json:"symbol"`
-	TradeDate          time.Time `json:"trade_date"`
-	Provider           string    `json:"provider"`
-	Open               float64   `json:"open"`
-	High               float64   `json:"high"`
-	Low                float64   `json:"low"`
-	Close              float64   `json:"close"`
-	Volume             float64   `json:"volume"`
-	Turnover           float64   `json:"turnover"`
-	Atr                float64   `json:"atr"`
-	PrevClose          float64   `json:"prev_close"`
-	BenchmarkReturnPct float64   `json:"benchmark_return_pct"`
-	RawObjectKey       string    `json:"raw_object_key"`
-	ConfigVersion      int64     `json:"config_version"`
-	CreatedAt          time.Time `json:"created_at"`
 }
 
 type ParseRun struct {
@@ -81,60 +42,41 @@ type ParseRun struct {
 	Status          string          `json:"status"`
 	ParserName      string          `json:"parser_name"`
 	ParserVersion   string          `json:"parser_version"`
-	RequiresOcr     bool            `json:"requires_ocr"`
 	ErrorMessage    string          `json:"error_message"`
 	PageCount       int32           `json:"page_count"`
-	TextDensity     float64         `json:"text_density"`
 	ContentText     string          `json:"content_text"`
 	CleanedText     string          `json:"cleaned_text"`
-	SectionsJson    json.RawMessage `json:"sections_json"`
 	ChunksJson      json.RawMessage `json:"chunks_json"`
-	TablesJson      json.RawMessage `json:"tables_json"`
 	RawMetadataJson json.RawMessage `json:"raw_metadata_json"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
-type Plan struct {
-	ID                int64        `json:"id"`
-	SignalID          int64        `json:"signal_id"`
-	DocumentID        int64        `json:"document_id"`
-	Symbol            string       `json:"symbol"`
-	Strategy          string       `json:"strategy"`
-	TradeDate         time.Time    `json:"trade_date"`
-	Direction         string       `json:"direction"`
-	EntryPrice        float64      `json:"entry_price"`
-	StopLoss          float64      `json:"stop_loss"`
-	TakeProfit        float64      `json:"take_profit"`
-	InvalidationPrice float64      `json:"invalidation_price"`
-	PositionPct       float64      `json:"position_pct"`
-	Status            string       `json:"status"`
-	Rationale         string       `json:"rationale"`
-	ConfigVersion     int64        `json:"config_version"`
-	RuleVersion       string       `json:"rule_version"`
-	MarketSnapshotID  int64        `json:"market_snapshot_id"`
-	ApprovedBy        string       `json:"approved_by"`
-	ApprovedAt        sql.NullTime `json:"approved_at"`
-	CreatedAt         time.Time    `json:"created_at"`
-	UpdatedAt         time.Time    `json:"updated_at"`
-}
-
-type Signal struct {
-	ID            int64           `json:"id"`
-	DocumentID    int64           `json:"document_id"`
-	ParseRunID    int64           `json:"parse_run_id"`
-	ExpertName    string          `json:"expert_name"`
-	ExpertOrg     string          `json:"expert_org"`
-	Symbol        string          `json:"symbol"`
-	AssetType     string          `json:"asset_type"`
-	Market        string          `json:"market"`
-	Sentiment     string          `json:"sentiment"`
-	Thesis        string          `json:"thesis"`
-	EvidenceJson  json.RawMessage `json:"evidence_json"`
-	RisksJson     json.RawMessage `json:"risks_json"`
-	Confidence    float64         `json:"confidence"`
-	ConfigVersion int64           `json:"config_version"`
-	RuleVersion   string          `json:"rule_version"`
-	SignalDate    time.Time       `json:"signal_date"`
-	CreatedAt     time.Time       `json:"created_at"`
+type TradeCandidatePlan struct {
+	ID             int64           `json:"id"`
+	DocumentID     int64           `json:"document_id"`
+	ParseRunID     int64           `json:"parse_run_id"`
+	Analyst        string          `json:"analyst"`
+	Institution    string          `json:"institution"`
+	Symbol         string          `json:"symbol"`
+	AssetType      string          `json:"asset_type"`
+	Market         string          `json:"market"`
+	Strategy       string          `json:"strategy"`
+	Direction      string          `json:"direction"`
+	TradeDate      time.Time       `json:"trade_date"`
+	ReferencePrice float64         `json:"reference_price"`
+	EntryPrice     float64         `json:"entry_price"`
+	StopLoss       float64         `json:"stop_loss"`
+	TakeProfit     float64         `json:"take_profit"`
+	PositionPct    float64         `json:"position_pct"`
+	Confidence     float64         `json:"confidence"`
+	Status         string          `json:"status"`
+	Thesis         string          `json:"thesis"`
+	RisksJson      json.RawMessage `json:"risks_json"`
+	EvidenceJson   json.RawMessage `json:"evidence_json"`
+	PricingNote    string          `json:"pricing_note"`
+	ConfigVersion  int64           `json:"config_version"`
+	RuleVersion    string          `json:"rule_version"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }

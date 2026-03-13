@@ -4,19 +4,26 @@
 
 ## 项目目标
 
-这是一个面向中国市场研究场景的 Go 1.22 后端系统，负责把专家文档输入转成次日交易候选计划，并完成审批、评估和专家评分。
+这是一个面向中国市场研究场景的 Go 1.22 后端系统，负责把可解析出文字的专家文档输入，转换成稳定结构化的 T+1 交易候选计划。
 
-核心范围：
+当前系统只保留一条窄链路：
 
-- 文档摄取与去重
-- 文档解析与结构化
-- 专家观点抽取
-- 标的标准化
-- 市场快照归档
-- 确定性规则生成计划
+- 文档上传与去重
+- 文本提取与清洗
+- LLM 结构化抽取交易意图
+- 确定性规则生成候选计划
+- 结果查询
+
+当前不在范围内：
+
+- 行情 provider chain
 - 人工审批
 - T+1 评估
-- 专家 scorecard 与报告
+- scorecard / report
+- worker / scheduler
+- Redis 运行时依赖
+- MinIO / 对象存储运行时依赖
+- HTML / email / OCR / 表格抽取兼容链路
 
 ## 强约束
 
@@ -26,14 +33,39 @@
 - 数据库访问必须使用 `database/sql` + `go-sql-driver/mysql` + `sqlc`
 - 不允许引入 GORM
 - 业务配置只能来自 Nacos 单个 JSON 文档
-- LLM 只允许做抽取，不允许直接生成入场价、止损价、止盈价、仓位
+- 输入格式只支持可稳定提取纯文本的文件：
+  `pdf`、`doc`、`docx`、`txt`、`md`、`csv`
+- 解析层只负责把文件转成纯文本，不承担业务推理
+- LLM 只允许做结构化抽取，不允许直接生成入场价、止损价、止盈价、仓位
 - 交易参数必须由 `internal/rules` 中的确定性规则生成
-- 不要把第三方 provider 字段直接泄漏到业务层
+- 模型输出必须先做结构化校验，再进入规则层
+- 如果模型输出不合法，必须按配置重试；重试后仍失败则整个分析失败
+- 不要把第三方模型 provider 的原始字段直接泄漏到业务层
+
+## 当前处理链路
+
+标准链路如下：
+
+1. 上传文档
+2. 计算 SHA256 去重
+3. 将原始文件字节写入 MySQL
+4. 解析出纯文本并切 chunk
+5. 调用 LLM 抽取 `PlanIntent`
+6. 校验并归一化结构化结果
+7. 通过确定性规则生成 `CandidatePlan`
+8. 持久化候选计划并返回
+
+中间层边界必须保持：
+
+- `internal/parser` 输出 `ParseRun`
+- `internal/llm` 输出 `[]domain.PlanIntent`
+- `internal/rules` 输出 `domain.CandidatePlan`
+
+不要让模型直接输出最终候选计划，也不要让规则层直接消费原始文本。
 
 ## 目录约定
 
 - `cmd/api`: API 入口
-- `cmd/worker`: Worker 入口
 - `internal/bootstrap`: 启动装配
 - `internal/config`: 配置结构、校验、运行时快照
 - `internal/nacoscfg`: Nacos 加载、热更新、重载
@@ -41,17 +73,24 @@
 - `internal/domain`: 领域模型
 - `internal/repository`: repository 封装
 - `internal/repository/sqlc`: 生成代码，禁止手改
-- `internal/parser`: 文档解析
-- `internal/llm`: 抽取逻辑
-- `internal/market`: 行情 provider chain
-- `internal/rules`: 规则引擎
-- `internal/evaluation`: 次日评估
-- `internal/report`: scorecard 和报表
-- `internal/approval`: 审批逻辑
-- `internal/scheduler`: 定时任务
-- `internal/storage`: MinIO 抽象
+- `internal/parser`: 文档解析，只做文本提取与清洗
+- `internal/llm`: 模型调用、结构化输出校验、重试与归一化
+- `internal/rules`: 确定性规则引擎
+- `internal/service`: 业务编排
+- `internal/telemetry`: 日志等基础设施
+- `internal/utils`: 通用工具
 - `migrations`: 数据库迁移
 - `sqlc/query`: SQL 源文件
+
+以下目录已不再使用，后续不要恢复旧设计，除非产品边界重新确认：
+
+- `cmd/worker`
+- `internal/market`
+- `internal/approval`
+- `internal/evaluation`
+- `internal/report`
+- `internal/scheduler`
+- `internal/storage`
 
 ## 开发规则
 
@@ -70,6 +109,7 @@ env GOTOOLCHAIN=local GOCACHE=$(pwd)/.gocache go build ./...
 internal/config/types.go
 internal/config/validate.go
 configs/example_nacos_config.json
+configs/example_nacos_config.annotated.jsonc
 ```
 
 - 如果新增持久化字段，必须同时更新：
@@ -81,20 +121,47 @@ internal/domain/
 internal/repository/
 ```
 
-## 发布规则
+- 如果修改了模型输出结构，必须同时更新：
 
-- 默认使用 `main` 分支
-- 发布 GitHub 前先确认 `README.md`、`AGENTS.md`、`configs/example_nacos_config.json` 已同步
-- 不要把私密 token、真实生产 DSN、真实对象存储密钥提交进仓库
-- 如果当前环境 `gh auth status` 失败，不要伪造发布成功，应明确提示需要重新登录 GitHub
+```text
+internal/domain/signal.go
+internal/llm/
+internal/rules/
+相关测试
+```
+
+- 如果修改了规则生成逻辑，必须保持“同样输入得到同样输出”的确定性，不允许引入随机性或远程依赖
+
+## 模型调用规则
+
+- `internal/llm` 默认走 OpenAI 兼容接口风格
+- 模型请求必须显式要求返回 JSON
+- 模型返回内容必须反序列化到领域结构后再使用
+- 必须校验：
+  - `symbol` 非空
+  - `direction` 只能是 `LONG` / `SHORT`
+  - `reference_price` 不能为负数
+  - `thesis` 非空
+  - `confidence` 必须在 `(0,1]`
+- 校验失败必须视为模型调用失败，而不是“尽量容错后继续”
+- 重试次数只能来自配置 `llm.max_retries`
+- 不要在代码里写死模型 endpoint、api key、model name
 
 ## 建议工作方式
 
 1. 先读 `README.md` 了解当前实现范围。
 2. 再看 `internal/bootstrap/app.go` 理解启动装配。
 3. 修改功能时优先保持现有目录边界，不要把逻辑堆到 `main.go`。
-4. 行情能力扩展优先走 `internal/market` provider 接口，不要把 HTTP 调用散落到 service 层。
-5. 文档解析扩展优先走 `internal/parser`，不要在 handler 中直接解析文件。
+4. 文档解析扩展优先走 `internal/parser`，不要在 handler 中直接解析文件。
+5. 模型分析能力扩展优先走 `internal/llm`，不要把 prompt、HTTP 调用、JSON 校验散落到 service 层。
+6. 交易参数生成扩展优先走 `internal/rules`，不要让模型越权生成价格或仓位。
+
+## 发布规则
+
+- 默认使用 `main` 分支
+- 发布 GitHub 前先确认 `README.md`、`AGENTS.md`、`configs/example_nacos_config.json` 已同步
+- 不要把私密 token、真实生产 DSN、真实模型 API Key 提交进仓库
+- 如果当前环境 `gh auth status` 失败，不要伪造发布成功，应明确提示需要重新登录 GitHub
 
 ## 当前发布阻塞条件
 

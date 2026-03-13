@@ -12,22 +12,13 @@ import (
 	"time"
 )
 
-const approvePlan = `-- name: ApprovePlan :exec
-UPDATE plans
-SET status = 'APPROVED',
-    approved_by = ?,
-    approved_at = CURRENT_TIMESTAMP,
-    updated_at = CURRENT_TIMESTAMP
-WHERE id = ?
+const deletePlansByDocumentID = `-- name: DeletePlansByDocumentID :exec
+DELETE FROM trade_candidate_plans
+WHERE document_id = ?
 `
 
-type ApprovePlanParams struct {
-	ApprovedBy string `json:"approved_by"`
-	ID         int64  `json:"id"`
-}
-
-func (q *Queries) ApprovePlan(ctx context.Context, arg ApprovePlanParams) error {
-	_, err := q.db.ExecContext(ctx, approvePlan, arg.ApprovedBy, arg.ID)
+func (q *Queries) DeletePlansByDocumentID(ctx context.Context, documentID int64) error {
+	_, err := q.db.ExecContext(ctx, deletePlansByDocumentID, documentID)
 	return err
 }
 
@@ -52,7 +43,7 @@ func (q *Queries) GetConfigSnapshotByID(ctx context.Context, id int64) (ConfigSn
 }
 
 const getDocumentByID = `-- name: GetDocumentByID :one
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, object_key, status, config_version, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
 FROM documents
 WHERE id = ?
 `
@@ -71,9 +62,9 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, erro
 		&i.Extension,
 		&i.ContentType,
 		&i.Sha256,
-		&i.ObjectKey,
 		&i.Status,
 		&i.ConfigVersion,
+		&i.RawContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -81,7 +72,7 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, erro
 }
 
 const getDocumentBySHA = `-- name: GetDocumentBySHA :one
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, object_key, status, config_version, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
 FROM documents
 WHERE sha256 = ?
 `
@@ -100,47 +91,17 @@ func (q *Queries) GetDocumentBySHA(ctx context.Context, sha256 string) (Document
 		&i.Extension,
 		&i.ContentType,
 		&i.Sha256,
-		&i.ObjectKey,
 		&i.Status,
 		&i.ConfigVersion,
+		&i.RawContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
-const getEvaluationByID = `-- name: GetEvaluationByID :one
-SELECT id, plan_id, trade_date, status, entry_price, exit_price, close_price, pnl_pct, mfe_pct, mae_pct, benchmark_return_pct, excess_return_pct, reason, data_quality_flag, config_version, created_at
-FROM evaluations
-WHERE id = ?
-`
-
-func (q *Queries) GetEvaluationByID(ctx context.Context, id int64) (Evaluation, error) {
-	row := q.db.QueryRowContext(ctx, getEvaluationByID, id)
-	var i Evaluation
-	err := row.Scan(
-		&i.ID,
-		&i.PlanID,
-		&i.TradeDate,
-		&i.Status,
-		&i.EntryPrice,
-		&i.ExitPrice,
-		&i.ClosePrice,
-		&i.PnlPct,
-		&i.MfePct,
-		&i.MaePct,
-		&i.BenchmarkReturnPct,
-		&i.ExcessReturnPct,
-		&i.Reason,
-		&i.DataQualityFlag,
-		&i.ConfigVersion,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getLatestParseRunByDocumentID = `-- name: GetLatestParseRunByDocumentID :one
-SELECT id, document_id, status, parser_name, parser_version, requires_ocr, error_message, page_count, text_density, content_text, cleaned_text, sections_json, chunks_json, tables_json, raw_metadata_json, created_at, updated_at
+SELECT id, document_id, status, parser_name, parser_version, error_message, page_count, content_text, cleaned_text, chunks_json, raw_metadata_json, created_at, updated_at
 FROM parse_runs
 WHERE document_id = ?
 ORDER BY created_at DESC
@@ -156,15 +117,11 @@ func (q *Queries) GetLatestParseRunByDocumentID(ctx context.Context, documentID 
 		&i.Status,
 		&i.ParserName,
 		&i.ParserVersion,
-		&i.RequiresOcr,
 		&i.ErrorMessage,
 		&i.PageCount,
-		&i.TextDensity,
 		&i.ContentText,
 		&i.CleanedText,
-		&i.SectionsJson,
 		&i.ChunksJson,
-		&i.TablesJson,
 		&i.RawMetadataJson,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -172,43 +129,8 @@ func (q *Queries) GetLatestParseRunByDocumentID(ctx context.Context, documentID 
 	return i, err
 }
 
-const getMarketSnapshotBySymbolDate = `-- name: GetMarketSnapshotBySymbolDate :one
-SELECT id, symbol, trade_date, provider, open, high, low, close, volume, turnover, atr, prev_close, benchmark_return_pct, raw_object_key, config_version, created_at
-FROM market_snapshots
-WHERE symbol = ? AND trade_date = ?
-`
-
-type GetMarketSnapshotBySymbolDateParams struct {
-	Symbol    string    `json:"symbol"`
-	TradeDate time.Time `json:"trade_date"`
-}
-
-func (q *Queries) GetMarketSnapshotBySymbolDate(ctx context.Context, arg GetMarketSnapshotBySymbolDateParams) (MarketSnapshot, error) {
-	row := q.db.QueryRowContext(ctx, getMarketSnapshotBySymbolDate, arg.Symbol, arg.TradeDate)
-	var i MarketSnapshot
-	err := row.Scan(
-		&i.ID,
-		&i.Symbol,
-		&i.TradeDate,
-		&i.Provider,
-		&i.Open,
-		&i.High,
-		&i.Low,
-		&i.Close,
-		&i.Volume,
-		&i.Turnover,
-		&i.Atr,
-		&i.PrevClose,
-		&i.BenchmarkReturnPct,
-		&i.RawObjectKey,
-		&i.ConfigVersion,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getParseRunByID = `-- name: GetParseRunByID :one
-SELECT id, document_id, status, parser_name, parser_version, requires_ocr, error_message, page_count, text_density, content_text, cleaned_text, sections_json, chunks_json, tables_json, raw_metadata_json, created_at, updated_at
+SELECT id, document_id, status, parser_name, parser_version, error_message, page_count, content_text, cleaned_text, chunks_json, raw_metadata_json, created_at, updated_at
 FROM parse_runs
 WHERE id = ?
 `
@@ -222,15 +144,11 @@ func (q *Queries) GetParseRunByID(ctx context.Context, id int64) (ParseRun, erro
 		&i.Status,
 		&i.ParserName,
 		&i.ParserVersion,
-		&i.RequiresOcr,
 		&i.ErrorMessage,
 		&i.PageCount,
-		&i.TextDensity,
 		&i.ContentText,
 		&i.CleanedText,
-		&i.SectionsJson,
 		&i.ChunksJson,
-		&i.TablesJson,
 		&i.RawMetadataJson,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -239,67 +157,41 @@ func (q *Queries) GetParseRunByID(ctx context.Context, id int64) (ParseRun, erro
 }
 
 const getPlanByID = `-- name: GetPlanByID :one
-SELECT id, signal_id, document_id, symbol, strategy, trade_date, direction, entry_price, stop_loss, take_profit, invalidation_price, position_pct, status, rationale, config_version, rule_version, market_snapshot_id, approved_by, approved_at, created_at, updated_at
-FROM plans
+SELECT id, document_id, parse_run_id, analyst, institution, symbol, asset_type, market, strategy, direction, trade_date, reference_price, entry_price, stop_loss, take_profit, position_pct, confidence, status, thesis, risks_json, evidence_json, pricing_note, config_version, rule_version, created_at, updated_at
+FROM trade_candidate_plans
 WHERE id = ?
 `
 
-func (q *Queries) GetPlanByID(ctx context.Context, id int64) (Plan, error) {
+func (q *Queries) GetPlanByID(ctx context.Context, id int64) (TradeCandidatePlan, error) {
 	row := q.db.QueryRowContext(ctx, getPlanByID, id)
-	var i Plan
-	err := row.Scan(
-		&i.ID,
-		&i.SignalID,
-		&i.DocumentID,
-		&i.Symbol,
-		&i.Strategy,
-		&i.TradeDate,
-		&i.Direction,
-		&i.EntryPrice,
-		&i.StopLoss,
-		&i.TakeProfit,
-		&i.InvalidationPrice,
-		&i.PositionPct,
-		&i.Status,
-		&i.Rationale,
-		&i.ConfigVersion,
-		&i.RuleVersion,
-		&i.MarketSnapshotID,
-		&i.ApprovedBy,
-		&i.ApprovedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getSignalByID = `-- name: GetSignalByID :one
-SELECT id, document_id, parse_run_id, expert_name, expert_org, symbol, asset_type, market, sentiment, thesis, evidence_json, risks_json, confidence, config_version, rule_version, signal_date, created_at
-FROM signals
-WHERE id = ?
-`
-
-func (q *Queries) GetSignalByID(ctx context.Context, id int64) (Signal, error) {
-	row := q.db.QueryRowContext(ctx, getSignalByID, id)
-	var i Signal
+	var i TradeCandidatePlan
 	err := row.Scan(
 		&i.ID,
 		&i.DocumentID,
 		&i.ParseRunID,
-		&i.ExpertName,
-		&i.ExpertOrg,
+		&i.Analyst,
+		&i.Institution,
 		&i.Symbol,
 		&i.AssetType,
 		&i.Market,
-		&i.Sentiment,
-		&i.Thesis,
-		&i.EvidenceJson,
-		&i.RisksJson,
+		&i.Strategy,
+		&i.Direction,
+		&i.TradeDate,
+		&i.ReferencePrice,
+		&i.EntryPrice,
+		&i.StopLoss,
+		&i.TakeProfit,
+		&i.PositionPct,
 		&i.Confidence,
+		&i.Status,
+		&i.Thesis,
+		&i.RisksJson,
+		&i.EvidenceJson,
+		&i.PricingNote,
 		&i.ConfigVersion,
 		&i.RuleVersion,
-		&i.SignalDate,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -342,9 +234,9 @@ INSERT INTO documents (
     extension,
     content_type,
     sha256,
-    object_key,
     status,
-    config_version
+    config_version,
+    raw_content
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
@@ -360,9 +252,9 @@ type InsertDocumentParams struct {
 	Extension     string `json:"extension"`
 	ContentType   string `json:"content_type"`
 	Sha256        string `json:"sha256"`
-	ObjectKey     string `json:"object_key"`
 	Status        string `json:"status"`
 	ConfigVersion int64  `json:"config_version"`
+	RawContent    []byte `json:"raw_content"`
 }
 
 func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) (sql.Result, error) {
@@ -376,138 +268,10 @@ func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) 
 		arg.Extension,
 		arg.ContentType,
 		arg.Sha256,
-		arg.ObjectKey,
 		arg.Status,
 		arg.ConfigVersion,
+		arg.RawContent,
 	)
-}
-
-const insertEvaluation = `-- name: InsertEvaluation :execresult
-INSERT INTO evaluations (
-    plan_id,
-    trade_date,
-    status,
-    entry_price,
-    exit_price,
-    close_price,
-    pnl_pct,
-    mfe_pct,
-    mae_pct,
-    benchmark_return_pct,
-    excess_return_pct,
-    reason,
-    data_quality_flag,
-    config_version
-) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-)
-`
-
-type InsertEvaluationParams struct {
-	PlanID             int64     `json:"plan_id"`
-	TradeDate          time.Time `json:"trade_date"`
-	Status             string    `json:"status"`
-	EntryPrice         float64   `json:"entry_price"`
-	ExitPrice          float64   `json:"exit_price"`
-	ClosePrice         float64   `json:"close_price"`
-	PnlPct             float64   `json:"pnl_pct"`
-	MfePct             float64   `json:"mfe_pct"`
-	MaePct             float64   `json:"mae_pct"`
-	BenchmarkReturnPct float64   `json:"benchmark_return_pct"`
-	ExcessReturnPct    float64   `json:"excess_return_pct"`
-	Reason             string    `json:"reason"`
-	DataQualityFlag    string    `json:"data_quality_flag"`
-	ConfigVersion      int64     `json:"config_version"`
-}
-
-func (q *Queries) InsertEvaluation(ctx context.Context, arg InsertEvaluationParams) (sql.Result, error) {
-	return q.db.ExecContext(ctx, insertEvaluation,
-		arg.PlanID,
-		arg.TradeDate,
-		arg.Status,
-		arg.EntryPrice,
-		arg.ExitPrice,
-		arg.ClosePrice,
-		arg.PnlPct,
-		arg.MfePct,
-		arg.MaePct,
-		arg.BenchmarkReturnPct,
-		arg.ExcessReturnPct,
-		arg.Reason,
-		arg.DataQualityFlag,
-		arg.ConfigVersion,
-	)
-}
-
-const insertMarketSnapshot = `-- name: InsertMarketSnapshot :exec
-INSERT INTO market_snapshots (
-    symbol,
-    trade_date,
-    provider,
-    open,
-    high,
-    low,
-    close,
-    volume,
-    turnover,
-    atr,
-    prev_close,
-    benchmark_return_pct,
-    raw_object_key,
-    config_version
-) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-)
-ON DUPLICATE KEY UPDATE
-    provider = VALUES(provider),
-    open = VALUES(open),
-    high = VALUES(high),
-    low = VALUES(low),
-    close = VALUES(close),
-    volume = VALUES(volume),
-    turnover = VALUES(turnover),
-    atr = VALUES(atr),
-    prev_close = VALUES(prev_close),
-    benchmark_return_pct = VALUES(benchmark_return_pct),
-    raw_object_key = VALUES(raw_object_key),
-    config_version = VALUES(config_version)
-`
-
-type InsertMarketSnapshotParams struct {
-	Symbol             string    `json:"symbol"`
-	TradeDate          time.Time `json:"trade_date"`
-	Provider           string    `json:"provider"`
-	Open               float64   `json:"open"`
-	High               float64   `json:"high"`
-	Low                float64   `json:"low"`
-	Close              float64   `json:"close"`
-	Volume             float64   `json:"volume"`
-	Turnover           float64   `json:"turnover"`
-	Atr                float64   `json:"atr"`
-	PrevClose          float64   `json:"prev_close"`
-	BenchmarkReturnPct float64   `json:"benchmark_return_pct"`
-	RawObjectKey       string    `json:"raw_object_key"`
-	ConfigVersion      int64     `json:"config_version"`
-}
-
-func (q *Queries) InsertMarketSnapshot(ctx context.Context, arg InsertMarketSnapshotParams) error {
-	_, err := q.db.ExecContext(ctx, insertMarketSnapshot,
-		arg.Symbol,
-		arg.TradeDate,
-		arg.Provider,
-		arg.Open,
-		arg.High,
-		arg.Low,
-		arg.Close,
-		arg.Volume,
-		arg.Turnover,
-		arg.Atr,
-		arg.PrevClose,
-		arg.BenchmarkReturnPct,
-		arg.RawObjectKey,
-		arg.ConfigVersion,
-	)
-	return err
 }
 
 const insertParseRun = `-- name: InsertParseRun :execresult
@@ -516,18 +280,14 @@ INSERT INTO parse_runs (
     status,
     parser_name,
     parser_version,
-    requires_ocr,
     error_message,
     page_count,
-    text_density,
     content_text,
     cleaned_text,
-    sections_json,
     chunks_json,
-    tables_json,
     raw_metadata_json
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 `
 
@@ -536,15 +296,11 @@ type InsertParseRunParams struct {
 	Status          string          `json:"status"`
 	ParserName      string          `json:"parser_name"`
 	ParserVersion   string          `json:"parser_version"`
-	RequiresOcr     bool            `json:"requires_ocr"`
 	ErrorMessage    string          `json:"error_message"`
 	PageCount       int32           `json:"page_count"`
-	TextDensity     float64         `json:"text_density"`
 	ContentText     string          `json:"content_text"`
 	CleanedText     string          `json:"cleaned_text"`
-	SectionsJson    json.RawMessage `json:"sections_json"`
 	ChunksJson      json.RawMessage `json:"chunks_json"`
-	TablesJson      json.RawMessage `json:"tables_json"`
 	RawMetadataJson json.RawMessage `json:"raw_metadata_json"`
 }
 
@@ -554,199 +310,101 @@ func (q *Queries) InsertParseRun(ctx context.Context, arg InsertParseRunParams) 
 		arg.Status,
 		arg.ParserName,
 		arg.ParserVersion,
-		arg.RequiresOcr,
 		arg.ErrorMessage,
 		arg.PageCount,
-		arg.TextDensity,
 		arg.ContentText,
 		arg.CleanedText,
-		arg.SectionsJson,
 		arg.ChunksJson,
-		arg.TablesJson,
 		arg.RawMetadataJson,
 	)
 }
 
 const insertPlan = `-- name: InsertPlan :execresult
-INSERT INTO plans (
-    signal_id,
+INSERT INTO trade_candidate_plans (
     document_id,
+    parse_run_id,
+    analyst,
+    institution,
     symbol,
+    asset_type,
+    market,
     strategy,
-    trade_date,
     direction,
+    trade_date,
+    reference_price,
     entry_price,
     stop_loss,
     take_profit,
-    invalidation_price,
     position_pct,
+    confidence,
     status,
-    rationale,
+    thesis,
+    risks_json,
+    evidence_json,
+    pricing_note,
     config_version,
-    rule_version,
-    market_snapshot_id
+    rule_version
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 `
 
 type InsertPlanParams struct {
-	SignalID          int64     `json:"signal_id"`
-	DocumentID        int64     `json:"document_id"`
-	Symbol            string    `json:"symbol"`
-	Strategy          string    `json:"strategy"`
-	TradeDate         time.Time `json:"trade_date"`
-	Direction         string    `json:"direction"`
-	EntryPrice        float64   `json:"entry_price"`
-	StopLoss          float64   `json:"stop_loss"`
-	TakeProfit        float64   `json:"take_profit"`
-	InvalidationPrice float64   `json:"invalidation_price"`
-	PositionPct       float64   `json:"position_pct"`
-	Status            string    `json:"status"`
-	Rationale         string    `json:"rationale"`
-	ConfigVersion     int64     `json:"config_version"`
-	RuleVersion       string    `json:"rule_version"`
-	MarketSnapshotID  int64     `json:"market_snapshot_id"`
+	DocumentID     int64           `json:"document_id"`
+	ParseRunID     int64           `json:"parse_run_id"`
+	Analyst        string          `json:"analyst"`
+	Institution    string          `json:"institution"`
+	Symbol         string          `json:"symbol"`
+	AssetType      string          `json:"asset_type"`
+	Market         string          `json:"market"`
+	Strategy       string          `json:"strategy"`
+	Direction      string          `json:"direction"`
+	TradeDate      time.Time       `json:"trade_date"`
+	ReferencePrice float64         `json:"reference_price"`
+	EntryPrice     float64         `json:"entry_price"`
+	StopLoss       float64         `json:"stop_loss"`
+	TakeProfit     float64         `json:"take_profit"`
+	PositionPct    float64         `json:"position_pct"`
+	Confidence     float64         `json:"confidence"`
+	Status         string          `json:"status"`
+	Thesis         string          `json:"thesis"`
+	RisksJson      json.RawMessage `json:"risks_json"`
+	EvidenceJson   json.RawMessage `json:"evidence_json"`
+	PricingNote    string          `json:"pricing_note"`
+	ConfigVersion  int64           `json:"config_version"`
+	RuleVersion    string          `json:"rule_version"`
 }
 
 func (q *Queries) InsertPlan(ctx context.Context, arg InsertPlanParams) (sql.Result, error) {
 	return q.db.ExecContext(ctx, insertPlan,
-		arg.SignalID,
-		arg.DocumentID,
-		arg.Symbol,
-		arg.Strategy,
-		arg.TradeDate,
-		arg.Direction,
-		arg.EntryPrice,
-		arg.StopLoss,
-		arg.TakeProfit,
-		arg.InvalidationPrice,
-		arg.PositionPct,
-		arg.Status,
-		arg.Rationale,
-		arg.ConfigVersion,
-		arg.RuleVersion,
-		arg.MarketSnapshotID,
-	)
-}
-
-const insertSignal = `-- name: InsertSignal :execresult
-INSERT INTO signals (
-    document_id,
-    parse_run_id,
-    expert_name,
-    expert_org,
-    symbol,
-    asset_type,
-    market,
-    sentiment,
-    thesis,
-    evidence_json,
-    risks_json,
-    confidence,
-    config_version,
-    rule_version,
-    signal_date
-) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-)
-`
-
-type InsertSignalParams struct {
-	DocumentID    int64           `json:"document_id"`
-	ParseRunID    int64           `json:"parse_run_id"`
-	ExpertName    string          `json:"expert_name"`
-	ExpertOrg     string          `json:"expert_org"`
-	Symbol        string          `json:"symbol"`
-	AssetType     string          `json:"asset_type"`
-	Market        string          `json:"market"`
-	Sentiment     string          `json:"sentiment"`
-	Thesis        string          `json:"thesis"`
-	EvidenceJson  json.RawMessage `json:"evidence_json"`
-	RisksJson     json.RawMessage `json:"risks_json"`
-	Confidence    float64         `json:"confidence"`
-	ConfigVersion int64           `json:"config_version"`
-	RuleVersion   string          `json:"rule_version"`
-	SignalDate    time.Time       `json:"signal_date"`
-}
-
-func (q *Queries) InsertSignal(ctx context.Context, arg InsertSignalParams) (sql.Result, error) {
-	return q.db.ExecContext(ctx, insertSignal,
 		arg.DocumentID,
 		arg.ParseRunID,
-		arg.ExpertName,
-		arg.ExpertOrg,
+		arg.Analyst,
+		arg.Institution,
 		arg.Symbol,
 		arg.AssetType,
 		arg.Market,
-		arg.Sentiment,
-		arg.Thesis,
-		arg.EvidenceJson,
-		arg.RisksJson,
+		arg.Strategy,
+		arg.Direction,
+		arg.TradeDate,
+		arg.ReferencePrice,
+		arg.EntryPrice,
+		arg.StopLoss,
+		arg.TakeProfit,
+		arg.PositionPct,
 		arg.Confidence,
+		arg.Status,
+		arg.Thesis,
+		arg.RisksJson,
+		arg.EvidenceJson,
+		arg.PricingNote,
 		arg.ConfigVersion,
 		arg.RuleVersion,
-		arg.SignalDate,
 	)
 }
 
-const listApprovedPlansForTradeDateWithoutEvaluation = `-- name: ListApprovedPlansForTradeDateWithoutEvaluation :many
-SELECT p.id, p.signal_id, p.document_id, p.symbol, p.strategy, p.trade_date, p.direction, p.entry_price, p.stop_loss, p.take_profit, p.invalidation_price, p.position_pct, p.status, p.rationale, p.config_version, p.rule_version, p.market_snapshot_id, p.approved_by, p.approved_at, p.created_at, p.updated_at
-FROM plans p
-LEFT JOIN evaluations e ON e.plan_id = p.id
-WHERE p.status = 'APPROVED'
-  AND p.trade_date = ?
-  AND e.id IS NULL
-ORDER BY p.created_at ASC
-`
-
-func (q *Queries) ListApprovedPlansForTradeDateWithoutEvaluation(ctx context.Context, tradeDate time.Time) ([]Plan, error) {
-	rows, err := q.db.QueryContext(ctx, listApprovedPlansForTradeDateWithoutEvaluation, tradeDate)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Plan
-	for rows.Next() {
-		var i Plan
-		if err := rows.Scan(
-			&i.ID,
-			&i.SignalID,
-			&i.DocumentID,
-			&i.Symbol,
-			&i.Strategy,
-			&i.TradeDate,
-			&i.Direction,
-			&i.EntryPrice,
-			&i.StopLoss,
-			&i.TakeProfit,
-			&i.InvalidationPrice,
-			&i.PositionPct,
-			&i.Status,
-			&i.Rationale,
-			&i.ConfigVersion,
-			&i.RuleVersion,
-			&i.MarketSnapshotID,
-			&i.ApprovedBy,
-			&i.ApprovedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listDocuments = `-- name: ListDocuments :many
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, object_key, status, config_version, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
 FROM documents
 ORDER BY created_at DESC
 LIMIT ?
@@ -772,110 +430,11 @@ func (q *Queries) ListDocuments(ctx context.Context, limit int32) ([]Document, e
 			&i.Extension,
 			&i.ContentType,
 			&i.Sha256,
-			&i.ObjectKey,
 			&i.Status,
 			&i.ConfigVersion,
+			&i.RawContent,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listDocumentsByStatus = `-- name: ListDocumentsByStatus :many
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, object_key, status, config_version, created_at, updated_at
-FROM documents
-WHERE status = ?
-ORDER BY created_at ASC
-LIMIT ?
-`
-
-type ListDocumentsByStatusParams struct {
-	Status string `json:"status"`
-	Limit  int32  `json:"limit"`
-}
-
-func (q *Queries) ListDocumentsByStatus(ctx context.Context, arg ListDocumentsByStatusParams) ([]Document, error) {
-	rows, err := q.db.QueryContext(ctx, listDocumentsByStatus, arg.Status, arg.Limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Document
-	for rows.Next() {
-		var i Document
-		if err := rows.Scan(
-			&i.ID,
-			&i.SourceType,
-			&i.SourceName,
-			&i.Author,
-			&i.Institution,
-			&i.Title,
-			&i.FileName,
-			&i.Extension,
-			&i.ContentType,
-			&i.Sha256,
-			&i.ObjectKey,
-			&i.Status,
-			&i.ConfigVersion,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listEvaluations = `-- name: ListEvaluations :many
-SELECT id, plan_id, trade_date, status, entry_price, exit_price, close_price, pnl_pct, mfe_pct, mae_pct, benchmark_return_pct, excess_return_pct, reason, data_quality_flag, config_version, created_at
-FROM evaluations
-ORDER BY created_at DESC
-LIMIT ?
-`
-
-func (q *Queries) ListEvaluations(ctx context.Context, limit int32) ([]Evaluation, error) {
-	rows, err := q.db.QueryContext(ctx, listEvaluations, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Evaluation
-	for rows.Next() {
-		var i Evaluation
-		if err := rows.Scan(
-			&i.ID,
-			&i.PlanID,
-			&i.TradeDate,
-			&i.Status,
-			&i.EntryPrice,
-			&i.ExitPrice,
-			&i.ClosePrice,
-			&i.PnlPct,
-			&i.MfePct,
-			&i.MaePct,
-			&i.BenchmarkReturnPct,
-			&i.ExcessReturnPct,
-			&i.Reason,
-			&i.DataQualityFlag,
-			&i.ConfigVersion,
-			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -891,41 +450,46 @@ func (q *Queries) ListEvaluations(ctx context.Context, limit int32) ([]Evaluatio
 }
 
 const listPlans = `-- name: ListPlans :many
-SELECT id, signal_id, document_id, symbol, strategy, trade_date, direction, entry_price, stop_loss, take_profit, invalidation_price, position_pct, status, rationale, config_version, rule_version, market_snapshot_id, approved_by, approved_at, created_at, updated_at
-FROM plans
+SELECT id, document_id, parse_run_id, analyst, institution, symbol, asset_type, market, strategy, direction, trade_date, reference_price, entry_price, stop_loss, take_profit, position_pct, confidence, status, thesis, risks_json, evidence_json, pricing_note, config_version, rule_version, created_at, updated_at
+FROM trade_candidate_plans
 ORDER BY created_at DESC
 LIMIT ?
 `
 
-func (q *Queries) ListPlans(ctx context.Context, limit int32) ([]Plan, error) {
+func (q *Queries) ListPlans(ctx context.Context, limit int32) ([]TradeCandidatePlan, error) {
 	rows, err := q.db.QueryContext(ctx, listPlans, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Plan
+	var items []TradeCandidatePlan
 	for rows.Next() {
-		var i Plan
+		var i TradeCandidatePlan
 		if err := rows.Scan(
 			&i.ID,
-			&i.SignalID,
 			&i.DocumentID,
+			&i.ParseRunID,
+			&i.Analyst,
+			&i.Institution,
 			&i.Symbol,
+			&i.AssetType,
+			&i.Market,
 			&i.Strategy,
-			&i.TradeDate,
 			&i.Direction,
+			&i.TradeDate,
+			&i.ReferencePrice,
 			&i.EntryPrice,
 			&i.StopLoss,
 			&i.TakeProfit,
-			&i.InvalidationPrice,
 			&i.PositionPct,
+			&i.Confidence,
 			&i.Status,
-			&i.Rationale,
+			&i.Thesis,
+			&i.RisksJson,
+			&i.EvidenceJson,
+			&i.PricingNote,
 			&i.ConfigVersion,
 			&i.RuleVersion,
-			&i.MarketSnapshotID,
-			&i.ApprovedBy,
-			&i.ApprovedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -942,40 +506,49 @@ func (q *Queries) ListPlans(ctx context.Context, limit int32) ([]Plan, error) {
 	return items, nil
 }
 
-const listSignalsByDocumentID = `-- name: ListSignalsByDocumentID :many
-SELECT id, document_id, parse_run_id, expert_name, expert_org, symbol, asset_type, market, sentiment, thesis, evidence_json, risks_json, confidence, config_version, rule_version, signal_date, created_at
-FROM signals
+const listPlansByDocumentID = `-- name: ListPlansByDocumentID :many
+SELECT id, document_id, parse_run_id, analyst, institution, symbol, asset_type, market, strategy, direction, trade_date, reference_price, entry_price, stop_loss, take_profit, position_pct, confidence, status, thesis, risks_json, evidence_json, pricing_note, config_version, rule_version, created_at, updated_at
+FROM trade_candidate_plans
 WHERE document_id = ?
 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListSignalsByDocumentID(ctx context.Context, documentID int64) ([]Signal, error) {
-	rows, err := q.db.QueryContext(ctx, listSignalsByDocumentID, documentID)
+func (q *Queries) ListPlansByDocumentID(ctx context.Context, documentID int64) ([]TradeCandidatePlan, error) {
+	rows, err := q.db.QueryContext(ctx, listPlansByDocumentID, documentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Signal
+	var items []TradeCandidatePlan
 	for rows.Next() {
-		var i Signal
+		var i TradeCandidatePlan
 		if err := rows.Scan(
 			&i.ID,
 			&i.DocumentID,
 			&i.ParseRunID,
-			&i.ExpertName,
-			&i.ExpertOrg,
+			&i.Analyst,
+			&i.Institution,
 			&i.Symbol,
 			&i.AssetType,
 			&i.Market,
-			&i.Sentiment,
-			&i.Thesis,
-			&i.EvidenceJson,
-			&i.RisksJson,
+			&i.Strategy,
+			&i.Direction,
+			&i.TradeDate,
+			&i.ReferencePrice,
+			&i.EntryPrice,
+			&i.StopLoss,
+			&i.TakeProfit,
+			&i.PositionPct,
 			&i.Confidence,
+			&i.Status,
+			&i.Thesis,
+			&i.RisksJson,
+			&i.EvidenceJson,
+			&i.PricingNote,
 			&i.ConfigVersion,
 			&i.RuleVersion,
-			&i.SignalDate,
 			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
