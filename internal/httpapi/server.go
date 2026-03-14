@@ -56,6 +56,8 @@ func (s *Server) Router() http.Handler {
 		apiPrefix = cfg.Service.HTTP.APIPrefix
 	}
 
+	router.Get("/", s.handleUploadPage)
+	router.Get("/upload", s.handleUploadPage)
 	router.Get("/healthz", s.handleHealth)
 	router.Route(apiPrefix, func(r chi.Router) {
 		r.Get("/documents", s.handleListDocuments)
