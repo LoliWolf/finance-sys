@@ -3,6 +3,7 @@ package httpapi
 import (
 	"html/template"
 	"net/http"
+	"strconv"
 )
 
 var uploadPageTemplate = template.Must(template.New("upload-page").Parse(`<!DOCTYPE html>
@@ -225,7 +226,7 @@ var uploadPageTemplate = template.Must(template.New("upload-page").Parse(`<!DOCT
   </div>
 
   <script>
-    const apiPrefix = {{printf "%q" .APIPrefix}};
+    const apiPrefix = {{.APIPrefixLiteral}};
     const uploadURL = apiPrefix + "/documents/upload";
     const statusBox = document.getElementById("status");
     const resultsBox = document.getElementById("results");
@@ -354,7 +355,8 @@ var uploadPageTemplate = template.Must(template.New("upload-page").Parse(`<!DOCT
 </html>`))
 
 type uploadPageData struct {
-	APIPrefix string
+	APIPrefix        string
+	APIPrefixLiteral template.JS
 }
 
 func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +368,7 @@ func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = uploadPageTemplate.Execute(w, uploadPageData{
-		APIPrefix: apiPrefix,
+		APIPrefix:        apiPrefix,
+		APIPrefixLiteral: template.JS(strconv.Quote(apiPrefix)),
 	})
 }

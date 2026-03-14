@@ -12,3 +12,4 @@ vendor/
 *.test
 *.out
 configs/.cache
+cmd/api/cache
