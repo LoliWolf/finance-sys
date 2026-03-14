@@ -11,7 +11,7 @@ import (
 )
 
 func TestParseTextBuildsChunks(t *testing.T) {
-	service := parser.New()
+	service := parser.New(nil)
 	result, err := service.Parse(context.Background(), "sample.txt", []byte("推荐 600519.SH，参考价 1688.00 元。\n风险提示：需求不及预期。"), config.DocumentConfig{
 		Chunking: config.ChunkingConfig{
 			Enabled:     true,

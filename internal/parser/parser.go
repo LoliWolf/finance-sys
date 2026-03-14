@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,14 +19,19 @@ import (
 
 const version = "parser-v2"
 
-type Service struct{}
+type Service struct {
+	logger *slog.Logger
+}
 
-func New() *Service {
-	return &Service{}
+func New(logger *slog.Logger) *Service {
+	return &Service{logger: logger}
 }
 
 func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cfg config.DocumentConfig) (domain.ParseRun, error) {
 	ext := strings.ToLower(filepath.Ext(fileName))
+	if s.logger != nil {
+		s.logger.InfoContext(ctx, "parser parse start", "file_name", fileName, "extension", ext, "size_bytes", len(content))
+	}
 	result := domain.ParseRun{
 		Status:        "PARSED",
 		ParserName:    parserName(ext),
@@ -51,12 +57,18 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 	if err != nil {
 		result.Status = "FAILED"
 		result.ErrorMessage = err.Error()
+		if s.logger != nil {
+			s.logger.ErrorContext(ctx, "parser parse failed", "file_name", fileName, "extension", ext, "error", err.Error())
+		}
 		return result, err
 	}
 
 	result.ContentText = text
 	result.CleanedText = cleanText(text)
 	result.Chunks = buildChunks(result.CleanedText, cfg.Chunking)
+	if s.logger != nil {
+		s.logger.InfoContext(ctx, "parser parse success", "file_name", fileName, "extension", ext, "cleaned_chars", len([]rune(result.CleanedText)), "chunk_count", len(result.Chunks))
+	}
 	return result, nil
 }
 

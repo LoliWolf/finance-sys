@@ -36,19 +36,24 @@ type App struct {
 
 func Build(ctx context.Context) (*App, error) {
 	bootstrapLogger := telemetry.NewLogger("INFO")
+	bootstrapLogger.Info("bootstrap build start")
 	snapshot, loader, err := loadInitialSnapshot(ctx, bootstrapLogger)
 	if err != nil {
+		bootstrapLogger.Error("bootstrap load initial snapshot failed", "error", err.Error())
 		return nil, err
 	}
 
 	logger := telemetry.NewLogger(snapshot.Config.Logging.Level)
 	runtime := config.NewRuntime(snapshot)
+	logger.Info("bootstrap runtime initialized", "config_version", snapshot.Config.Meta.ConfigVersion, "config_source", snapshot.Source)
 
 	db, err := openDB(ctx, snapshot.Config)
 	if err != nil {
+		logger.Error("bootstrap open db failed", "error", err.Error())
 		return nil, err
 	}
-	repo := repository.New(db)
+	logger.Info("bootstrap db connected")
+	repo := repository.New(db, logger)
 
 	if snapshot.Config.NacosClient.WriteConfigSnapshotToDB {
 		_, _ = repo.InsertConfigSnapshot(ctx, &domain.ConfigSnapshot{
@@ -59,19 +64,20 @@ func Build(ctx context.Context) (*App, error) {
 		})
 	}
 
-	parserService := parser.New()
+	parserService := parser.New(logger)
 	analyzer := llm.NewModelAnalyzer(runtime, logger)
-	ruleEngine := rules.New()
+	ruleEngine := rules.New(logger)
 	documentService := service.NewDocumentService(repo, runtime, parserService, analyzer, ruleEngine, logger)
 
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader
 	if loader != nil {
 		watcher = nacoscfg.NewWatcher(loader, runtime, repo, logger)
-		reloader = nacoscfg.NewReloader(loader, runtime, repo)
+		reloader = nacoscfg.NewReloader(loader, runtime, repo, logger)
 	}
 
-	httpServer := httpapi.NewServer(repo, runtime, documentService, reloader)
+	httpServer := httpapi.NewServer(repo, runtime, documentService, reloader, logger)
+	logger.Info("bootstrap build completed")
 	return &App{
 		Runtime:         runtime,
 		Logger:          logger,

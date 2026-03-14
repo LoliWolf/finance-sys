@@ -84,6 +84,9 @@ func (a *ModelAnalyzer) Analyze(ctx context.Context, document domain.Document, p
 	if strings.TrimSpace(parsed.CleanedText) == "" {
 		return nil, fmt.Errorf("empty parsed text")
 	}
+	if a.logger != nil {
+		a.logger.InfoContext(ctx, "llm analyze start", "document_id", document.ID, "parse_run_id", parsed.ID, "chunk_count", len(parsed.Chunks), "model", cfg.LLM.Model, "provider", cfg.LLM.Provider)
+	}
 
 	chunks := parsed.Chunks
 	if len(chunks) == 0 {
@@ -92,8 +95,14 @@ func (a *ModelAnalyzer) Analyze(ctx context.Context, document domain.Document, p
 
 	rawIntents := make([]domain.PlanIntent, 0)
 	for _, chunk := range chunks {
+		if a.logger != nil {
+			a.logger.DebugContext(ctx, "llm analyze chunk dispatch", "document_id", document.ID, "chunk_index", chunk.Index, "chunk_chars", len([]rune(chunk.Text)))
+		}
 		intents, err := a.analyzeChunk(ctx, cfg.LLM, document, chunk)
 		if err != nil {
+			if a.logger != nil {
+				a.logger.ErrorContext(ctx, "llm analyze chunk failed", "document_id", document.ID, "chunk_index", chunk.Index, "error", err.Error())
+			}
 			return nil, err
 		}
 		rawIntents = append(rawIntents, intents...)
@@ -101,10 +110,16 @@ func (a *ModelAnalyzer) Analyze(ctx context.Context, document domain.Document, p
 
 	intents, err := normalizeAndMergeIntents(rawIntents)
 	if err != nil {
+		if a.logger != nil {
+			a.logger.ErrorContext(ctx, "llm analyze merge failed", "document_id", document.ID, "error", err.Error())
+		}
 		return nil, err
 	}
 	if len(intents) == 0 {
 		return nil, fmt.Errorf("no structured trade intent extracted")
+	}
+	if a.logger != nil {
+		a.logger.InfoContext(ctx, "llm analyze completed", "document_id", document.ID, "raw_intent_count", len(rawIntents), "merged_intent_count", len(intents))
 	}
 	return intents, nil
 }
@@ -117,8 +132,14 @@ func (a *ModelAnalyzer) analyzeChunk(ctx context.Context, cfg config.LLMConfig, 
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if a.logger != nil {
+			a.logger.DebugContext(ctx, "llm analyze chunk attempt", "chunk_index", chunk.Index, "attempt", attempt, "max_attempts", attempts)
+		}
 		intents, err := a.requestPlans(ctx, cfg, document, chunk)
 		if err == nil {
+			if a.logger != nil {
+				a.logger.InfoContext(ctx, "llm analyze chunk success", "chunk_index", chunk.Index, "attempt", attempt, "intent_count", len(intents))
+			}
 			return intents, nil
 		}
 		lastErr = err
@@ -144,6 +165,9 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 	if err != nil {
 		return nil, err
 	}
+	if a.logger != nil {
+		a.logger.DebugContext(ctx, "llm request prepared", "chunk_index", chunk.Index, "payload_bytes", len(raw), "endpoint", cfg.Endpoint)
+	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutMS)*time.Millisecond)
 	defer cancel()
@@ -166,6 +190,9 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+	if a.logger != nil {
+		a.logger.DebugContext(ctx, "llm response received", "chunk_index", chunk.Index, "status_code", resp.StatusCode, "body_bytes", len(body))
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, fmt.Errorf("llm http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

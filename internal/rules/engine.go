@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"time"
 
@@ -9,13 +10,18 @@ import (
 	"finance-sys/internal/domain"
 )
 
-type Engine struct{}
+type Engine struct {
+	logger *slog.Logger
+}
 
-func New() *Engine {
-	return &Engine{}
+func New(logger *slog.Logger) *Engine {
+	return &Engine{logger: logger}
 }
 
 func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan {
+	if e.logger != nil {
+		e.logger.Info("rules generate start", "symbol", intent.Symbol, "direction", intent.Direction, "reference_price", intent.ReferencePrice, "confidence", intent.Confidence, "trade_date", tradeDate.Format(time.DateOnly))
+	}
 	plan := domain.CandidatePlan{
 		DocumentID:     0,
 		ParseRunID:     0,
@@ -41,6 +47,9 @@ func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, trad
 	if intent.ReferencePrice <= 0 {
 		plan.Status = "NEEDS_REVIEW"
 		plan.PricingNote = "missing explicit price in source text"
+		if e.logger != nil {
+			e.logger.Warn("rules generate needs review missing price", "symbol", intent.Symbol, "direction", intent.Direction)
+		}
 		return plan
 	}
 
@@ -64,6 +73,12 @@ func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, trad
 	if intent.Confidence < cfg.MinConfidence {
 		plan.Status = "NEEDS_REVIEW"
 		plan.PricingNote = fmt.Sprintf("confidence %.2f below threshold %.2f", intent.Confidence, cfg.MinConfidence)
+		if e.logger != nil {
+			e.logger.Warn("rules generate needs review low confidence", "symbol", intent.Symbol, "confidence", intent.Confidence, "threshold", cfg.MinConfidence)
+		}
+	}
+	if e.logger != nil {
+		e.logger.Info("rules generate completed", "symbol", plan.Symbol, "status", plan.Status, "entry_price", plan.EntryPrice, "stop_loss", plan.StopLoss, "take_profit", plan.TakeProfit, "position_pct", plan.PositionPct)
 	}
 	return plan
 }

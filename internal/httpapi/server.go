@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"finance-sys/internal/config"
 	"finance-sys/internal/domain"
@@ -27,6 +29,7 @@ type Server struct {
 	runtime   *config.Runtime
 	documents *service.DocumentService
 	reloader  ConfigReloader
+	logger    *slog.Logger
 }
 
 func NewServer(
@@ -34,12 +37,14 @@ func NewServer(
 	runtime *config.Runtime,
 	documents *service.DocumentService,
 	reloader ConfigReloader,
+	logger *slog.Logger,
 ) *Server {
 	return &Server{
 		repo:      repo,
 		runtime:   runtime,
 		documents: documents,
 		reloader:  reloader,
+		logger:    logger,
 	}
 }
 
@@ -47,6 +52,7 @@ func (s *Server) Router() http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Recoverer)
+	router.Use(s.requestLogMiddleware)
 	router.Use(s.authMiddleware)
 	router.Use(s.corsMiddleware)
 
@@ -71,6 +77,7 @@ func (s *Server) Router() http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.logRequest(r, slog.LevelDebug, "handle health")
 	err := s.repo.Ping(r.Context())
 	status := http.StatusOK
 	payload := map[string]any{"status": "ok"}
@@ -82,21 +89,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
+	s.logRequest(r, slog.LevelInfo, "handle list documents start")
 	items, err := s.repo.ListDocuments(r.Context(), 100)
 	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle list documents failed", "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle list documents success", "count", len(items))
 	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
+	s.logRequest(r, slog.LevelInfo, "handle upload document start")
 	cfg := s.runtime.Config()
 	if cfg == nil {
+		s.logRequest(r, slog.LevelError, "handle upload document missing config")
 		writeError(w, http.StatusInternalServerError, errors.New("config runtime unavailable"))
 		return
 	}
 	if !cfg.Document.APIUploadEnabled {
+		s.logRequest(r, slog.LevelWarn, "handle upload document forbidden")
 		writeError(w, http.StatusForbidden, errors.New("api upload disabled"))
 		return
 	}
@@ -104,12 +117,14 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 	limit := int64(cfg.Document.MaxFileSizeMB) * 1024 * 1024
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	if err := r.ParseMultipartForm(limit); err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle upload document parse multipart failed", "error", err.Error())
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle upload document missing file", "error", err.Error())
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -117,9 +132,11 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 
 	content, err := io.ReadAll(file)
 	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle upload document read file failed", "error", err.Error(), "file_name", header.Filename)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle upload document file loaded", "file_name", header.Filename, "size_bytes", len(content))
 
 	document, duplicate, err := s.documents.IngestDocument(r.Context(), domain.DocumentIngestRequest{
 		SourceType:  r.FormValue("source_type"),
@@ -132,24 +149,30 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		Content:     content,
 	})
 	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle upload document ingest failed", "file_name", header.Filename, "error", err.Error())
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle upload document ingest success", "document_id", document.ID, "duplicate", duplicate, "file_name", header.Filename)
 
 	response := map[string]any{
 		"duplicate": duplicate,
 		"document":  document,
 	}
 	if cfg.Document.AutoAnalyzeUpload && !duplicate {
+		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze start", "document_id", document.ID)
 		plans, err := s.documents.AnalyzeDocument(r.Context(), document.ID)
 		if err != nil {
+			s.logRequest(r, slog.LevelError, "handle upload document auto analyze failed", "document_id", document.ID, "error", err.Error())
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze success", "document_id", document.ID, "plan_count", len(plans))
 		response["plans"] = plans
 	}
 	if duplicate {
 		if plans, err := s.documents.ListPlansByDocumentID(r.Context(), document.ID); err == nil {
+			s.logRequest(r, slog.LevelInfo, "handle upload document duplicate reused plans", "document_id", document.ID, "plan_count", len(plans))
 			response["plans"] = plans
 		}
 	}
@@ -164,14 +187,18 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAnalyzeDocument(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(chi.URLParam(r, "id"))
 	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle analyze document invalid id", "error", err.Error())
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle analyze document start", "document_id", id)
 	plans, err := s.documents.AnalyzeDocument(r.Context(), id)
 	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle analyze document failed", "document_id", id, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle analyze document success", "document_id", id, "plan_count", len(plans))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "planned",
 		"plans":  plans,
@@ -181,35 +208,46 @@ func (s *Server) handleAnalyzeDocument(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListDocumentPlans(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(chi.URLParam(r, "id"))
 	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle list document plans invalid id", "error", err.Error())
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle list document plans start", "document_id", id)
 	items, err := s.documents.ListPlansByDocumentID(r.Context(), id)
 	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle list document plans failed", "document_id", id, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle list document plans success", "document_id", id, "count", len(items))
 	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) handleListPlans(w http.ResponseWriter, r *http.Request) {
+	s.logRequest(r, slog.LevelInfo, "handle list plans start")
 	items, err := s.repo.ListPlans(r.Context(), 100)
 	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle list plans failed", "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle list plans success", "count", len(items))
 	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 	if s.reloader == nil {
+		s.logRequest(r, slog.LevelWarn, "handle reload config not enabled")
 		writeError(w, http.StatusNotImplemented, errors.New("config reload not enabled"))
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle reload config start")
 	if err := s.reloader.Reload(r.Context()); err != nil {
+		s.logRequest(r, slog.LevelError, "handle reload config failed", "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.logRequest(r, slog.LevelInfo, "handle reload config success")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
@@ -228,6 +266,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				return
 			}
 		}
+		s.logRequest(r, slog.LevelWarn, "auth middleware rejected request")
 		writeError(w, http.StatusUnauthorized, errors.New("unauthorized"))
 	})
 }
@@ -252,6 +291,39 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (s *Server) requestLogMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		start := time.Now()
+		s.logRequest(r, slog.LevelInfo, "http request start")
+		next.ServeHTTP(recorder, r)
+		s.logRequest(r, slog.LevelInfo, "http request completed", "status", recorder.status, "duration_ms", time.Since(start).Milliseconds())
+	})
+}
+
+func (s *Server) logRequest(r *http.Request, level slog.Level, msg string, args ...any) {
+	if s.logger == nil {
+		return
+	}
+	base := []any{
+		"method", r.Method,
+		"path", r.URL.Path,
+		"query", r.URL.RawQuery,
+		"request_id", middleware.GetReqID(r.Context()),
+	}
+	s.logger.Log(r.Context(), level, msg, append(base, args...)...)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestGeneratePlan(t *testing.T) {
-	engine := rules.New()
+	engine := rules.New(nil)
 	plan := engine.Generate(domain.PlanIntent{
 		Analyst:        "Alice",
 		Symbol:         "600519.SH",
