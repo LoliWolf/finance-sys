@@ -159,18 +159,27 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		"duplicate": duplicate,
 		"document":  document,
 	}
-	if cfg.Document.AutoAnalyzeUpload && !duplicate {
-		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze start", "document_id", document.ID)
+	shouldAutoAnalyze := (!duplicate && cfg.Document.AutoAnalyzeUpload) || (duplicate && document.Status == "FAILED")
+	if shouldAutoAnalyze {
+		reason := "new_document"
+		if duplicate {
+			reason = "duplicate_failed_rerun"
+		}
+		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze start", "document_id", document.ID, "reason", reason, "document_status", document.Status)
 		plans, err := s.documents.AnalyzeDocument(r.Context(), document.ID)
 		if err != nil {
-			s.logRequest(r, slog.LevelError, "handle upload document auto analyze failed", "document_id", document.ID, "error", err.Error())
+			s.logRequest(r, slog.LevelError, "handle upload document auto analyze failed", "document_id", document.ID, "reason", reason, "error", err.Error())
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze success", "document_id", document.ID, "plan_count", len(plans))
+		if refreshed, reloadErr := s.repo.GetDocumentByID(r.Context(), document.ID); reloadErr == nil {
+			document = refreshed
+			response["document"] = document
+		}
+		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze success", "document_id", document.ID, "reason", reason, "plan_count", len(plans))
 		response["plans"] = plans
 	}
-	if duplicate {
+	if duplicate && !shouldAutoAnalyze {
 		if plans, err := s.documents.ListPlansByDocumentID(r.Context(), document.ID); err == nil {
 			s.logRequest(r, slog.LevelInfo, "handle upload document duplicate reused plans", "document_id", document.ID, "plan_count", len(plans))
 			response["plans"] = plans
