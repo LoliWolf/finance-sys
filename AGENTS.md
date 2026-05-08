@@ -82,16 +82,6 @@
 - `migrations`: 数据库迁移
 - `sqlc/query`: SQL 源文件
 
-以下目录已不再使用，后续不要恢复旧设计，除非产品边界重新确认：
-
-- `cmd/worker`
-- `internal/market`
-- `internal/approval`
-- `internal/evaluation`
-- `internal/report`
-- `internal/scheduler`
-- `internal/storage`
-
 ## 开发规则
 
 - 修改 SQL 后，必须重新执行 `sqlc generate -f sqlc/sqlc.yaml`

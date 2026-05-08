@@ -13,3 +13,4 @@ vendor/
 *.out
 configs/.cache
 cmd/api/cache
+.gocache_verify/
