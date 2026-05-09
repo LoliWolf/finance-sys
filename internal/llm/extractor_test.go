@@ -128,6 +128,44 @@ func TestModelAnalyzerFailsAfterRetries(t *testing.T) {
 	require.Equal(t, int32(3), attempts.Load())
 }
 
+func TestValidateIntentRejectsInvalidStructuredOutput(t *testing.T) {
+	require.ErrorContains(t, llm.ValidateIntent(domain.PlanIntent{
+		Symbol:         "",
+		Direction:      "LONG",
+		ReferencePrice: 1,
+		Thesis:         "supported by text",
+		Confidence:     0.8,
+	}), "symbol is required")
+
+	require.ErrorContains(t, llm.ValidateIntent(domain.PlanIntent{
+		Symbol:         "600519.SH",
+		Direction:      "BUY",
+		ReferencePrice: 1,
+		Thesis:         "supported by text",
+		Confidence:     0.8,
+	}), "direction must be LONG or SHORT")
+
+	require.ErrorContains(t, llm.ValidateIntent(domain.PlanIntent{
+		Symbol:         "600519.SH",
+		Direction:      "LONG",
+		ReferencePrice: 1,
+		Thesis:         "supported by text",
+		Confidence:     0,
+	}), "confidence must be in (0,1]")
+}
+
+func TestValidateIntentAcceptsMVPTradeIntent(t *testing.T) {
+	err := llm.ValidateIntent(domain.PlanIntent{
+		Analyst:        "blogger-a",
+		Symbol:         "600519.SH",
+		Direction:      "LONG",
+		ReferencePrice: 1688,
+		Thesis:         "explicit recommendation from source text",
+		Confidence:     0.82,
+	})
+	require.NoError(t, err)
+}
+
 func testRuntime(endpoint string, maxRetries int) *config.Runtime {
 	return config.NewRuntime(&config.Snapshot{
 		Config: &config.Config{

@@ -36,3 +36,51 @@ func TestGeneratePlan(t *testing.T) {
 	require.Equal(t, 106.0, plan.TakeProfit)
 	require.Equal(t, "READY", plan.Status)
 }
+
+func TestGenerateShortPlan(t *testing.T) {
+	engine := rules.New(nil)
+	plan := engine.Generate(domain.PlanIntent{
+		Analyst:        "Alice",
+		Symbol:         "000001.SZ",
+		Direction:      "SHORT",
+		ReferencePrice: 10,
+		Confidence:     0.9,
+		Thesis:         "weak demand",
+	}, config.RulesConfig{
+		Version:              "rules-v2",
+		Strategy:             "TEXT_REFERENCE_PRICE",
+		MaxPositionPct:       0.1,
+		DefaultStopLossPct:   0.03,
+		DefaultTakeProfitPct: 0.06,
+		MinConfidence:        0.65,
+	}, time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC), 2)
+
+	require.Equal(t, "SHORT", plan.Direction)
+	require.Equal(t, 10.0, plan.EntryPrice)
+	require.Equal(t, 10.3, plan.StopLoss)
+	require.Equal(t, 9.4, plan.TakeProfit)
+	require.Equal(t, "READY", plan.Status)
+}
+
+func TestGeneratePlanNeedsReviewWithoutReferencePrice(t *testing.T) {
+	engine := rules.New(nil)
+	plan := engine.Generate(domain.PlanIntent{
+		Analyst:        "Alice",
+		Symbol:         "600519.SH",
+		Direction:      "LONG",
+		ReferencePrice: 0,
+		Confidence:     0.8,
+		Thesis:         "recommended but no explicit price",
+	}, config.RulesConfig{
+		Version:              "rules-v2",
+		Strategy:             "TEXT_REFERENCE_PRICE",
+		MaxPositionPct:       0.1,
+		DefaultStopLossPct:   0.03,
+		DefaultTakeProfitPct: 0.06,
+		MinConfidence:        0.65,
+	}, time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC), 2)
+
+	require.Equal(t, "NEEDS_REVIEW", plan.Status)
+	require.Equal(t, 0.0, plan.EntryPrice)
+	require.Contains(t, plan.PricingNote, "missing explicit price")
+}

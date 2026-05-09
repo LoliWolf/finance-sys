@@ -52,7 +52,7 @@ func (w *Watcher) poll(ctx context.Context) {
 		return
 	}
 
-	next, err := w.loader.Load(ctx, current.Config.NacosClient.CacheLastGoodConfig, false)
+	next, err := w.loader.Load(ctx, false, false)
 	if err != nil {
 		w.logger.Warn("poll nacos config", "error", err.Error())
 		return

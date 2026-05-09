@@ -37,7 +37,7 @@ func (r *Reloader) Reload(ctx context.Context) error {
 		}
 		return fmt.Errorf("config runtime is empty")
 	}
-	snapshot, err := r.loader.Load(ctx, current.Config.NacosClient.CacheLastGoodConfig, false)
+	snapshot, err := r.loader.Load(ctx, false, false)
 	if err != nil {
 		if r.logger != nil {
 			r.logger.ErrorContext(ctx, "config reloader load failed", "error", err.Error())

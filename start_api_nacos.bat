@@ -22,14 +22,21 @@ for /f "usebackq tokens=* delims=" %%A in ("%ENV_FILE%") do (
 )
 
 set "GOTOOLCHAIN=local"
-set "GOCACHE=%ROOT_DIR%.gocache"
+set "GOCACHE=%ROOT_DIR%.gocache_api"
+if not exist "%GOCACHE%" mkdir "%GOCACHE%"
 if defined EXTRA_PATH set "PATH=%EXTRA_PATH%;%PATH%"
 if not defined APP_BASE_URL set "APP_BASE_URL=http://127.0.0.1:30005"
+if not defined OPEN_UPLOAD_PAGE set "OPEN_UPLOAD_PAGE=1"
 set "UPLOAD_URL=%APP_BASE_URL%/upload"
 set "HEALTH_URL=%APP_BASE_URL%/healthz"
 set "APP_PORT=30005"
+set "TMP_DIR=%ROOT_DIR%tmp"
+set "API_EXE=%TMP_DIR%\api_nacos.exe"
+set "API_LOG=%TMP_DIR%\api_nacos.log"
 
 for /f "tokens=4 delims=/: " %%P in ("%APP_BASE_URL%") do set "APP_PORT=%%P"
+
+if not exist "%TMP_DIR%" mkdir "%TMP_DIR%"
 
 echo [INFO] Trying to stop old service on port %APP_PORT%
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -39,8 +46,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "foreach($procId in $procIds) { try { Stop-Process -Id $procId -Force -ErrorAction Stop; Write-Host ('[INFO] Stopped PID ' + $procId) } catch { Write-Host ('[WARN] Failed to stop PID ' + $procId + ': ' + $_.Exception.Message) } }"
 timeout /t 1 /nobreak >nul
 
+echo [INFO] Building API executable
+go build -o "%API_EXE%" ./cmd/api
+if errorlevel 1 exit /b %ERRORLEVEL%
+
 echo [INFO] Starting API with Nacos bootstrap from %ENV_FILE%
-start "finance-sys-api" cmd /k "cd /d \"%ROOT_DIR%\" && go run ./cmd/api"
+if exist "%API_LOG%" del "%API_LOG%"
+start "finance-sys-api" cmd /c ""%API_EXE%" >> "%API_LOG%" 2>&1"
 
 echo [INFO] Waiting for %HEALTH_URL%
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -48,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "while((Get-Date) -lt $deadline) {" ^
   "  try {" ^
   "    $resp=Invoke-WebRequest -UseBasicParsing -Uri '%HEALTH_URL%' -TimeoutSec 2;" ^
-  "    if($resp.StatusCode -eq 200) { Start-Process '%UPLOAD_URL%'; exit 0 }" ^
+  "    if($resp.StatusCode -eq 200) { if('%OPEN_UPLOAD_PAGE%' -eq '1') { Start-Process '%UPLOAD_URL%' }; exit 0 }" ^
   "  } catch {}" ^
   "  Start-Sleep -Milliseconds 500" ^
   "}" ^

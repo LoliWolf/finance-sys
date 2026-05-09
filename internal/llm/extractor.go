@@ -21,6 +21,7 @@ const systemPrompt = `You extract structured T+1 trade intents from Chinese rese
 Return JSON only.
 Do not generate entry price, stop loss, take profit, or position.
 Only extract facts explicitly supported by the source text.
+The confidence field is your extraction confidence for this structured record, not an investment rating from the source text. It must be a number in (0,1].
 Output shape:
 {"plans":[{"analyst":"","institution":"","symbol":"","asset_type":"","market":"","direction":"LONG or SHORT","reference_price":0,"reference_price_note":"","thesis":"","evidence":[{"chunk_index":0,"text":""}],"risks":[""],"confidence":0.0}]}`
 

@@ -40,34 +40,18 @@ func NewLoader(bootstrapCfg BootstrapConfig, logger *slog.Logger) *Loader {
 	}
 }
 
-func (l *Loader) Load(ctx context.Context, allowCache bool, failFast bool) (*config.Snapshot, error) {
+func (l *Loader) Load(ctx context.Context, _ bool, failFast bool) (*config.Snapshot, error) {
 	raw, source, err := l.fetch(ctx)
 	if err != nil {
-		if allowCache {
-			if cached, cacheErr := l.loadCache(); cacheErr == nil {
-				l.logger.Warn("nacos fetch failed; using cached config", "error", err.Error())
-				return cached, nil
-			}
-		}
 		if failFast {
 			return nil, err
 		}
-		return nil, fmt.Errorf("load config: %w", err)
+		return nil, fmt.Errorf("load config from nacos: %w", err)
 	}
 
 	snapshot, err := l.decode(raw, source)
 	if err != nil {
-		if allowCache {
-			if cached, cacheErr := l.loadCache(); cacheErr == nil {
-				l.logger.Warn("config decode failed; using cached config", "error", err.Error())
-				return cached, nil
-			}
-		}
 		return nil, err
-	}
-
-	if err := l.cache(snapshot); err != nil {
-		l.logger.Warn("cache config snapshot", "error", err.Error())
 	}
 	return snapshot, nil
 }
@@ -78,12 +62,21 @@ func (l *Loader) fetch(_ context.Context) ([]byte, string, error) {
 		return nil, "", err
 	}
 
+	cacheDir := filepath.Join(os.TempDir(), "finance-sys-nacos-sdk-cache")
+	defer func() {
+		if err := os.RemoveAll(cacheDir); err != nil && l.logger != nil {
+			l.logger.Warn("remove nacos sdk transient cache", "cache_dir", cacheDir, "error", err.Error())
+		}
+	}()
+
 	clientConfig := constant.NewClientConfig(
 		constant.WithNamespaceId(l.bootstrap.Namespace),
 		constant.WithUsername(l.bootstrap.Username),
 		constant.WithPassword(l.bootstrap.Password),
 		constant.WithTimeoutMs(5000),
 		constant.WithNotLoadCacheAtStart(true),
+		constant.WithDisableUseSnapShot(true),
+		constant.WithCacheDir(cacheDir),
 	)
 
 	client, err := clients.NewConfigClient(vo.NacosClientParam{
@@ -101,6 +94,9 @@ func (l *Loader) fetch(_ context.Context) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("get nacos config: %w", err)
 	}
+	if strings.TrimSpace(content) == "" {
+		return nil, "", fmt.Errorf("nacos config response is empty")
+	}
 	return []byte(content), "nacos", nil
 }
 
@@ -115,51 +111,15 @@ func (l *Loader) decode(raw []byte, source string) (*config.Snapshot, error) {
 	return config.NewSnapshot(&cfg, raw, source, time.Now())
 }
 
-func (l *Loader) cache(snapshot *config.Snapshot) error {
-	dir := snapshot.Config.NacosClient.CacheDir
-	if dir == "" {
-		return nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "last-good-config.json")
-	return os.WriteFile(path, snapshot.Raw, 0o644)
-}
-
-func (l *Loader) loadCache() (*config.Snapshot, error) {
-	dir := os.Getenv("NACOS_CACHE_DIR")
-	if dir == "" {
-		dir = filepath.Join(os.TempDir(), "expert-trade-cache")
-	}
-	if cacheDir := l.loadCacheDirFromLocalFile(); cacheDir != "" {
-		dir = cacheDir
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "last-good-config.json"))
-	if err != nil {
-		return nil, err
-	}
-	return l.decode(raw, "cache")
-}
-
-func (l *Loader) loadCacheDirFromLocalFile() string {
-	path := filepath.Join("configs", "example_nacos_config.json")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var cfg config.Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return ""
-	}
-	return cfg.NacosClient.CacheDir
-}
-
 func buildServerConfigs(serverAddr string) ([]constant.ServerConfig, error) {
 	parts := strings.Split(serverAddr, ",")
 	configs := make([]constant.ServerConfig, 0, len(parts))
 	for _, part := range parts {
-		host, port, err := net.SplitHostPort(strings.TrimSpace(part))
+		raw := strings.TrimSpace(part)
+		if raw == "" {
+			continue
+		}
+		host, port, err := net.SplitHostPort(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse server addr %q: %w", part, err)
 		}
@@ -168,6 +128,9 @@ func buildServerConfigs(serverAddr string) ([]constant.ServerConfig, error) {
 			return nil, fmt.Errorf("parse port %q: %w", port, err)
 		}
 		configs = append(configs, *constant.NewServerConfig(host, portValue))
+	}
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("nacos server addr is empty")
 	}
 	return configs, nil
 }

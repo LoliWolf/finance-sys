@@ -94,11 +94,11 @@ func loadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snap
 	bootstrapCfg, err := LoadNacosBootstrapFromEnv()
 	if err == nil {
 		loader := nacoscfg.NewLoader(bootstrapCfg, logger)
-		snapshot, loadErr := loader.Load(ctx, true, false)
+		snapshot, loadErr := loader.Load(ctx, false, false)
 		if loadErr == nil {
 			return snapshot, loader, nil
 		}
-		logger.Warn("falling back to local example config", "error", loadErr.Error())
+		return nil, nil, fmt.Errorf("load nacos config: %w", loadErr)
 	}
 
 	raw, err := os.ReadFile("configs/example_nacos_config.json")

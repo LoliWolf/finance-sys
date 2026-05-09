@@ -5,6 +5,8 @@ bin/
 dist/
 tmp/
 .gocache/
+.gocache_api/
+.gocache_run/
 coverage.out
 coverage.html
 vendor/
