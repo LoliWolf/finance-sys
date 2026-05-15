@@ -16,3 +16,4 @@ vendor/
 configs/.cache
 cmd/api/cache
 .gocache_verify/
+testdata/游资大V复盘文章汇总2026
