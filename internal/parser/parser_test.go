@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"finance-sys/internal/config"
+	"finance-sys/internal/domain"
 	"finance-sys/internal/parser"
 
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestParseTextBuildsChunks(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "PARSED", result.Status)
+	require.Equal(t, domain.ParseRunStatusParsed, result.Status)
 	require.Contains(t, result.CleanedText, "600519.SH")
 	require.NotEmpty(t, result.Chunks)
 }
@@ -47,8 +48,8 @@ func TestParsePDFFallsBackToConfiguredOCR(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "PARSED", result.Status)
-	require.Equal(t, "pdf-ocr", result.ParserName)
+	require.Equal(t, domain.ParseRunStatusParsed, result.Status)
+	require.Equal(t, domain.ParserNamePDFOCR, result.ParserName)
 	require.Equal(t, true, result.RawMetadata["pdf_ocr_used"])
 	require.Contains(t, result.CleanedText, "OCR 600519.SH")
 	require.NotEmpty(t, result.Chunks)
@@ -71,7 +72,7 @@ func TestParseDocxExtractsPlainText(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "PARSED", result.Status)
+	require.Equal(t, domain.ParseRunStatusParsed, result.Status)
 	require.Contains(t, result.CleanedText, "600519.SH")
 	require.Contains(t, result.CleanedText, "Reference price 1688")
 	require.NotEmpty(t, result.Chunks)

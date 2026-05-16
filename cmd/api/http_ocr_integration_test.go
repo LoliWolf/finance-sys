@@ -18,6 +18,7 @@ import (
 
 	"finance-sys/internal/bootstrap"
 	"finance-sys/internal/config"
+	"finance-sys/internal/domain"
 
 	"github.com/stretchr/testify/require"
 )
@@ -71,8 +72,8 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 
 	parseRun, err := app.DocumentService.GetLatestParseRunByDocumentID(ctx, documentID)
 	require.NoError(t, err)
-	require.Equal(t, "PARSED", parseRun.Status)
-	require.Equal(t, "pdf-ocr", parseRun.ParserName)
+	require.Equal(t, domain.ParseRunStatusParsed, parseRun.Status)
+	require.Equal(t, domain.ParserNamePDFOCR, parseRun.ParserName)
 	require.Equal(t, true, parseRun.RawMetadata["pdf_ocr_used"])
 	require.Contains(t, parseRun.CleanedText, "OCR_SENTINEL")
 	require.Contains(t, parseRun.CleanedText, "600519.SH")

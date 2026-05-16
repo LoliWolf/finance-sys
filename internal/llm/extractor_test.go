@@ -31,7 +31,7 @@ func TestModelAnalyzerExtractsIntent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 0), telemetry.NewLogger("ERROR"))
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 0), telemetry.NewLogger(string(config.LogLevelError)))
 	intents, err := analyzer.Analyze(context.Background(), domain.Document{
 		Title:       "日报",
 		Author:      "Alice",
@@ -45,9 +45,9 @@ func TestModelAnalyzerExtractsIntent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, intents, 1)
 	require.Equal(t, "600519.SH", intents[0].Symbol)
-	require.Equal(t, "SH", intents[0].Market)
-	require.Equal(t, "A_SHARE", intents[0].AssetType)
-	require.Equal(t, "LONG", intents[0].Direction)
+	require.Equal(t, domain.MarketSH, intents[0].Market)
+	require.Equal(t, domain.AssetTypeAShare, intents[0].AssetType)
+	require.Equal(t, domain.TradeDirectionLong, intents[0].Direction)
 	require.Equal(t, 1688.0, intents[0].ReferencePrice)
 }
 
@@ -79,7 +79,7 @@ func TestModelAnalyzerRetriesOnInvalidStructuredResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 1), telemetry.NewLogger("ERROR"))
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 1), telemetry.NewLogger(string(config.LogLevelError)))
 	intents, err := analyzer.Analyze(context.Background(), domain.Document{
 		Title:       "日报",
 		Author:      "Alice",
@@ -112,7 +112,7 @@ func TestModelAnalyzerFailsAfterRetries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 2), telemetry.NewLogger("ERROR"))
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 2), telemetry.NewLogger(string(config.LogLevelError)))
 	_, err := analyzer.Analyze(context.Background(), domain.Document{
 		Title:       "日报",
 		Author:      "Alice",
@@ -131,7 +131,7 @@ func TestModelAnalyzerFailsAfterRetries(t *testing.T) {
 func TestValidateIntentRejectsInvalidStructuredOutput(t *testing.T) {
 	require.ErrorContains(t, llm.ValidateIntent(domain.PlanIntent{
 		Symbol:         "",
-		Direction:      "LONG",
+		Direction:      domain.TradeDirectionLong,
 		ReferencePrice: 1,
 		Thesis:         "supported by text",
 		Confidence:     0.8,
@@ -139,7 +139,7 @@ func TestValidateIntentRejectsInvalidStructuredOutput(t *testing.T) {
 
 	require.ErrorContains(t, llm.ValidateIntent(domain.PlanIntent{
 		Symbol:         "600519.SH",
-		Direction:      "BUY",
+		Direction:      domain.TradeDirection("BUY"),
 		ReferencePrice: 1,
 		Thesis:         "supported by text",
 		Confidence:     0.8,
@@ -147,7 +147,7 @@ func TestValidateIntentRejectsInvalidStructuredOutput(t *testing.T) {
 
 	require.ErrorContains(t, llm.ValidateIntent(domain.PlanIntent{
 		Symbol:         "600519.SH",
-		Direction:      "LONG",
+		Direction:      domain.TradeDirectionLong,
 		ReferencePrice: 1,
 		Thesis:         "supported by text",
 		Confidence:     0,
@@ -158,7 +158,7 @@ func TestValidateIntentAcceptsMVPTradeIntent(t *testing.T) {
 	err := llm.ValidateIntent(domain.PlanIntent{
 		Analyst:        "blogger-a",
 		Symbol:         "600519.SH",
-		Direction:      "LONG",
+		Direction:      domain.TradeDirectionLong,
 		ReferencePrice: 1688,
 		Thesis:         "explicit recommendation from source text",
 		Confidence:     0.82,
@@ -171,7 +171,7 @@ func testRuntime(endpoint string, maxRetries int) *config.Runtime {
 		Config: &config.Config{
 			LLM: config.LLMConfig{
 				Enabled:    true,
-				Provider:   "openai_compatible",
+				Provider:   config.LLMProviderOpenAICompatible,
 				Endpoint:   endpoint,
 				APIKey:     "test-key",
 				Model:      "test-model",

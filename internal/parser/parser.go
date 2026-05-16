@@ -34,7 +34,7 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 		s.logger.InfoContext(ctx, "parser parse start", "file_name", fileName, "extension", ext, "size_bytes", len(content))
 	}
 	result := domain.ParseRun{
-		Status:        "PARSED",
+		Status:        domain.ParseRunStatusParsed,
 		ParserName:    parserName(ext),
 		ParserVersion: version,
 		RawMetadata:   map[string]any{"extension": ext},
@@ -53,14 +53,14 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 		var usedOCR bool
 		text, usedOCR, err = parsePDF(ctx, fileName, content, cfg.PDFOCR)
 		if usedOCR {
-			result.ParserName = "pdf-ocr"
+			result.ParserName = domain.ParserNamePDFOCR
 			result.RawMetadata["pdf_ocr_used"] = true
 		}
 	default:
 		err = fmt.Errorf("unsupported extension: %s", ext)
 	}
 	if err != nil {
-		result.Status = "FAILED"
+		result.Status = domain.ParseRunStatusFailed
 		result.ErrorMessage = err.Error()
 		if s.logger != nil {
 			s.logger.ErrorContext(ctx, "parser parse failed", "file_name", fileName, "extension", ext, "error", err.Error())
@@ -76,16 +76,16 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 	return result, nil
 }
 
-func parserName(ext string) string {
+func parserName(ext string) domain.ParserName {
 	switch ext {
 	case ".pdf":
-		return "pdf-cli"
+		return domain.ParserNamePDFCLI
 	case ".doc":
-		return "doc-cli"
+		return domain.ParserNameDOCCLI
 	case ".docx":
-		return "docx-native"
+		return domain.ParserNameDOCXNative
 	default:
-		return "text-native"
+		return domain.ParserNameTextNative
 	}
 }
 

@@ -24,7 +24,7 @@ func Validate(cfg *Config) error {
 	require(cfg.Service.HTTP.Port > 0, "service.http.port must be positive")
 	require(strings.HasPrefix(cfg.Service.HTTP.APIPrefix, "/"), "service.http.api_prefix must start with /")
 	require(cfg.Database.DSN != "", "database.dsn is required")
-	require(cfg.Database.Driver == "mysql", "database.driver must be mysql")
+	require(cfg.Database.Driver == DatabaseDriverMySQL, "database.driver must be mysql")
 	require(cfg.NacosClient.PollIntervalSeconds > 0, "nacos_client.poll_interval_seconds must be positive")
 	require(cfg.Document.MaxFileSizeMB > 0, "document.max_file_size_mb must be positive")
 	require(len(cfg.Document.AllowedExtensions) > 0, "document.allowed_extensions must not be empty")
@@ -39,6 +39,7 @@ func Validate(cfg *Config) error {
 	require(cfg.LLM.MaxRetries >= 0, "llm.max_retries must be zero or positive")
 	require(cfg.Rules.Version != "", "rules.version is required")
 	require(cfg.Rules.Strategy != "", "rules.strategy is required")
+	require(cfg.Rules.Strategy == RuleStrategyTextReferencePrice, "rules.strategy must be TEXT_REFERENCE_PRICE")
 	require(cfg.Rules.TradeDateOffsetDays > 0, "rules.trade_date_offset_days must be positive")
 	require(cfg.Rules.MaxPositionPct > 0 && cfg.Rules.MaxPositionPct <= 1, "rules.max_position_pct must be in (0,1]")
 	require(cfg.Rules.DefaultStopLossPct > 0, "rules.default_stop_loss_pct must be positive")
@@ -47,6 +48,7 @@ func Validate(cfg *Config) error {
 	require(filepath.Clean(cfg.NacosClient.CacheDir) != ".", "nacos_client.cache_dir is required")
 	if cfg.LLM.Enabled {
 		require(cfg.LLM.Provider != "", "llm.provider is required when llm.enabled is true")
+		require(cfg.LLM.Provider == LLMProviderOpenAICompatible, "llm.provider must be openai_compatible")
 		require(cfg.LLM.Endpoint != "", "llm.endpoint is required when llm.enabled is true")
 		require(cfg.LLM.Model != "", "llm.model is required when llm.enabled is true")
 	}

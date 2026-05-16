@@ -295,7 +295,7 @@ func normalizeAndMergeIntents(intents []domain.PlanIntent) ([]domain.PlanIntent,
 			return nil, err
 		}
 
-		key := intent.Symbol + ":" + intent.Direction
+		key := intent.Symbol + ":" + string(intent.Direction)
 		current, exists := merged[key]
 		if !exists {
 			merged[key] = intent
@@ -335,7 +335,7 @@ func ValidateIntent(intent domain.PlanIntent) error {
 	if intent.Symbol == "" {
 		return fmt.Errorf("symbol is required")
 	}
-	if intent.Direction != "LONG" && intent.Direction != "SHORT" {
+	if intent.Direction != domain.TradeDirectionLong && intent.Direction != domain.TradeDirectionShort {
 		return fmt.Errorf("direction must be LONG or SHORT")
 	}
 	if intent.ReferencePrice < 0 {
@@ -354,16 +354,16 @@ func normalizeIntent(intent domain.PlanIntent) domain.PlanIntent {
 	intent.Analyst = strings.TrimSpace(intent.Analyst)
 	intent.Institution = strings.TrimSpace(intent.Institution)
 	intent.Symbol = normalizeSymbol(strings.TrimSpace(intent.Symbol))
-	intent.Direction = strings.ToUpper(strings.TrimSpace(intent.Direction))
+	intent.Direction = domain.TradeDirection(strings.ToUpper(strings.TrimSpace(string(intent.Direction))))
 	intent.AssetType = inferAssetType(intent.Symbol)
 	intent.Market = inferMarket(intent.Symbol)
 	intent.Thesis = summarizeLine(intent.Thesis)
-	intent.ReferencePriceNote = strings.TrimSpace(intent.ReferencePriceNote)
+	intent.ReferencePriceNote = domain.ReferencePriceNote(strings.TrimSpace(string(intent.ReferencePriceNote)))
 	if intent.ReferencePrice > 0 && intent.ReferencePriceNote == "" {
-		intent.ReferencePriceNote = "explicit_price_mention"
+		intent.ReferencePriceNote = domain.ReferencePriceNoteExplicitPriceMention
 	}
 	if intent.ReferencePrice <= 0 && intent.ReferencePriceNote == "" {
-		intent.ReferencePriceNote = "price_missing_in_text"
+		intent.ReferencePriceNote = domain.ReferencePriceNotePriceMissingInText
 	}
 	intent.Risks = appendUniqueStrings(nil, intent.Risks, 5)
 	intent.Evidence = appendUniqueEvidence(nil, intent.Evidence, 4)
@@ -383,18 +383,18 @@ func normalizeSymbol(value string) string {
 	return value + ".SZ"
 }
 
-func inferAssetType(symbol string) string {
+func inferAssetType(symbol string) domain.AssetType {
 	if strings.HasPrefix(symbol, "159") || strings.HasPrefix(symbol, "510") || strings.HasPrefix(symbol, "512") || strings.HasPrefix(symbol, "513") {
-		return "ETF"
+		return domain.AssetTypeETF
 	}
-	return "A_SHARE"
+	return domain.AssetTypeAShare
 }
 
-func inferMarket(symbol string) string {
+func inferMarket(symbol string) domain.Market {
 	if strings.HasSuffix(symbol, ".SH") {
-		return "SH"
+		return domain.MarketSH
 	}
-	return "SZ"
+	return domain.MarketSZ
 }
 
 func summarizeLine(line string) string {

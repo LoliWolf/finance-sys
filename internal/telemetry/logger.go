@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"finance-sys/internal/config"
 )
 
 func NewLogger(level string) *slog.Logger {
@@ -15,11 +17,11 @@ func NewLogger(level string) *slog.Logger {
 
 func parseLevel(level string) slog.Level {
 	switch strings.ToUpper(level) {
-	case "DEBUG":
+	case string(config.LogLevelDebug):
 		return slog.LevelDebug
-	case "WARN":
+	case string(config.LogLevelWarn):
 		return slog.LevelWarn
-	case "ERROR":
+	case string(config.LogLevelError):
 		return slog.LevelError
 	default:
 		return slog.LevelInfo

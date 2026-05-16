@@ -128,12 +128,12 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 		s.logger.ErrorContext(ctx, "document service analyze map parse run failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
-	if parseErr != nil || parseRun.Status == "FAILED" {
+	if parseErr != nil || parseRun.Status == domain.ParseRunStatusFailed {
 		s.logger.ErrorContext(ctx, "document service analyze parse failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", parseRun.ErrorMessage)
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "FAILED")
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
 		return nil, parseErr
 	}
-	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "PARSED"); err != nil {
+	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusParsed)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status parsed failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 	intents, err := s.analyzer.Analyze(ctx, *document, *parseRun)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze llm failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", err.Error())
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "FAILED")
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze llm success", "document_id", documentID, "parse_run_id", parseRun.ID, "intent_count", len(intents))
@@ -162,7 +162,7 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 		s.logger.ErrorContext(ctx, "document service analyze replace plans failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
-	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "PLANNED"); err != nil {
+	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusPlanned)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status planned failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
@@ -286,7 +286,7 @@ func documentIngestToModel(request domain.DocumentIngestRequest, sha256Value str
 		FileName:      request.FileName,
 		Sha256:        sha256Value,
 		PdfOcrEnabled: request.PDFUseOCR,
-		Status:        "INGESTED",
+		Status:        string(domain.DocumentStatusIngested),
 		ConfigVersion: configVersion,
 		RawContent:    request.Content,
 	}
@@ -301,7 +301,7 @@ func mapDocument(row *db_model.Document) *domain.Document {
 		FileName:      row.FileName,
 		SHA256:        row.Sha256,
 		PDFOCREnabled: row.PdfOcrEnabled,
-		Status:        row.Status,
+		Status:        domain.DocumentStatus(row.Status),
 		ConfigVersion: row.ConfigVersion,
 		CreatedAt:     row.CreatedAt.UTC(),
 		UpdatedAt:     row.UpdatedAt.UTC(),
@@ -319,8 +319,8 @@ func parseRunToModel(run domain.ParseRun) (*db_model.ParseRun, error) {
 	}
 	return &db_model.ParseRun{
 		DocumentID:      run.DocumentID,
-		Status:          run.Status,
-		ParserName:      run.ParserName,
+		Status:          string(run.Status),
+		ParserName:      string(run.ParserName),
 		ParserVersion:   run.ParserVersion,
 		ErrorMessage:    run.ErrorMessage,
 		CleanedText:     run.CleanedText,
@@ -341,8 +341,8 @@ func mapParseRun(row *db_model.ParseRun) (*domain.ParseRun, error) {
 	return &domain.ParseRun{
 		ID:            row.ID,
 		DocumentID:    row.DocumentID,
-		Status:        row.Status,
-		ParserName:    row.ParserName,
+		Status:        domain.ParseRunStatus(row.Status),
+		ParserName:    domain.ParserName(row.ParserName),
 		ParserVersion: row.ParserVersion,
 		ErrorMessage:  row.ErrorMessage,
 		CleanedText:   row.CleanedText,
@@ -368,10 +368,10 @@ func candidatePlanToModel(plan domain.CandidatePlan) (*db_model.TradeCandidatePl
 		Analyst:        plan.Analyst,
 		Institution:    plan.Institution,
 		Symbol:         plan.Symbol,
-		AssetType:      plan.AssetType,
-		Market:         plan.Market,
-		Strategy:       plan.Strategy,
-		Direction:      plan.Direction,
+		AssetType:      string(plan.AssetType),
+		Market:         string(plan.Market),
+		Strategy:       string(plan.Strategy),
+		Direction:      string(plan.Direction),
 		TradeDate:      plan.TradeDate,
 		ReferencePrice: plan.ReferencePrice,
 		EntryPrice:     plan.EntryPrice,
@@ -379,7 +379,7 @@ func candidatePlanToModel(plan domain.CandidatePlan) (*db_model.TradeCandidatePl
 		TakeProfit:     plan.TakeProfit,
 		PositionPct:    plan.PositionPct,
 		Confidence:     plan.Confidence,
-		Status:         plan.Status,
+		Status:         string(plan.Status),
 		Thesis:         plan.Thesis,
 		RisksJson:      risks,
 		EvidenceJson:   evidence,
@@ -417,10 +417,10 @@ func mapPlan(row *db_model.TradeCandidatePlan) (*domain.CandidatePlan, error) {
 		Analyst:        row.Analyst,
 		Institution:    row.Institution,
 		Symbol:         row.Symbol,
-		AssetType:      row.AssetType,
-		Market:         row.Market,
-		Strategy:       row.Strategy,
-		Direction:      row.Direction,
+		AssetType:      domain.AssetType(row.AssetType),
+		Market:         domain.Market(row.Market),
+		Strategy:       domain.RuleStrategy(row.Strategy),
+		Direction:      domain.TradeDirection(row.Direction),
 		TradeDate:      row.TradeDate.UTC(),
 		ReferencePrice: row.ReferencePrice,
 		EntryPrice:     row.EntryPrice,
@@ -428,7 +428,7 @@ func mapPlan(row *db_model.TradeCandidatePlan) (*domain.CandidatePlan, error) {
 		TakeProfit:     row.TakeProfit,
 		PositionPct:    row.PositionPct,
 		Confidence:     row.Confidence,
-		Status:         row.Status,
+		Status:         domain.CandidatePlanStatus(row.Status),
 		Thesis:         row.Thesis,
 		Risks:          risks,
 		Evidence:       evidence,

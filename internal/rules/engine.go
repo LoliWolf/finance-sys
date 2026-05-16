@@ -30,22 +30,22 @@ func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, trad
 		Symbol:         intent.Symbol,
 		AssetType:      intent.AssetType,
 		Market:         intent.Market,
-		Strategy:       cfg.Strategy,
+		Strategy:       domain.RuleStrategy(cfg.Strategy),
 		Direction:      intent.Direction,
 		TradeDate:      tradeDate,
 		ReferencePrice: round(intent.ReferencePrice),
 		Confidence:     round(intent.Confidence),
-		Status:         "READY",
+		Status:         domain.CandidatePlanStatusReady,
 		Thesis:         intent.Thesis,
 		Risks:          intent.Risks,
 		Evidence:       intent.Evidence,
-		PricingNote:    intent.ReferencePriceNote,
+		PricingNote:    string(intent.ReferencePriceNote),
 		ConfigVersion:  configVersion,
 		RuleVersion:    cfg.Version,
 	}
 
 	if intent.ReferencePrice <= 0 {
-		plan.Status = "NEEDS_REVIEW"
+		plan.Status = domain.CandidatePlanStatusNeedsReview
 		plan.PricingNote = "missing explicit price in source text"
 		if e.logger != nil {
 			e.logger.Warn("rules generate needs review missing price", "symbol", intent.Symbol, "direction", intent.Direction)
@@ -56,7 +56,7 @@ func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, trad
 	entry := intent.ReferencePrice
 	stopFactor := 1 - cfg.DefaultStopLossPct
 	takeFactor := 1 + cfg.DefaultTakeProfitPct
-	if intent.Direction == "SHORT" {
+	if intent.Direction == domain.TradeDirectionShort {
 		stopFactor = 1 + cfg.DefaultStopLossPct
 		takeFactor = 1 - cfg.DefaultTakeProfitPct
 	}
@@ -71,7 +71,7 @@ func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, trad
 	plan.TakeProfit = round(entry * takeFactor)
 	plan.PositionPct = round(position)
 	if intent.Confidence < cfg.MinConfidence {
-		plan.Status = "NEEDS_REVIEW"
+		plan.Status = domain.CandidatePlanStatusNeedsReview
 		plan.PricingNote = fmt.Sprintf("confidence %.2f below threshold %.2f", intent.Confidence, cfg.MinConfidence)
 		if e.logger != nil {
 			e.logger.Warn("rules generate needs review low confidence", "symbol", intent.Symbol, "confidence", intent.Confidence, "threshold", cfg.MinConfidence)

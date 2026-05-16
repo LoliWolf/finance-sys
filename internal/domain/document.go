@@ -3,17 +3,17 @@ package domain
 import "time"
 
 type Document struct {
-	ID            int64     `json:"id"`
-	Author        string    `json:"author"`
-	Institution   string    `json:"institution"`
-	Title         string    `json:"title"`
-	FileName      string    `json:"file_name"`
-	SHA256        string    `json:"sha256"`
-	PDFOCREnabled bool      `json:"pdf_ocr_enabled"`
-	Status        string    `json:"status"`
-	ConfigVersion int64     `json:"config_version"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            int64          `json:"id"`
+	Author        string         `json:"author"`
+	Institution   string         `json:"institution"`
+	Title         string         `json:"title"`
+	FileName      string         `json:"file_name"`
+	SHA256        string         `json:"sha256"`
+	PDFOCREnabled bool           `json:"pdf_ocr_enabled"`
+	Status        DocumentStatus `json:"status"`
+	ConfigVersion int64          `json:"config_version"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
 }
 
 type DocumentIngestRequest struct {
@@ -28,8 +28,8 @@ type DocumentIngestRequest struct {
 type ParseRun struct {
 	ID            int64          `json:"id"`
 	DocumentID    int64          `json:"document_id"`
-	Status        string         `json:"status"`
-	ParserName    string         `json:"parser_name"`
+	Status        ParseRunStatus `json:"status"`
+	ParserName    ParserName     `json:"parser_name"`
 	ParserVersion string         `json:"parser_version"`
 	ErrorMessage  string         `json:"error_message"`
 	CleanedText   string         `json:"cleaned_text"`

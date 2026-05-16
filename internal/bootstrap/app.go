@@ -45,7 +45,7 @@ func (a *App) Close() error {
 }
 
 func Build(ctx context.Context) (*App, error) {
-	bootstrapLogger := telemetry.NewLogger("INFO")
+	bootstrapLogger := telemetry.NewLogger(string(config.LogLevelInfo))
 	bootstrapLogger.Info("bootstrap build start")
 	snapshot, loader, err := LoadInitialSnapshot(ctx, bootstrapLogger)
 	if err != nil {
@@ -53,7 +53,7 @@ func Build(ctx context.Context) (*App, error) {
 		return nil, err
 	}
 
-	logger := telemetry.NewLogger(snapshot.Config.Logging.Level)
+	logger := telemetry.NewLogger(string(snapshot.Config.Logging.Level))
 	runtime := config.NewRuntime(snapshot)
 	logger.Info("bootstrap runtime initialized", "config_version", snapshot.Config.Meta.ConfigVersion, "config_source", snapshot.Source)
 

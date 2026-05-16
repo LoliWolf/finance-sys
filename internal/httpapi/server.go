@@ -158,7 +158,7 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		"duplicate": duplicate,
 		"document":  document,
 	}
-	shouldAutoAnalyze := (!duplicate && cfg.Document.AutoAnalyzeUpload) || (duplicate && document.Status == "FAILED")
+	shouldAutoAnalyze := (!duplicate && cfg.Document.AutoAnalyzeUpload) || (duplicate && document.Status == domain.DocumentStatusFailed)
 	if shouldAutoAnalyze {
 		reason := "new_document"
 		if duplicate {

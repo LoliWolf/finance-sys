@@ -59,16 +59,16 @@ type AuthConfig struct {
 }
 
 type LoggingConfig struct {
-	Level string `json:"level"`
+	Level LogLevel `json:"level"`
 }
 
 type DatabaseConfig struct {
-	Driver                 string `json:"driver"`
-	DSN                    string `json:"dsn"`
-	MaxOpenConns           int    `json:"max_open_conns"`
-	MaxIdleConns           int    `json:"max_idle_conns"`
-	ConnMaxLifetimeMinutes int    `json:"conn_max_lifetime_minutes"`
-	ConnMaxIdleTimeMinutes int    `json:"conn_max_idle_time_minutes"`
+	Driver                 DatabaseDriver `json:"driver"`
+	DSN                    string         `json:"dsn"`
+	MaxOpenConns           int            `json:"max_open_conns"`
+	MaxIdleConns           int            `json:"max_idle_conns"`
+	ConnMaxLifetimeMinutes int            `json:"conn_max_lifetime_minutes"`
+	ConnMaxIdleTimeMinutes int            `json:"conn_max_idle_time_minutes"`
 }
 
 type DocumentConfig struct {
@@ -103,21 +103,21 @@ type PDFOCRConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled    bool   `json:"enabled"`
-	Provider   string `json:"provider"`
-	Endpoint   string `json:"endpoint"`
-	APIKey     string `json:"api_key"`
-	Model      string `json:"model"`
-	TimeoutMS  int    `json:"timeout_ms"`
-	MaxRetries int    `json:"max_retries"`
+	Enabled    bool        `json:"enabled"`
+	Provider   LLMProvider `json:"provider"`
+	Endpoint   string      `json:"endpoint"`
+	APIKey     string      `json:"api_key"`
+	Model      string      `json:"model"`
+	TimeoutMS  int         `json:"timeout_ms"`
+	MaxRetries int         `json:"max_retries"`
 }
 
 type RulesConfig struct {
-	Version              string  `json:"version"`
-	Strategy             string  `json:"strategy"`
-	TradeDateOffsetDays  int     `json:"trade_date_offset_days"`
-	MaxPositionPct       float64 `json:"max_position_pct"`
-	DefaultStopLossPct   float64 `json:"default_stop_loss_pct"`
-	DefaultTakeProfitPct float64 `json:"default_take_profit_pct"`
-	MinConfidence        float64 `json:"min_confidence"`
+	Version              string       `json:"version"`
+	Strategy             RuleStrategy `json:"strategy"`
+	TradeDateOffsetDays  int          `json:"trade_date_offset_days"`
+	MaxPositionPct       float64      `json:"max_position_pct"`
+	DefaultStopLossPct   float64      `json:"default_stop_loss_pct"`
+	DefaultTakeProfitPct float64      `json:"default_take_profit_pct"`
+	MinConfidence        float64      `json:"min_confidence"`
 }
