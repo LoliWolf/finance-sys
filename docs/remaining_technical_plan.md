@@ -60,6 +60,8 @@ Token 不应提交真实值，生产环境继续由 Nacos 配置。
 
 ### 阶段 1：表结构与推荐事件
 
+详细实施方案见 [阶段一：表结构与推荐事件详细技术方案](phase1_recommendation_events_technical_plan.md)。
+
 1. 新增 migrations。
 2. 运行 `go run generate.go` 生成或同步 `internal/domain/db_model`。
 3. 在 `internal/dal` 增加推荐事件 DML。
