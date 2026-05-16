@@ -7,6 +7,9 @@ tmp/
 .gocache/
 .gocache_api/
 .gocache_run/
+.gocache_orm/
+.gomodcache/
+.gopath/
 coverage.out
 coverage.html
 vendor/

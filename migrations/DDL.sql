@@ -7,19 +7,15 @@ CREATE TABLE `config_snapshots` (
   `raw_json` json NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=25 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- documents: table
 CREATE TABLE `documents` (
   `id` bigint NOT NULL AUTO_INCREMENT,
-  `source_type` varchar(64) COLLATE utf8mb4_general_ci NOT NULL,
-  `source_name` varchar(128) COLLATE utf8mb4_general_ci NOT NULL,
   `author` varchar(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
   `institution` varchar(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
   `title` varchar(255) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
   `file_name` varchar(255) COLLATE utf8mb4_general_ci NOT NULL,
-  `extension` varchar(32) COLLATE utf8mb4_general_ci NOT NULL,
-  `content_type` varchar(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
   `sha256` varchar(128) COLLATE utf8mb4_general_ci NOT NULL,
   `pdf_ocr_enabled` tinyint(1) NOT NULL DEFAULT '0',
   `status` varchar(64) COLLATE utf8mb4_general_ci NOT NULL,
@@ -31,7 +27,7 @@ CREATE TABLE `documents` (
   UNIQUE KEY `uk_documents_sha256` (`sha256`),
   KEY `idx_documents_status` (`status`),
   KEY `idx_documents_created_at` (`created_at`)
-) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- No native definition for element: idx_documents_status (index)
 
@@ -45,8 +41,6 @@ CREATE TABLE `parse_runs` (
   `parser_name` varchar(128) COLLATE utf8mb4_general_ci NOT NULL,
   `parser_version` varchar(64) COLLATE utf8mb4_general_ci NOT NULL,
   `error_message` text COLLATE utf8mb4_general_ci NOT NULL,
-  `page_count` int NOT NULL DEFAULT '1',
-  `content_text` longtext COLLATE utf8mb4_general_ci NOT NULL,
   `cleaned_text` longtext COLLATE utf8mb4_general_ci NOT NULL,
   `chunks_json` json NOT NULL,
   `raw_metadata_json` json NOT NULL,

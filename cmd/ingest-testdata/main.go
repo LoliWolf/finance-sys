@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	root := flag.String("root", filepath.Join("testdata", "游资大V复盘文章汇总2026"), "directory containing documents to ingest")
+	root := flag.String("root", filepath.Join("testdata", "sample_docs"), "directory containing documents to ingest")
 	limit := flag.Int("limit", 0, "maximum number of files to ingest; 0 means all")
 	flag.Parse()
 
@@ -23,7 +23,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer app.DB.Close()
+	defer app.Close()
 
 	allowed := allowedExtensions(app.Runtime.Config().Document.AllowedExtensions)
 	var total, created, duplicated, failed int
@@ -53,13 +53,10 @@ func main() {
 		}
 
 		document, duplicate, err := app.DocumentService.IngestDocument(ctx, domain.DocumentIngestRequest{
-			SourceType:  "testdata",
-			SourceName:  "游资大V复盘文章汇总2026",
-			Author:      inferAuthor(path),
-			Title:       strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
-			FileName:    filepath.Base(path),
-			ContentType: contentType(ext),
-			Content:     content,
+			Author:   inferAuthor(path),
+			Title:    strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+			FileName: filepath.Base(path),
+			Content:  content,
 		})
 		if err != nil {
 			failed++
@@ -100,19 +97,4 @@ func inferAuthor(path string) string {
 		}
 	}
 	return ""
-}
-
-func contentType(ext string) string {
-	switch strings.ToLower(ext) {
-	case ".pdf":
-		return "application/pdf"
-	case ".txt", ".md", ".csv":
-		return "text/plain"
-	case ".doc":
-		return "application/msword"
-	case ".docx":
-		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-	default:
-		return "application/octet-stream"
-	}
 }

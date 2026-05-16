@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,34 +9,45 @@ import (
 	"time"
 
 	"finance-sys/internal/config"
-	"finance-sys/internal/domain"
+	"finance-sys/internal/dal"
+	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/httpapi"
 	"finance-sys/internal/llm"
 	"finance-sys/internal/nacoscfg"
 	"finance-sys/internal/parser"
-	"finance-sys/internal/repository"
 	"finance-sys/internal/rules"
 	"finance-sys/internal/service"
 	"finance-sys/internal/telemetry"
 
-	_ "github.com/go-sql-driver/mysql"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 type App struct {
 	Runtime         *config.Runtime
 	Logger          *slog.Logger
-	DB              *sql.DB
-	Repository      *repository.Repository
+	DB              *gorm.DB
 	DocumentService *service.DocumentService
 	HTTPServer      *httpapi.Server
 	Watcher         *nacoscfg.Watcher
 	Reloader        *nacoscfg.Reloader
 }
 
+func (a *App) Close() error {
+	if a == nil || a.DB == nil {
+		return nil
+	}
+	sqlDB, err := a.DB.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
+}
+
 func Build(ctx context.Context) (*App, error) {
 	bootstrapLogger := telemetry.NewLogger("INFO")
 	bootstrapLogger.Info("bootstrap build start")
-	snapshot, loader, err := loadInitialSnapshot(ctx, bootstrapLogger)
+	snapshot, loader, err := LoadInitialSnapshot(ctx, bootstrapLogger)
 	if err != nil {
 		bootstrapLogger.Error("bootstrap load initial snapshot failed", "error", err.Error())
 		return nil, err
@@ -53,36 +63,34 @@ func Build(ctx context.Context) (*App, error) {
 		return nil, err
 	}
 	logger.Info("bootstrap db connected")
-	repo := repository.New(db, logger)
 
 	if snapshot.Config.NacosClient.WriteConfigSnapshotToDB {
-		_, _ = repo.InsertConfigSnapshot(ctx, &domain.ConfigSnapshot{
+		_ = dal.ConfigSnapshots.Create(ctx, db, &db_model.ConfigSnapshot{
 			ConfigVersion: snapshot.Config.Meta.ConfigVersion,
 			Source:        snapshot.Source,
-			SHA256:        snapshot.SHA256,
-			RawJSON:       string(snapshot.Raw),
+			Sha256:        snapshot.SHA256,
+			RawJson:       snapshot.Raw,
 		})
 	}
 
 	parserService := parser.New(logger)
 	analyzer := llm.NewModelAnalyzer(runtime, logger)
 	ruleEngine := rules.New(logger)
-	documentService := service.NewDocumentService(repo, runtime, parserService, analyzer, ruleEngine, logger)
+	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, ruleEngine, logger)
 
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader
 	if loader != nil {
-		watcher = nacoscfg.NewWatcher(loader, runtime, repo, logger)
-		reloader = nacoscfg.NewReloader(loader, runtime, repo, logger)
+		watcher = nacoscfg.NewWatcher(loader, runtime, db, logger)
+		reloader = nacoscfg.NewReloader(loader, runtime, db, logger)
 	}
 
-	httpServer := httpapi.NewServer(repo, runtime, documentService, reloader, logger)
+	httpServer := httpapi.NewServer(db, runtime, documentService, reloader, logger)
 	logger.Info("bootstrap build completed")
 	return &App{
 		Runtime:         runtime,
 		Logger:          logger,
 		DB:              db,
-		Repository:      repo,
 		DocumentService: documentService,
 		HTTPServer:      httpServer,
 		Watcher:         watcher,
@@ -90,7 +98,7 @@ func Build(ctx context.Context) (*App, error) {
 	}, nil
 }
 
-func loadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snapshot, *nacoscfg.Loader, error) {
+func LoadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snapshot, *nacoscfg.Loader, error) {
 	bootstrapCfg, err := LoadNacosBootstrapFromEnv()
 	if err == nil {
 		loader := nacoscfg.NewLoader(bootstrapCfg, logger)
@@ -116,17 +124,21 @@ func loadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snap
 	return snapshot, nil, err
 }
 
-func openDB(ctx context.Context, cfg *config.Config) (*sql.DB, error) {
-	db, err := sql.Open("mysql", cfg.Database.DSN)
+func openDB(ctx context.Context, cfg *config.Config) (*gorm.DB, error) {
+	db, err := gorm.Open(mysql.Open(cfg.Database.DSN), &gorm.Config{})
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.Database.MaxIdleConns)
-	db.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLifetimeMinutes) * time.Minute)
-	db.SetConnMaxIdleTime(time.Duration(cfg.Database.ConnMaxIdleTimeMinutes) * time.Minute)
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLifetimeMinutes) * time.Minute)
+	sqlDB.SetConnMaxIdleTime(time.Duration(cfg.Database.ConnMaxIdleTimeMinutes) * time.Minute)
+	if err := sqlDB.PingContext(ctx); err != nil {
+		_ = sqlDB.Close()
 		return nil, err
 	}
 	return db, nil

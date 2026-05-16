@@ -6,22 +6,24 @@ import (
 	"log/slog"
 
 	"finance-sys/internal/config"
-	"finance-sys/internal/domain"
-	"finance-sys/internal/repository"
+	"finance-sys/internal/dal"
+	"finance-sys/internal/domain/db_model"
+
+	"gorm.io/gorm"
 )
 
 type Reloader struct {
 	loader  *Loader
 	runtime *config.Runtime
-	repo    *repository.Repository
+	db      *gorm.DB
 	logger  *slog.Logger
 }
 
-func NewReloader(loader *Loader, runtime *config.Runtime, repo *repository.Repository, logger *slog.Logger) *Reloader {
+func NewReloader(loader *Loader, runtime *config.Runtime, db *gorm.DB, logger *slog.Logger) *Reloader {
 	return &Reloader{
 		loader:  loader,
 		runtime: runtime,
-		repo:    repo,
+		db:      db,
 		logger:  logger,
 	}
 }
@@ -45,12 +47,12 @@ func (r *Reloader) Reload(ctx context.Context) error {
 		return err
 	}
 	r.runtime.Update(snapshot)
-	if r.repo != nil {
-		_, _ = r.repo.InsertConfigSnapshot(ctx, &domain.ConfigSnapshot{
+	if r.db != nil {
+		_ = dal.ConfigSnapshots.Create(ctx, r.db, &db_model.ConfigSnapshot{
 			ConfigVersion: snapshot.Config.Meta.ConfigVersion,
 			Source:        snapshot.Source,
-			SHA256:        snapshot.SHA256,
-			RawJSON:       string(snapshot.Raw),
+			Sha256:        snapshot.SHA256,
+			RawJson:       snapshot.Raw,
 		})
 	}
 	if r.logger != nil {

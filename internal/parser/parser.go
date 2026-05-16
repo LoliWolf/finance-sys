@@ -37,7 +37,6 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 		Status:        "PARSED",
 		ParserName:    parserName(ext),
 		ParserVersion: version,
-		PageCount:     1,
 		RawMetadata:   map[string]any{"extension": ext},
 	}
 
@@ -69,7 +68,6 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 		return result, err
 	}
 
-	result.ContentText = text
 	result.CleanedText = cleanText(text)
 	result.Chunks = buildChunks(result.CleanedText, cfg.Chunking)
 	if s.logger != nil {

@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"finance-sys/internal/config"
+	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
-	"finance-sys/internal/repository"
 	"finance-sys/internal/service"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"gorm.io/gorm"
 )
 
 type ConfigReloader interface {
@@ -25,7 +26,7 @@ type ConfigReloader interface {
 }
 
 type Server struct {
-	repo      *repository.Repository
+	db        *gorm.DB
 	runtime   *config.Runtime
 	documents *service.DocumentService
 	reloader  ConfigReloader
@@ -33,14 +34,14 @@ type Server struct {
 }
 
 func NewServer(
-	repo *repository.Repository,
+	db *gorm.DB,
 	runtime *config.Runtime,
 	documents *service.DocumentService,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
 	return &Server{
-		repo:      repo,
+		db:        db,
 		runtime:   runtime,
 		documents: documents,
 		reloader:  reloader,
@@ -78,7 +79,7 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, slog.LevelDebug, "handle health")
-	err := s.repo.Ping(r.Context())
+	err := dal.Ping(r.Context(), s.db)
 	status := http.StatusOK
 	payload := map[string]any{"status": "ok"}
 	if err != nil {
@@ -90,7 +91,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, slog.LevelInfo, "handle list documents start")
-	items, err := s.repo.ListDocuments(r.Context(), 100)
+	items, err := s.documents.ListDocuments(r.Context(), 100)
 	if err != nil {
 		s.logRequest(r, slog.LevelError, "handle list documents failed", "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
@@ -139,13 +140,10 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, slog.LevelInfo, "handle upload document file loaded", "file_name", header.Filename, "size_bytes", len(content))
 
 	document, duplicate, err := s.documents.IngestDocument(r.Context(), domain.DocumentIngestRequest{
-		SourceType:  r.FormValue("source_type"),
-		SourceName:  r.FormValue("source_name"),
 		Author:      r.FormValue("author"),
 		Institution: r.FormValue("institution"),
 		Title:       r.FormValue("title"),
 		FileName:    header.Filename,
-		ContentType: header.Header.Get("Content-Type"),
 		Content:     content,
 		PDFUseOCR:   parseBoolForm(r.FormValue("pdf_use_ocr")),
 	})
@@ -173,7 +171,7 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if refreshed, reloadErr := s.repo.GetDocumentByID(r.Context(), document.ID); reloadErr == nil {
+		if refreshed, reloadErr := s.documents.GetDocumentByID(r.Context(), document.ID); reloadErr == nil {
 			document = refreshed
 			response["document"] = document
 		}
@@ -235,7 +233,7 @@ func (s *Server) handleListDocumentPlans(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleListPlans(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, slog.LevelInfo, "handle list plans start")
-	items, err := s.repo.ListPlans(r.Context(), 100)
+	items, err := s.documents.ListPlans(r.Context(), 100)
 	if err != nil {
 		s.logRequest(r, slog.LevelError, "handle list plans failed", "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)

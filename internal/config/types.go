@@ -83,8 +83,6 @@ type DocumentConfig struct {
 }
 
 type SourceDefaultsConfig struct {
-	SourceType  string `json:"source_type"`
-	SourceName  string `json:"source_name"`
 	Author      string `json:"author"`
 	Institution string `json:"institution"`
 }

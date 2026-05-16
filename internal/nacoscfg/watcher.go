@@ -6,22 +6,24 @@ import (
 	"time"
 
 	"finance-sys/internal/config"
-	"finance-sys/internal/domain"
-	"finance-sys/internal/repository"
+	"finance-sys/internal/dal"
+	"finance-sys/internal/domain/db_model"
+
+	"gorm.io/gorm"
 )
 
 type Watcher struct {
 	loader  *Loader
 	runtime *config.Runtime
-	repo    *repository.Repository
+	db      *gorm.DB
 	logger  *slog.Logger
 }
 
-func NewWatcher(loader *Loader, runtime *config.Runtime, repo *repository.Repository, logger *slog.Logger) *Watcher {
+func NewWatcher(loader *Loader, runtime *config.Runtime, db *gorm.DB, logger *slog.Logger) *Watcher {
 	return &Watcher{
 		loader:  loader,
 		runtime: runtime,
-		repo:    repo,
+		db:      db,
 		logger:  logger,
 	}
 }
@@ -62,12 +64,12 @@ func (w *Watcher) poll(ctx context.Context) {
 	}
 
 	w.runtime.Update(next)
-	if w.repo != nil {
-		_, _ = w.repo.InsertConfigSnapshot(ctx, &domain.ConfigSnapshot{
+	if w.db != nil {
+		_ = dal.ConfigSnapshots.Create(ctx, w.db, &db_model.ConfigSnapshot{
 			ConfigVersion: next.Config.Meta.ConfigVersion,
 			Source:        next.Source,
-			SHA256:        next.SHA256,
-			RawJSON:       string(next.Raw),
+			Sha256:        next.SHA256,
+			RawJson:       next.Raw,
 		})
 	}
 	w.logger.Info("config runtime updated", "config_version", next.Config.Meta.ConfigVersion, "sha256", next.SHA256)

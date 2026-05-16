@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -9,9 +10,12 @@ import (
 	"time"
 
 	"finance-sys/internal/config"
+	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
-	"finance-sys/internal/repository"
+	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/utils"
+
+	"gorm.io/gorm"
 )
 
 type documentParser interface {
@@ -27,7 +31,7 @@ type ruleEngine interface {
 }
 
 type DocumentService struct {
-	repo     *repository.Repository
+	db       *gorm.DB
 	runtime  *config.Runtime
 	parser   documentParser
 	analyzer planAnalyzer
@@ -36,7 +40,7 @@ type DocumentService struct {
 }
 
 func NewDocumentService(
-	repo *repository.Repository,
+	db *gorm.DB,
 	runtime *config.Runtime,
 	parser documentParser,
 	analyzer planAnalyzer,
@@ -44,7 +48,7 @@ func NewDocumentService(
 	logger *slog.Logger,
 ) *DocumentService {
 	return &DocumentService{
-		repo:     repo,
+		db:       db,
 		runtime:  runtime,
 		parser:   parser,
 		analyzer: analyzer,
@@ -55,7 +59,7 @@ func NewDocumentService(
 
 func (s *DocumentService) IngestDocument(ctx context.Context, request domain.DocumentIngestRequest) (*domain.Document, bool, error) {
 	cfg := s.currentConfig()
-	s.logger.InfoContext(ctx, "document service ingest start", "file_name", request.FileName, "content_type", request.ContentType, "size_bytes", len(request.Content))
+	s.logger.InfoContext(ctx, "document service ingest start", "file_name", request.FileName, "size_bytes", len(request.Content))
 	if err := s.validateUpload(request.FileName, cfg.Document); err != nil {
 		s.logger.WarnContext(ctx, "document service ingest validation failed", "file_name", request.FileName, "error", err.Error())
 		return nil, false, err
@@ -64,12 +68,13 @@ func (s *DocumentService) IngestDocument(ctx context.Context, request domain.Doc
 	sha := utils.SHA256Hex(request.Content)
 	s.logger.DebugContext(ctx, "document service ingest computed sha", "file_name", request.FileName, "sha256", sha)
 	if cfg.Document.SHA256Dedup {
-		existing, err := s.repo.GetDocumentBySHA(ctx, sha)
+		existingModel, err := dal.Documents.QueryBySHA(ctx, s.db, sha)
 		switch err {
 		case nil:
+			existing := mapDocument(existingModel)
 			s.logger.InfoContext(ctx, "document service ingest duplicate hit", "file_name", request.FileName, "document_id", existing.ID)
 			return existing, true, nil
-		case repository.ErrNotFound:
+		case dal.ErrNotFound:
 		default:
 			s.logger.ErrorContext(ctx, "document service ingest duplicate lookup failed", "file_name", request.FileName, "error", err.Error())
 			return nil, false, err
@@ -77,11 +82,13 @@ func (s *DocumentService) IngestDocument(ctx context.Context, request domain.Doc
 	}
 
 	request = s.applyDefaults(request, cfg)
-	document, err := s.repo.CreateDocument(ctx, request, sha, cfg.Meta.ConfigVersion)
+	documentModel := documentIngestToModel(request, sha, cfg.Meta.ConfigVersion)
+	err := dal.Documents.Create(ctx, s.db, documentModel)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service ingest create document failed", "file_name", request.FileName, "error", err.Error())
 		return nil, false, err
 	}
+	document := mapDocument(documentModel)
 	s.logger.InfoContext(ctx, "document service ingest success", "document_id", document.ID, "file_name", request.FileName)
 	return document, false, nil
 }
@@ -89,13 +96,14 @@ func (s *DocumentService) IngestDocument(ctx context.Context, request domain.Doc
 func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
 	cfg := s.currentConfig()
 	s.logger.InfoContext(ctx, "document service analyze start", "document_id", documentID)
-	document, err := s.repo.GetDocumentByID(ctx, documentID)
+	documentModel, err := dal.Documents.QueryByID(ctx, s.db, documentID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze load document failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
+	document := mapDocument(documentModel)
 
-	content, err := s.repo.GetDocumentContent(ctx, documentID)
+	content, err := dal.Documents.QueryContentByID(ctx, s.db, documentID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze load content failed", "document_id", documentID, "error", err.Error())
 		return nil, err
@@ -106,17 +114,26 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 	documentCfg.PDFOCR.Enabled = document.PDFOCREnabled
 	parsed, parseErr := s.parser.Parse(ctx, document.FileName, content, documentCfg)
 	parsed.DocumentID = document.ID
-	parseRun, err := s.repo.CreateParseRun(ctx, parsed)
+	parseRunModel, err := parseRunToModel(parsed)
 	if err != nil {
+		s.logger.ErrorContext(ctx, "document service analyze convert parse run failed", "document_id", documentID, "error", err.Error())
+		return nil, err
+	}
+	if err := dal.ParseRuns.Create(ctx, s.db, parseRunModel); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze create parse run failed", "document_id", documentID, "error", err.Error())
+		return nil, err
+	}
+	parseRun, err := mapParseRun(parseRunModel)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "document service analyze map parse run failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
 	if parseErr != nil || parseRun.Status == "FAILED" {
 		s.logger.ErrorContext(ctx, "document service analyze parse failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", parseRun.ErrorMessage)
-		_ = s.repo.UpdateDocumentStatus(ctx, document.ID, "FAILED")
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "FAILED")
 		return nil, parseErr
 	}
-	if err := s.repo.UpdateDocumentStatus(ctx, document.ID, "PARSED"); err != nil {
+	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "PARSED"); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status parsed failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
@@ -125,7 +142,7 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 	intents, err := s.analyzer.Analyze(ctx, *document, *parseRun)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze llm failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", err.Error())
-		_ = s.repo.UpdateDocumentStatus(ctx, document.ID, "FAILED")
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "FAILED")
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze llm success", "document_id", documentID, "parse_run_id", parseRun.ID, "intent_count", len(intents))
@@ -140,12 +157,12 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 		plans = append(plans, plan)
 	}
 
-	savedPlans, err := s.repo.ReplacePlansByDocumentID(ctx, document.ID, plans)
+	savedPlans, err := s.replacePlansByDocumentID(ctx, document.ID, plans)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze replace plans failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
-	if err := s.repo.UpdateDocumentStatus(ctx, document.ID, "PLANNED"); err != nil {
+	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, "PLANNED"); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status planned failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
@@ -155,7 +172,47 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 
 func (s *DocumentService) ListPlansByDocumentID(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
 	s.logger.InfoContext(ctx, "document service list plans by document", "document_id", documentID)
-	return s.repo.ListPlansByDocumentID(ctx, documentID)
+	rows, err := dal.TradeCandidatePlans.QueryByDocumentID(ctx, s.db, documentID)
+	if err != nil {
+		return nil, err
+	}
+	return mapPlanRows(rows)
+}
+
+func (s *DocumentService) ListDocuments(ctx context.Context, limit int) ([]domain.Document, error) {
+	rows, err := dal.Documents.QueryLatest(ctx, s.db, limit)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]domain.Document, 0, len(rows))
+	for i := range rows {
+		items = append(items, *mapDocument(&rows[i]))
+	}
+	return items, nil
+}
+
+func (s *DocumentService) GetDocumentByID(ctx context.Context, documentID int64) (*domain.Document, error) {
+	row, err := dal.Documents.QueryByID(ctx, s.db, documentID)
+	if err != nil {
+		return nil, err
+	}
+	return mapDocument(row), nil
+}
+
+func (s *DocumentService) ListPlans(ctx context.Context, limit int) ([]domain.CandidatePlan, error) {
+	rows, err := dal.TradeCandidatePlans.QueryLatest(ctx, s.db, limit)
+	if err != nil {
+		return nil, err
+	}
+	return mapPlanRows(rows)
+}
+
+func (s *DocumentService) GetLatestParseRunByDocumentID(ctx context.Context, documentID int64) (*domain.ParseRun, error) {
+	row, err := dal.ParseRuns.QueryLatestByDocumentID(ctx, s.db, documentID)
+	if err != nil {
+		return nil, err
+	}
+	return mapParseRun(row)
 }
 
 func (s *DocumentService) currentConfig() *config.Config {
@@ -169,12 +226,6 @@ func (s *DocumentService) tradeDate(cfg *config.Config) time.Time {
 }
 
 func (s *DocumentService) applyDefaults(request domain.DocumentIngestRequest, cfg *config.Config) domain.DocumentIngestRequest {
-	if request.SourceType == "" {
-		request.SourceType = cfg.Document.SourceDefaults.SourceType
-	}
-	if request.SourceName == "" {
-		request.SourceName = cfg.Document.SourceDefaults.SourceName
-	}
 	if request.Author == "" {
 		request.Author = cfg.Document.SourceDefaults.Author
 	}
@@ -197,4 +248,194 @@ func (s *DocumentService) validateUpload(fileName string, cfg config.DocumentCon
 	}
 	s.logger.Warn("document service validate upload rejected", "file_name", fileName, "extension", ext)
 	return fmt.Errorf("unsupported file extension %s", ext)
+}
+
+func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, documentID int64, plans []domain.CandidatePlan) ([]domain.CandidatePlan, error) {
+	items := make([]domain.CandidatePlan, 0, len(plans))
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := dal.TradeCandidatePlans.DeleteByDocumentID(ctx, tx, documentID); err != nil {
+			return err
+		}
+		for _, plan := range plans {
+			model, err := candidatePlanToModel(plan)
+			if err != nil {
+				return err
+			}
+			if err := dal.TradeCandidatePlans.Create(ctx, tx, model); err != nil {
+				return err
+			}
+			item, err := mapPlan(model)
+			if err != nil {
+				return err
+			}
+			items = append(items, *item)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func documentIngestToModel(request domain.DocumentIngestRequest, sha256Value string, configVersion int64) *db_model.Document {
+	return &db_model.Document{
+		Author:        request.Author,
+		Institution:   request.Institution,
+		Title:         request.Title,
+		FileName:      request.FileName,
+		Sha256:        sha256Value,
+		PdfOcrEnabled: request.PDFUseOCR,
+		Status:        "INGESTED",
+		ConfigVersion: configVersion,
+		RawContent:    request.Content,
+	}
+}
+
+func mapDocument(row *db_model.Document) *domain.Document {
+	return &domain.Document{
+		ID:            row.ID,
+		Author:        row.Author,
+		Institution:   row.Institution,
+		Title:         row.Title,
+		FileName:      row.FileName,
+		SHA256:        row.Sha256,
+		PDFOCREnabled: row.PdfOcrEnabled,
+		Status:        row.Status,
+		ConfigVersion: row.ConfigVersion,
+		CreatedAt:     row.CreatedAt.UTC(),
+		UpdatedAt:     row.UpdatedAt.UTC(),
+	}
+}
+
+func parseRunToModel(run domain.ParseRun) (*db_model.ParseRun, error) {
+	chunks, err := json.Marshal(run.Chunks)
+	if err != nil {
+		return nil, err
+	}
+	rawMetadata, err := json.Marshal(run.RawMetadata)
+	if err != nil {
+		return nil, err
+	}
+	return &db_model.ParseRun{
+		DocumentID:      run.DocumentID,
+		Status:          run.Status,
+		ParserName:      run.ParserName,
+		ParserVersion:   run.ParserVersion,
+		ErrorMessage:    run.ErrorMessage,
+		CleanedText:     run.CleanedText,
+		ChunksJson:      chunks,
+		RawMetadataJson: rawMetadata,
+	}, nil
+}
+
+func mapParseRun(row *db_model.ParseRun) (*domain.ParseRun, error) {
+	var chunks []domain.Chunk
+	rawMetadata := make(map[string]any)
+	if err := json.Unmarshal(row.ChunksJson, &chunks); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(row.RawMetadataJson, &rawMetadata); err != nil {
+		return nil, err
+	}
+	return &domain.ParseRun{
+		ID:            row.ID,
+		DocumentID:    row.DocumentID,
+		Status:        row.Status,
+		ParserName:    row.ParserName,
+		ParserVersion: row.ParserVersion,
+		ErrorMessage:  row.ErrorMessage,
+		CleanedText:   row.CleanedText,
+		Chunks:        chunks,
+		RawMetadata:   rawMetadata,
+		CreatedAt:     row.CreatedAt.UTC(),
+		UpdatedAt:     row.UpdatedAt.UTC(),
+	}, nil
+}
+
+func candidatePlanToModel(plan domain.CandidatePlan) (*db_model.TradeCandidatePlan, error) {
+	risks, err := json.Marshal(plan.Risks)
+	if err != nil {
+		return nil, err
+	}
+	evidence, err := json.Marshal(plan.Evidence)
+	if err != nil {
+		return nil, err
+	}
+	return &db_model.TradeCandidatePlan{
+		DocumentID:     plan.DocumentID,
+		ParseRunID:     plan.ParseRunID,
+		Analyst:        plan.Analyst,
+		Institution:    plan.Institution,
+		Symbol:         plan.Symbol,
+		AssetType:      plan.AssetType,
+		Market:         plan.Market,
+		Strategy:       plan.Strategy,
+		Direction:      plan.Direction,
+		TradeDate:      plan.TradeDate,
+		ReferencePrice: plan.ReferencePrice,
+		EntryPrice:     plan.EntryPrice,
+		StopLoss:       plan.StopLoss,
+		TakeProfit:     plan.TakeProfit,
+		PositionPct:    plan.PositionPct,
+		Confidence:     plan.Confidence,
+		Status:         plan.Status,
+		Thesis:         plan.Thesis,
+		RisksJson:      risks,
+		EvidenceJson:   evidence,
+		PricingNote:    plan.PricingNote,
+		ConfigVersion:  plan.ConfigVersion,
+		RuleVersion:    plan.RuleVersion,
+	}, nil
+}
+
+func mapPlanRows(rows []db_model.TradeCandidatePlan) ([]domain.CandidatePlan, error) {
+	items := make([]domain.CandidatePlan, 0, len(rows))
+	for i := range rows {
+		item, err := mapPlan(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, nil
+}
+
+func mapPlan(row *db_model.TradeCandidatePlan) (*domain.CandidatePlan, error) {
+	var risks []string
+	var evidence []domain.EvidenceSpan
+	if err := json.Unmarshal(row.RisksJson, &risks); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(row.EvidenceJson, &evidence); err != nil {
+		return nil, err
+	}
+	return &domain.CandidatePlan{
+		ID:             row.ID,
+		DocumentID:     row.DocumentID,
+		ParseRunID:     row.ParseRunID,
+		Analyst:        row.Analyst,
+		Institution:    row.Institution,
+		Symbol:         row.Symbol,
+		AssetType:      row.AssetType,
+		Market:         row.Market,
+		Strategy:       row.Strategy,
+		Direction:      row.Direction,
+		TradeDate:      row.TradeDate.UTC(),
+		ReferencePrice: row.ReferencePrice,
+		EntryPrice:     row.EntryPrice,
+		StopLoss:       row.StopLoss,
+		TakeProfit:     row.TakeProfit,
+		PositionPct:    row.PositionPct,
+		Confidence:     row.Confidence,
+		Status:         row.Status,
+		Thesis:         row.Thesis,
+		Risks:          risks,
+		Evidence:       evidence,
+		PricingNote:    row.PricingNote,
+		ConfigVersion:  row.ConfigVersion,
+		RuleVersion:    row.RuleVersion,
+		CreatedAt:      row.CreatedAt.UTC(),
+		UpdatedAt:      row.UpdatedAt.UTC(),
+	}, nil
 }

@@ -34,7 +34,7 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	defer cancel()
 
 	app := buildIntegrationApp(t, ctx)
-	defer app.DB.Close()
+	defer app.Close()
 
 	cfg := cloneConfig(t, app.Runtime.Config())
 	cfg.Document.AutoAnalyzeUpload = false
@@ -57,8 +57,6 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	defer shutdown()
 
 	documentID := uploadFile(t, baseURL, "ocr_sentinel.pdf", []byte("not a real pdf"), map[string]string{
-		"source_type": "integration_test",
-		"source_name": "http_ocr",
 		"author":      "OCR Tester",
 		"title":       "HTTP OCR sentinel",
 		"pdf_use_ocr": "true",
@@ -71,7 +69,7 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	_ = resp.Body.Close()
 	require.Contains(t, []int{http.StatusOK, http.StatusInternalServerError}, resp.StatusCode, "parser must run before any LLM result")
 
-	parseRun, err := app.Repository.GetLatestParseRunByDocumentID(ctx, documentID)
+	parseRun, err := app.DocumentService.GetLatestParseRunByDocumentID(ctx, documentID)
 	require.NoError(t, err)
 	require.Equal(t, "PARSED", parseRun.Status)
 	require.Equal(t, "pdf-ocr", parseRun.ParserName)
@@ -89,7 +87,7 @@ func TestHTTPUploadAllFuturePDFs(t *testing.T) {
 	defer cancel()
 
 	app := buildIntegrationApp(t, ctx)
-	defer app.DB.Close()
+	defer app.Close()
 
 	cfg := cloneConfig(t, app.Runtime.Config())
 	cfg.Document.AutoAnalyzeUpload = false
@@ -128,8 +126,6 @@ func TestHTTPUploadAllFuturePDFs(t *testing.T) {
 			return nil
 		}
 		documentID, err := uploadFileE(baseURL, filepath.Base(path), content, map[string]string{
-			"source_type": "testdata",
-			"source_name": "游资大V复盘文章汇总2026",
 			"author":      inferAuthorFromFileName(filepath.Base(path)),
 			"title":       strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
 			"pdf_use_ocr": "true",

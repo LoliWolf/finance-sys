@@ -64,8 +64,6 @@
     "max_file_size_mb": 50,
     "sha256_dedup": true,
     "source_defaults": {
-      "source_type": "manual",
-      "source_name": "upload",
       "author": "",
       "institution": ""
     },
