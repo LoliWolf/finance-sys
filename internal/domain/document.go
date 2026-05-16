@@ -13,6 +13,7 @@ type Document struct {
 	Extension     string    `json:"extension"`
 	ContentType   string    `json:"content_type"`
 	SHA256        string    `json:"sha256"`
+	PDFOCREnabled bool      `json:"pdf_ocr_enabled"`
 	Status        string    `json:"status"`
 	ConfigVersion int64     `json:"config_version"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -28,6 +29,7 @@ type DocumentIngestRequest struct {
 	FileName    string
 	ContentType string
 	Content     []byte
+	PDFUseOCR   bool
 }
 
 type ParseRun struct {

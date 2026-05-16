@@ -147,6 +147,7 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		FileName:    header.Filename,
 		ContentType: header.Header.Get("Content-Type"),
 		Content:     content,
+		PDFUseOCR:   parseBoolForm(r.FormValue("pdf_use_ocr")),
 	})
 	if err != nil {
 		s.logRequest(r, slog.LevelError, "handle upload document ingest failed", "file_name", header.Filename, "error", err.Error())
@@ -351,4 +352,13 @@ func parseID(raw string) (int64, error) {
 		return 0, fmt.Errorf("invalid id %q", raw)
 	}
 	return id, nil
+}
+
+func parseBoolForm(raw string) bool {
+	switch raw {
+	case "1", "true", "TRUE", "on", "yes", "YES":
+		return true
+	default:
+		return false
+	}
 }

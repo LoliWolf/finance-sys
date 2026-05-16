@@ -20,15 +20,7 @@ func main() {
 	}
 
 	cfg := app.Runtime.Config()
-	server := &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", cfg.Service.HTTP.Host, cfg.Service.HTTP.Port),
-		Handler:           app.HTTPServer.Router(),
-		ReadTimeout:       time.Duration(cfg.Service.HTTP.ReadTimeoutMS) * time.Millisecond,
-		WriteTimeout:      time.Duration(cfg.Service.HTTP.WriteTimeoutMS) * time.Millisecond,
-		IdleTimeout:       time.Duration(cfg.Service.HTTP.IdleTimeoutMS) * time.Millisecond,
-		ReadHeaderTimeout: 5 * time.Second,
-		MaxHeaderBytes:    cfg.Service.HTTP.MaxHeaderBytes,
-	}
+	server := newHTTPServer(app, fmt.Sprintf("%s:%d", cfg.Service.HTTP.Host, cfg.Service.HTTP.Port))
 
 	if app.Watcher != nil {
 		go app.Watcher.Run(ctx)
@@ -45,6 +37,19 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Service.HTTP.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
+}
+
+func newHTTPServer(app *bootstrap.App, addr string) *http.Server {
+	cfg := app.Runtime.Config()
+	return &http.Server{
+		Addr:              addr,
+		Handler:           app.HTTPServer.Router(),
+		ReadTimeout:       time.Duration(cfg.Service.HTTP.ReadTimeoutMS) * time.Millisecond,
+		WriteTimeout:      time.Duration(cfg.Service.HTTP.WriteTimeoutMS) * time.Millisecond,
+		IdleTimeout:       time.Duration(cfg.Service.HTTP.IdleTimeoutMS) * time.Millisecond,
+		ReadHeaderTimeout: 5 * time.Second,
+		MaxHeaderBytes:    cfg.Service.HTTP.MaxHeaderBytes,
+	}
 }
 
 func waitForShutdown() {

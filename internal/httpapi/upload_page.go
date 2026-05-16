@@ -108,6 +108,31 @@ var uploadPageTemplate = template.Must(template.New("upload-page").Parse(`<!DOCT
       color: var(--text);
       font-size: 14px;
     }
+    .file-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+    }
+    .ocr-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      color: var(--text);
+      font-size: 13px;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .ocr-toggle input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
     .actions {
       display: flex;
       flex-wrap: wrap;
@@ -200,7 +225,13 @@ var uploadPageTemplate = template.Must(template.New("upload-page").Parse(`<!DOCT
         <div class="fields">
           <div class="field full">
             <label for="singleFile">Single File</label>
-            <input id="singleFile" type="file" accept=".pdf,.doc,.docx,.txt,.md,.csv">
+            <div class="file-row">
+              <input id="singleFile" type="file" accept=".pdf,.doc,.docx,.txt,.md,.csv">
+              <label class="ocr-toggle" for="pdfUseOCR">
+                <input id="pdfUseOCR" type="checkbox">
+                pdf使用ocr
+              </label>
+            </div>
           </div>
           <div class="field full">
             <label for="batchFiles">Batch Files</label>
@@ -236,6 +267,7 @@ var uploadPageTemplate = template.Must(template.New("upload-page").Parse(`<!DOCT
 
     const singleInput = document.getElementById("singleFile");
     const batchInput = document.getElementById("batchFiles");
+    const pdfUseOCRInput = document.getElementById("pdfUseOCR");
 
     function formValues(file) {
       return {
@@ -280,6 +312,7 @@ var uploadPageTemplate = template.Must(template.New("upload-page").Parse(`<!DOCT
       const body = new FormData();
       body.append("file", file);
       body.append("title", values.title);
+      body.append("pdf_use_ocr", pdfUseOCRInput.checked ? "true" : "false");
 
       const response = await fetch(uploadURL, {
         method: "POST",

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"runtime"
 	"testing"
 
 	"finance-sys/internal/config"
@@ -23,6 +24,33 @@ func TestParseTextBuildsChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "PARSED", result.Status)
 	require.Contains(t, result.CleanedText, "600519.SH")
+	require.NotEmpty(t, result.Chunks)
+}
+
+func TestParsePDFFallsBackToConfiguredOCR(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("cmd.exe based fake OCR is Windows-specific")
+	}
+
+	service := parser.New(nil)
+	result, err := service.Parse(context.Background(), "scan.pdf", []byte("not a real pdf"), config.DocumentConfig{
+		Chunking: config.ChunkingConfig{
+			Enabled:     true,
+			TargetChars: 64,
+		},
+		PDFOCR: config.PDFOCRConfig{
+			Enabled:      true,
+			Command:      "cmd",
+			Args:         []string{"/c", "echo OCR 600519.SH reference 1688"},
+			MinTextChars: 80,
+			TimeoutMS:    5000,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "PARSED", result.Status)
+	require.Equal(t, "pdf-ocr", result.ParserName)
+	require.Equal(t, true, result.RawMetadata["pdf_ocr_used"])
+	require.Contains(t, result.CleanedText, "OCR 600519.SH")
 	require.NotEmpty(t, result.Chunks)
 }
 

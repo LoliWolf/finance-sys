@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"finance-sys/internal/config"
 	"finance-sys/internal/domain"
@@ -50,7 +51,12 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 	case ".docx":
 		text, err = parseDOCX(content)
 	case ".pdf":
-		text, err = parsePDF(ctx, fileName, content)
+		var usedOCR bool
+		text, usedOCR, err = parsePDF(ctx, fileName, content, cfg.PDFOCR)
+		if usedOCR {
+			result.ParserName = "pdf-ocr"
+			result.RawMetadata["pdf_ocr_used"] = true
+		}
 	default:
 		err = fmt.Errorf("unsupported extension: %s", ext)
 	}
@@ -137,24 +143,86 @@ func parseDOC(ctx context.Context, fileName string, content []byte) (string, err
 	return string(output), nil
 }
 
-func parsePDF(ctx context.Context, fileName string, content []byte) (string, error) {
+func parsePDF(ctx context.Context, fileName string, content []byte, ocrCfg config.PDFOCRConfig) (string, bool, error) {
 	tmpFile, err := os.CreateTemp("", "finance-sys-*.pdf")
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer os.Remove(tmpFile.Name())
 	if _, err := tmpFile.Write(content); err != nil {
 		tmpFile.Close()
-		return "", err
+		return "", false, err
 	}
 	if err := tmpFile.Close(); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	cmd := exec.CommandContext(ctx, "pdftotext", "-layout", tmpFile.Name(), "-")
 	output, err := cmd.Output()
+	if err == nil && !shouldFallbackToOCR(string(output), ocrCfg) {
+		return string(output), false, nil
+	}
+	if !ocrCfg.Enabled {
+		if err != nil {
+			return "", false, fmt.Errorf("pdftotext failed for %s: %w", fileName, err)
+		}
+		return string(output), false, nil
+	}
+
+	ocrText, ocrErr := parsePDFWithOCR(ctx, tmpFile.Name(), ocrCfg)
+	if ocrErr != nil {
+		if err != nil {
+			return "", false, fmt.Errorf("pdftotext failed for %s: %w; ocr failed: %v", fileName, err, ocrErr)
+		}
+		return "", false, fmt.Errorf("ocr failed for %s: %w", fileName, ocrErr)
+	}
+	return ocrText, true, nil
+}
+
+func shouldFallbackToOCR(text string, cfg config.PDFOCRConfig) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if cfg.MinTextChars <= 0 {
+		return strings.TrimSpace(text) == ""
+	}
+	return len([]rune(cleanText(text))) < cfg.MinTextChars
+}
+
+func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRConfig) (string, error) {
+	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	ocrCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	command := os.ExpandEnv(cfg.Command)
+	args := make([]string, 0, len(cfg.Args))
+	for _, arg := range cfg.Args {
+		arg = os.ExpandEnv(arg)
+		arg = strings.ReplaceAll(arg, "{input}", inputPath)
+		args = append(args, arg)
+	}
+
+	cmd := exec.CommandContext(ocrCtx, command, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("pdftotext failed for %s: %w", fileName, err)
+		if cfg.TreatExitCodeOneAsOK {
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(output) > 0 {
+				return string(output), nil
+			}
+		}
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return "", fmt.Errorf("%s", message)
+	}
+	if strings.TrimSpace(string(output)) == "" {
+		return "", fmt.Errorf("ocr produced empty text")
 	}
 	return string(output), nil
 }

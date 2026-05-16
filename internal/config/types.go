@@ -79,6 +79,7 @@ type DocumentConfig struct {
 	SHA256Dedup       bool                 `json:"sha256_dedup"`
 	SourceDefaults    SourceDefaultsConfig `json:"source_defaults"`
 	Chunking          ChunkingConfig       `json:"chunking"`
+	PDFOCR            PDFOCRConfig         `json:"pdf_ocr"`
 }
 
 type SourceDefaultsConfig struct {
@@ -92,6 +93,15 @@ type ChunkingConfig struct {
 	Enabled      bool `json:"enabled"`
 	TargetChars  int  `json:"target_chars"`
 	OverlapChars int  `json:"overlap_chars"`
+}
+
+type PDFOCRConfig struct {
+	Enabled              bool     `json:"enabled"`
+	Command              string   `json:"command"`
+	Args                 []string `json:"args"`
+	MinTextChars         int      `json:"min_text_chars"`
+	TimeoutMS            int      `json:"timeout_ms"`
+	TreatExitCodeOneAsOK bool     `json:"treat_exit_code_one_as_ok"`
 }
 
 type LLMConfig struct {

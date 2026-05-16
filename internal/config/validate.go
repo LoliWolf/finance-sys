@@ -29,6 +29,12 @@ func Validate(cfg *Config) error {
 	require(cfg.Document.MaxFileSizeMB > 0, "document.max_file_size_mb must be positive")
 	require(len(cfg.Document.AllowedExtensions) > 0, "document.allowed_extensions must not be empty")
 	require(cfg.Document.Chunking.TargetChars > 0, "document.chunking.target_chars must be positive")
+	if cfg.Document.PDFOCR.Enabled {
+		require(strings.TrimSpace(cfg.Document.PDFOCR.Command) != "", "document.pdf_ocr.command is required when enabled")
+		require(len(cfg.Document.PDFOCR.Args) > 0, "document.pdf_ocr.args must not be empty when enabled")
+		require(cfg.Document.PDFOCR.MinTextChars >= 0, "document.pdf_ocr.min_text_chars must be zero or positive")
+		require(cfg.Document.PDFOCR.TimeoutMS > 0, "document.pdf_ocr.timeout_ms must be positive when enabled")
+	}
 	require(cfg.LLM.TimeoutMS > 0, "llm.timeout_ms must be positive")
 	require(cfg.LLM.MaxRetries >= 0, "llm.max_retries must be zero or positive")
 	require(cfg.Rules.Version != "", "rules.version is required")

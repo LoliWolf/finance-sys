@@ -24,25 +24,26 @@ INSERT INTO documents (
     extension,
     content_type,
     sha256,
+    pdf_ocr_enabled,
     status,
     config_version,
     raw_content
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 );
 
 -- name: GetDocumentByID :one
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, pdf_ocr_enabled, status, config_version, raw_content, created_at, updated_at
 FROM documents
 WHERE id = ?;
 
 -- name: GetDocumentBySHA :one
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, pdf_ocr_enabled, status, config_version, raw_content, created_at, updated_at
 FROM documents
 WHERE sha256 = ?;
 
 -- name: ListDocuments :many
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, pdf_ocr_enabled, status, config_version, raw_content, created_at, updated_at
 FROM documents
 ORDER BY created_at DESC
 LIMIT ?;

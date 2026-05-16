@@ -2,7 +2,7 @@ version: "2"
 sql:
   - engine: "mysql"
     schema:
-      - "../migrations/000001_init.up.sql"
+      - "../migrations/DDL.sql"
     queries:
       - "query"
     gen:

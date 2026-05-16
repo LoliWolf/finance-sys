@@ -87,10 +87,23 @@ func (l *Loader) fetch(_ context.Context) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("new nacos client: %w", err)
 	}
 
-	content, err := client.GetConfig(vo.ConfigParam{
-		DataId: l.bootstrap.DataID,
-		Group:  l.bootstrap.Group,
-	})
+	var content string
+	for attempt := 1; attempt <= 30; attempt++ {
+		content, err = client.GetConfig(vo.ConfigParam{
+			DataId: l.bootstrap.DataID,
+			Group:  l.bootstrap.Group,
+		})
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		content, err = client.GetConfig(vo.ConfigParam{
+			DataId: l.bootstrap.DataID,
+			Group:  l.bootstrap.Group,
+		})
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("get nacos config: %w", err)
 	}

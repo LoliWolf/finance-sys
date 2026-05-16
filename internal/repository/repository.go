@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"finance-sys/internal/domain"
 	reposqlc "finance-sys/internal/repository/sqlc"
@@ -71,6 +72,7 @@ func (r *Repository) CreateDocument(ctx context.Context, request domain.Document
 		Extension:     filepath.Ext(request.FileName),
 		ContentType:   request.ContentType,
 		Sha256:        sha256Value,
+		PdfOcrEnabled: request.PDFUseOCR,
 		Status:        "INGESTED",
 		ConfigVersion: configVersion,
 		RawContent:    request.Content,
@@ -90,7 +92,7 @@ func (r *Repository) CreateDocument(ctx context.Context, request domain.Document
 		return nil, err
 	}
 	r.logInfo(ctx, "repository create document success", "document_id", id, "file_name", request.FileName)
-	return mapDocument(row), nil
+	return mapDocumentFromGetByID(row), nil
 }
 
 func (r *Repository) GetDocumentByID(ctx context.Context, id int64) (*domain.Document, error) {
@@ -105,7 +107,7 @@ func (r *Repository) GetDocumentByID(ctx context.Context, id int64) (*domain.Doc
 		return nil, err
 	}
 	r.logDebug(ctx, "repository get document by id success", "document_id", id, "status", row.Status)
-	return mapDocument(row), nil
+	return mapDocumentFromGetByID(row), nil
 }
 
 func (r *Repository) GetDocumentContent(ctx context.Context, id int64) ([]byte, error) {
@@ -135,7 +137,7 @@ func (r *Repository) GetDocumentBySHA(ctx context.Context, sha string) (*domain.
 		return nil, err
 	}
 	r.logDebug(ctx, "repository get document by sha success", "sha256", sha, "document_id", row.ID)
-	return mapDocument(row), nil
+	return mapDocumentFromGetBySHA(row), nil
 }
 
 func (r *Repository) ListDocuments(ctx context.Context, limit int32) ([]domain.Document, error) {
@@ -147,7 +149,7 @@ func (r *Repository) ListDocuments(ctx context.Context, limit int32) ([]domain.D
 	}
 	items := make([]domain.Document, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, *mapDocument(row))
+		items = append(items, *mapDocumentFromList(row))
 	}
 	r.logDebug(ctx, "repository list documents success", "limit", limit, "count", len(items))
 	return items, nil
@@ -371,22 +373,99 @@ func mapConfigSnapshot(row reposqlc.ConfigSnapshot) *domain.ConfigSnapshot {
 	}
 }
 
-func mapDocument(row reposqlc.Document) *domain.Document {
+func mapDocumentFromGetByID(row reposqlc.GetDocumentByIDRow) *domain.Document {
+	return mapDocumentFields(
+		row.ID,
+		row.SourceType,
+		row.SourceName,
+		row.Author,
+		row.Institution,
+		row.Title,
+		row.FileName,
+		row.Extension,
+		row.ContentType,
+		row.Sha256,
+		row.PdfOcrEnabled,
+		row.Status,
+		row.ConfigVersion,
+		row.CreatedAt,
+		row.UpdatedAt,
+	)
+}
+
+func mapDocumentFromGetBySHA(row reposqlc.GetDocumentBySHARow) *domain.Document {
+	return mapDocumentFields(
+		row.ID,
+		row.SourceType,
+		row.SourceName,
+		row.Author,
+		row.Institution,
+		row.Title,
+		row.FileName,
+		row.Extension,
+		row.ContentType,
+		row.Sha256,
+		row.PdfOcrEnabled,
+		row.Status,
+		row.ConfigVersion,
+		row.CreatedAt,
+		row.UpdatedAt,
+	)
+}
+
+func mapDocumentFromList(row reposqlc.ListDocumentsRow) *domain.Document {
+	return mapDocumentFields(
+		row.ID,
+		row.SourceType,
+		row.SourceName,
+		row.Author,
+		row.Institution,
+		row.Title,
+		row.FileName,
+		row.Extension,
+		row.ContentType,
+		row.Sha256,
+		row.PdfOcrEnabled,
+		row.Status,
+		row.ConfigVersion,
+		row.CreatedAt,
+		row.UpdatedAt,
+	)
+}
+
+func mapDocumentFields(
+	id int64,
+	sourceType string,
+	sourceName string,
+	author string,
+	institution string,
+	title string,
+	fileName string,
+	extension string,
+	contentType string,
+	sha256Value string,
+	pdfOCREnabled bool,
+	status string,
+	configVersion int64,
+	createdAt time.Time,
+	updatedAt time.Time,
+) *domain.Document {
 	return &domain.Document{
-		ID:            row.ID,
-		SourceType:    row.SourceType,
-		SourceName:    row.SourceName,
-		Author:        row.Author,
-		Institution:   row.Institution,
-		Title:         row.Title,
-		FileName:      row.FileName,
-		Extension:     row.Extension,
-		ContentType:   row.ContentType,
-		SHA256:        row.Sha256,
-		Status:        row.Status,
-		ConfigVersion: row.ConfigVersion,
-		CreatedAt:     row.CreatedAt.UTC(),
-		UpdatedAt:     row.UpdatedAt.UTC(),
+		ID:            id,
+		SourceType:    sourceType,
+		SourceName:    sourceName,
+		Author:        author,
+		Institution:   institution,
+		Title:         title,
+		FileName:      fileName,
+		Extension:     extension,
+		ContentType:   contentType,
+		SHA256:        sha256Value,
+		PDFOCREnabled: pdfOCREnabled,
+		Status:        status,
+		ConfigVersion: configVersion,
+		CreatedAt:     createdAt.UTC(),
+		UpdatedAt:     updatedAt.UTC(),
 	}
 }
 

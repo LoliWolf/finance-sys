@@ -34,6 +34,7 @@ type Document struct {
 	RawContent    []byte    `json:"raw_content"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	PdfOcrEnabled bool      `json:"pdf_ocr_enabled"`
 }
 
 type ParseRun struct {

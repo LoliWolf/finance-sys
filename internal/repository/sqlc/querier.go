@@ -12,8 +12,8 @@ import (
 type Querier interface {
 	DeletePlansByDocumentID(ctx context.Context, documentID int64) error
 	GetConfigSnapshotByID(ctx context.Context, id int64) (ConfigSnapshot, error)
-	GetDocumentByID(ctx context.Context, id int64) (Document, error)
-	GetDocumentBySHA(ctx context.Context, sha256 string) (Document, error)
+	GetDocumentByID(ctx context.Context, id int64) (GetDocumentByIDRow, error)
+	GetDocumentBySHA(ctx context.Context, sha256 string) (GetDocumentBySHARow, error)
 	GetLatestParseRunByDocumentID(ctx context.Context, documentID int64) (ParseRun, error)
 	GetParseRunByID(ctx context.Context, id int64) (ParseRun, error)
 	GetPlanByID(ctx context.Context, id int64) (TradeCandidatePlan, error)
@@ -21,7 +21,7 @@ type Querier interface {
 	InsertDocument(ctx context.Context, arg InsertDocumentParams) (sql.Result, error)
 	InsertParseRun(ctx context.Context, arg InsertParseRunParams) (sql.Result, error)
 	InsertPlan(ctx context.Context, arg InsertPlanParams) (sql.Result, error)
-	ListDocuments(ctx context.Context, limit int32) ([]Document, error)
+	ListDocuments(ctx context.Context, limit int32) ([]ListDocumentsRow, error)
 	ListPlans(ctx context.Context, limit int32) ([]TradeCandidatePlan, error)
 	ListPlansByDocumentID(ctx context.Context, documentID int64) ([]TradeCandidatePlan, error)
 	UpdateDocumentStatus(ctx context.Context, arg UpdateDocumentStatusParams) error

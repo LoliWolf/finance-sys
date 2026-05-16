@@ -43,14 +43,33 @@ func (q *Queries) GetConfigSnapshotByID(ctx context.Context, id int64) (ConfigSn
 }
 
 const getDocumentByID = `-- name: GetDocumentByID :one
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, pdf_ocr_enabled, status, config_version, raw_content, created_at, updated_at
 FROM documents
 WHERE id = ?
 `
 
-func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, error) {
+type GetDocumentByIDRow struct {
+	ID            int64     `json:"id"`
+	SourceType    string    `json:"source_type"`
+	SourceName    string    `json:"source_name"`
+	Author        string    `json:"author"`
+	Institution   string    `json:"institution"`
+	Title         string    `json:"title"`
+	FileName      string    `json:"file_name"`
+	Extension     string    `json:"extension"`
+	ContentType   string    `json:"content_type"`
+	Sha256        string    `json:"sha256"`
+	PdfOcrEnabled bool      `json:"pdf_ocr_enabled"`
+	Status        string    `json:"status"`
+	ConfigVersion int64     `json:"config_version"`
+	RawContent    []byte    `json:"raw_content"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (GetDocumentByIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getDocumentByID, id)
-	var i Document
+	var i GetDocumentByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.SourceType,
@@ -62,6 +81,7 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, erro
 		&i.Extension,
 		&i.ContentType,
 		&i.Sha256,
+		&i.PdfOcrEnabled,
 		&i.Status,
 		&i.ConfigVersion,
 		&i.RawContent,
@@ -72,14 +92,33 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id int64) (Document, erro
 }
 
 const getDocumentBySHA = `-- name: GetDocumentBySHA :one
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, pdf_ocr_enabled, status, config_version, raw_content, created_at, updated_at
 FROM documents
 WHERE sha256 = ?
 `
 
-func (q *Queries) GetDocumentBySHA(ctx context.Context, sha256 string) (Document, error) {
+type GetDocumentBySHARow struct {
+	ID            int64     `json:"id"`
+	SourceType    string    `json:"source_type"`
+	SourceName    string    `json:"source_name"`
+	Author        string    `json:"author"`
+	Institution   string    `json:"institution"`
+	Title         string    `json:"title"`
+	FileName      string    `json:"file_name"`
+	Extension     string    `json:"extension"`
+	ContentType   string    `json:"content_type"`
+	Sha256        string    `json:"sha256"`
+	PdfOcrEnabled bool      `json:"pdf_ocr_enabled"`
+	Status        string    `json:"status"`
+	ConfigVersion int64     `json:"config_version"`
+	RawContent    []byte    `json:"raw_content"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (q *Queries) GetDocumentBySHA(ctx context.Context, sha256 string) (GetDocumentBySHARow, error) {
 	row := q.db.QueryRowContext(ctx, getDocumentBySHA, sha256)
-	var i Document
+	var i GetDocumentBySHARow
 	err := row.Scan(
 		&i.ID,
 		&i.SourceType,
@@ -91,6 +130,7 @@ func (q *Queries) GetDocumentBySHA(ctx context.Context, sha256 string) (Document
 		&i.Extension,
 		&i.ContentType,
 		&i.Sha256,
+		&i.PdfOcrEnabled,
 		&i.Status,
 		&i.ConfigVersion,
 		&i.RawContent,
@@ -234,11 +274,12 @@ INSERT INTO documents (
     extension,
     content_type,
     sha256,
+    pdf_ocr_enabled,
     status,
     config_version,
     raw_content
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 `
 
@@ -252,6 +293,7 @@ type InsertDocumentParams struct {
 	Extension     string `json:"extension"`
 	ContentType   string `json:"content_type"`
 	Sha256        string `json:"sha256"`
+	PdfOcrEnabled bool   `json:"pdf_ocr_enabled"`
 	Status        string `json:"status"`
 	ConfigVersion int64  `json:"config_version"`
 	RawContent    []byte `json:"raw_content"`
@@ -268,6 +310,7 @@ func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) 
 		arg.Extension,
 		arg.ContentType,
 		arg.Sha256,
+		arg.PdfOcrEnabled,
 		arg.Status,
 		arg.ConfigVersion,
 		arg.RawContent,
@@ -404,21 +447,40 @@ func (q *Queries) InsertPlan(ctx context.Context, arg InsertPlanParams) (sql.Res
 }
 
 const listDocuments = `-- name: ListDocuments :many
-SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, status, config_version, raw_content, created_at, updated_at
+SELECT id, source_type, source_name, author, institution, title, file_name, extension, content_type, sha256, pdf_ocr_enabled, status, config_version, raw_content, created_at, updated_at
 FROM documents
 ORDER BY created_at DESC
 LIMIT ?
 `
 
-func (q *Queries) ListDocuments(ctx context.Context, limit int32) ([]Document, error) {
+type ListDocumentsRow struct {
+	ID            int64     `json:"id"`
+	SourceType    string    `json:"source_type"`
+	SourceName    string    `json:"source_name"`
+	Author        string    `json:"author"`
+	Institution   string    `json:"institution"`
+	Title         string    `json:"title"`
+	FileName      string    `json:"file_name"`
+	Extension     string    `json:"extension"`
+	ContentType   string    `json:"content_type"`
+	Sha256        string    `json:"sha256"`
+	PdfOcrEnabled bool      `json:"pdf_ocr_enabled"`
+	Status        string    `json:"status"`
+	ConfigVersion int64     `json:"config_version"`
+	RawContent    []byte    `json:"raw_content"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (q *Queries) ListDocuments(ctx context.Context, limit int32) ([]ListDocumentsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listDocuments, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Document
+	var items []ListDocumentsRow
 	for rows.Next() {
-		var i Document
+		var i ListDocumentsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.SourceType,
@@ -430,6 +492,7 @@ func (q *Queries) ListDocuments(ctx context.Context, limit int32) ([]Document, e
 			&i.Extension,
 			&i.ContentType,
 			&i.Sha256,
+			&i.PdfOcrEnabled,
 			&i.Status,
 			&i.ConfigVersion,
 			&i.RawContent,
