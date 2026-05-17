@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -203,6 +204,11 @@ func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRCon
 		args = append(args, arg)
 	}
 
+	command, args, err := buildOCRExec(command, args)
+	if err != nil {
+		return "", err
+	}
+
 	cmd := exec.CommandContext(ocrCtx, command, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -223,6 +229,100 @@ func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRCon
 		return "", fmt.Errorf("ocr produced empty text")
 	}
 	return string(output), nil
+}
+
+func buildOCRExec(command string, args []string) (string, []string, error) {
+	resolved, err := resolveOCRCommand(command)
+	if err != nil {
+		return "", nil, err
+	}
+	if runtime.GOOS == "windows" {
+		switch strings.ToLower(filepath.Ext(resolved)) {
+		case ".bat", ".cmd":
+			shell := os.Getenv("ComSpec")
+			if strings.TrimSpace(shell) == "" {
+				shell = "cmd"
+			}
+			shellArgs := make([]string, 0, len(args)+2)
+			shellArgs = append(shellArgs, "/c", resolved)
+			shellArgs = append(shellArgs, args...)
+			return shell, shellArgs, nil
+		}
+	}
+	return resolved, args, nil
+}
+
+func resolveOCRCommand(command string) (string, error) {
+	command = strings.TrimSpace(os.ExpandEnv(command))
+	if command == "" {
+		return "", fmt.Errorf("ocr command is empty")
+	}
+	if !isPathCommand(command) {
+		return command, nil
+	}
+
+	normalized := filepath.Clean(filepath.FromSlash(command))
+	candidates := make([]string, 0, 2)
+	if filepath.IsAbs(normalized) {
+		candidates = append(candidates, normalized)
+	} else {
+		if abs, err := filepath.Abs(normalized); err == nil {
+			candidates = append(candidates, abs)
+		}
+		if root, ok := findProjectRoot(); ok {
+			candidates = append(candidates, filepath.Join(root, normalized))
+		}
+	}
+
+	for _, candidate := range dedupeStrings(candidates) {
+		if fileExists(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("ocr command not found: %s (looked in %s)", command, strings.Join(dedupeStrings(candidates), ", "))
+}
+
+func isPathCommand(command string) bool {
+	return filepath.IsAbs(command) || strings.ContainsAny(command, `/\`)
+}
+
+func findProjectRoot() (string, bool) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for {
+		if fileExists(filepath.Join(dir, "go.mod")) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func dedupeStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		key := value
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(value)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func cleanText(input string) string {
