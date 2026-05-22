@@ -27,6 +27,8 @@ Output shape:
 
 var (
 	jsonFenceRe = regexp.MustCompile("(?s)^```(?:json)?\\s*(.*?)\\s*```$")
+	tsCodeRe    = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
+	symbolRe    = regexp.MustCompile(`^\d{6}$`)
 )
 
 type Analyzer interface {
@@ -335,6 +337,9 @@ func ValidateIntent(intent domain.PlanIntent) error {
 	if intent.Symbol == "" {
 		return fmt.Errorf("symbol is required")
 	}
+	if !ValidateTSCode(intent.Symbol) {
+		return fmt.Errorf("symbol must be a valid ts_code like 000001.SZ")
+	}
 	if intent.Direction != domain.TradeDirectionLong && intent.Direction != domain.TradeDirectionShort {
 		return fmt.Errorf("direction must be LONG or SHORT")
 	}
@@ -348,6 +353,10 @@ func ValidateIntent(intent domain.PlanIntent) error {
 		return fmt.Errorf("confidence must be in (0,1]")
 	}
 	return nil
+}
+
+func ValidateTSCode(symbol string) bool {
+	return tsCodeRe.MatchString(strings.ToUpper(strings.TrimSpace(symbol)))
 }
 
 func normalizeIntent(intent domain.PlanIntent) domain.PlanIntent {
@@ -371,16 +380,24 @@ func normalizeIntent(intent domain.PlanIntent) domain.PlanIntent {
 }
 
 func normalizeSymbol(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
 	if value == "" {
 		return ""
 	}
-	if strings.Contains(value, ".") {
-		return strings.ToUpper(value)
+	if tsCodeRe.MatchString(value) {
+		return value
 	}
-	if strings.HasPrefix(value, "6") {
-		return value + ".SH"
+	if symbolRe.MatchString(value) {
+		switch {
+		case strings.HasPrefix(value, "6"):
+			return value + ".SH"
+		case strings.HasPrefix(value, "0"), strings.HasPrefix(value, "3"):
+			return value + ".SZ"
+		case strings.HasPrefix(value, "4"), strings.HasPrefix(value, "8"):
+			return value + ".BJ"
+		}
 	}
-	return value + ".SZ"
+	return value
 }
 
 func inferAssetType(symbol string) domain.AssetType {
@@ -393,6 +410,9 @@ func inferAssetType(symbol string) domain.AssetType {
 func inferMarket(symbol string) domain.Market {
 	if strings.HasSuffix(symbol, ".SH") {
 		return domain.MarketSH
+	}
+	if strings.HasSuffix(symbol, ".BJ") {
+		return domain.MarketBJ
 	}
 	return domain.MarketSZ
 }

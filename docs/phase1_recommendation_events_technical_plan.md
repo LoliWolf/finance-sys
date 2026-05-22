@@ -548,8 +548,8 @@ GET /api/v1/documents/{id}/recommendations
    - DAL 查询测试或最小集成测试
 10. 执行：
    - `gofmt -w` 修改过的 Go 文件
-   - `env GOTOOLCHAIN=local GOCACHE=$(pwd)/.gocache go test ./...`
-   - `env GOTOOLCHAIN=local GOCACHE=$(pwd)/.gocache go build ./...`
+   - `env GOTOOLCHAIN=local go test ./...`
+   - `env GOTOOLCHAIN=local go build ./...`
 
 ## 11. 幂等策略
 
@@ -650,4 +650,3 @@ internal/service/stats.go
 5. 同一文档重复分析，不新增重复 `recommendation_events` 主事件，只更新命中 dedupe key 的事件内容和证据。
 6. 候选计划状态为 `READY` 时，推荐事件状态为 `ACTIVE`；否则为 `NEEDS_REVIEW`。
 7. `go test ./...` 和 `go build ./...` 通过。
-

@@ -13,6 +13,7 @@ import (
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
 	"finance-sys/internal/domain/db_model"
+	"finance-sys/internal/llm"
 	"finance-sys/internal/utils"
 
 	"gorm.io/gorm"
@@ -150,6 +151,11 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 	tradeDate := s.tradeDate(cfg)
 	plans := make([]domain.CandidatePlan, 0, len(intents))
 	for _, intent := range intents {
+		if err := llm.ValidateIntent(intent); err != nil {
+			s.logger.ErrorContext(ctx, "document service analyze invalid intent", "document_id", documentID, "parse_run_id", parseRun.ID, "symbol", intent.Symbol, "error", err.Error())
+			_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+			return nil, fmt.Errorf("invalid plan intent: %w", err)
+		}
 		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "symbol", intent.Symbol, "direction", intent.Direction, "confidence", intent.Confidence)
 		plan := s.rules.Generate(intent, cfg.Rules, tradeDate, cfg.Meta.ConfigVersion)
 		plan.DocumentID = document.ID

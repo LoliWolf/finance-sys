@@ -23,8 +23,6 @@ for /f "usebackq tokens=* delims=" %%A in ("%ENV_FILE%") do (
 )
 
 set "GOTOOLCHAIN=local"
-set "GOCACHE=%ROOT_DIR%.gocache_api"
-if not exist "%GOCACHE%" mkdir "%GOCACHE%"
 if defined EXTRA_PATH set "PATH=%EXTRA_PATH%;%PATH%"
 if not defined APP_BASE_URL set "APP_BASE_URL=http://127.0.0.1:30005"
 set "UPLOAD_URL=%APP_BASE_URL%/upload"
@@ -49,7 +47,6 @@ echo [DEBUG] NACOS_GROUP=%NACOS_GROUP%
 echo [DEBUG] NACOS_DATA_ID=%NACOS_DATA_ID%
 echo [DEBUG] NACOS_USERNAME=%NACOS_USERNAME%
 echo [DEBUG] GOTOOLCHAIN=%GOTOOLCHAIN%
-echo [DEBUG] GOCACHE=%GOCACHE%
 echo [DEBUG] EXTRA_PATH=%EXTRA_PATH%
 echo [DEBUG] APP_BASE_URL=%APP_BASE_URL%
 echo.

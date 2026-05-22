@@ -96,6 +96,75 @@ func TestModelAnalyzerRetriesOnInvalidStructuredResponse(t *testing.T) {
 	require.Equal(t, "000001.SZ", intents[0].Symbol)
 }
 
+func TestModelAnalyzerRetriesWhenModelReturnsInvalidSymbol(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := attempts.Add(1)
+		symbol := "CPO板块"
+		if count == 2 {
+			symbol = "300502.SZ"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": `{"plans":[{"analyst":"Alice","institution":"Research","symbol":"` + symbol + `","direction":"LONG","reference_price":88.8,"thesis":"explicit recommendation from source text","evidence":[{"chunk_index":0,"text":"source evidence"}],"risks":["volatility"],"confidence":0.81}]}`,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 1), telemetry.NewLogger(string(config.LogLevelError)))
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{
+		Title:       "daily",
+		Author:      "Alice",
+		Institution: "Research",
+	}, domain.ParseRun{
+		CleanedText: "recommend 300502.SZ",
+		Chunks: []domain.Chunk{
+			{Index: 0, Text: "recommend 300502.SZ"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, intents, 1)
+	require.Equal(t, int32(2), attempts.Load())
+	require.Equal(t, "300502.SZ", intents[0].Symbol)
+}
+
+func TestModelAnalyzerDoesNotAppendExchangeToTextSymbol(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": `{"plans":[{"analyst":"Alice","institution":"Research","symbol":"CPO板块","direction":"LONG","reference_price":88.8,"thesis":"explicit recommendation from source text","evidence":[{"chunk_index":0,"text":"source evidence"}],"risks":["volatility"],"confidence":0.81}]}`,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 0), telemetry.NewLogger(string(config.LogLevelError)))
+	_, err := analyzer.Analyze(context.Background(), domain.Document{
+		Title:       "daily",
+		Author:      "Alice",
+		Institution: "Research",
+	}, domain.ParseRun{
+		CleanedText: "recommend CPO sector",
+		Chunks: []domain.Chunk{
+			{Index: 0, Text: "recommend CPO sector"},
+		},
+	})
+	require.ErrorContains(t, err, "symbol must be a valid ts_code like 000001.SZ")
+	require.NotContains(t, err.Error(), "CPO板块.SZ")
+	require.Equal(t, int32(1), attempts.Load())
+}
+
 func TestModelAnalyzerFailsAfterRetries(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +221,61 @@ func TestValidateIntentRejectsInvalidStructuredOutput(t *testing.T) {
 		Thesis:         "supported by text",
 		Confidence:     0,
 	}), "confidence must be in (0,1]")
+}
+
+func TestValidateIntentRejectsNonTSCodeSymbol(t *testing.T) {
+	for _, symbol := range []string{"CPO板块", "A股贵金属个股", "CPO板块.SZ", "新易盛"} {
+		t.Run(symbol, func(t *testing.T) {
+			require.ErrorContains(t, llm.ValidateIntent(domain.PlanIntent{
+				Symbol:         symbol,
+				Direction:      domain.TradeDirectionLong,
+				ReferencePrice: 1,
+				Thesis:         "supported by text",
+				Confidence:     0.8,
+			}), "symbol must be a valid ts_code like 000001.SZ")
+		})
+	}
+}
+
+func TestValidateTSCode(t *testing.T) {
+	require.True(t, llm.ValidateTSCode("300502.SZ"))
+	require.True(t, llm.ValidateTSCode("600519.SH"))
+	require.True(t, llm.ValidateTSCode("430047.BJ"))
+	require.True(t, llm.ValidateTSCode("000001.sz"))
+	require.False(t, llm.ValidateTSCode("CPO板块.SZ"))
+	require.False(t, llm.ValidateTSCode("新易盛"))
+	require.False(t, llm.ValidateTSCode("600519"))
+}
+
+func TestModelAnalyzerInfersBJMarket(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": `{"plans":[{"analyst":"Alice","institution":"Research","symbol":"430047","direction":"LONG","reference_price":10.2,"thesis":"supported by source text","evidence":[{"chunk_index":0,"text":"source evidence"}],"risks":["volatility"],"confidence":0.72}]}`,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 0), telemetry.NewLogger(string(config.LogLevelError)))
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{
+		Title:       "daily",
+		Author:      "Alice",
+		Institution: "Research",
+	}, domain.ParseRun{
+		CleanedText: "recommend 430047.BJ",
+		Chunks: []domain.Chunk{
+			{Index: 0, Text: "recommend 430047.BJ"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, intents, 1)
+	require.Equal(t, "430047.BJ", intents[0].Symbol)
+	require.Equal(t, domain.MarketBJ, intents[0].Market)
 }
 
 func TestValidateIntentAcceptsMVPTradeIntent(t *testing.T) {

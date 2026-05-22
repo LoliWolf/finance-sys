@@ -1288,6 +1288,81 @@ go build ./...
 
 这些能力从 M1 开始逐步补齐。
 
+#### 18.2.11 M0 当前落地实现与测试方案
+
+本次 M0 落地范围保持为“止血”，只阻断伪代码进入候选计划，不引入新表、不执行证券名称解析、不接入 Agent 或外部证券主数据。
+
+<callout emoji="✅" background-color="light-green" border-color="green">
+  <p>M0 已实现的核心变化：LLM 输出的任意文本不会再被自动补成 <code>.SZ</code>；只有标准 <code>ts_code</code>，或可明确补后缀的 6 位纯数字证券代码，才能通过结构化校验并进入规则层。</p>
+</callout>
+
+实现落点如下：
+
+| 文件 | 变更 | 目的 |
+| --- | --- | --- |
+| `internal/llm/extractor.go` | 新增 `ValidateTSCode`，并在 `ValidateIntent` 中校验 `^\d{6}\.(SH\|SZ\|BJ)$` | 从 LLM 结构化输出入口拒绝 `CPO板块`、`新易盛`、`A股贵金属个股` 等不可追踪目标 |
+| `internal/llm/extractor.go` | 收紧 `normalizeSymbol`，仅做去空格、转大写、标准代码保持、6 位纯数字补交易所后缀 | 删除“任意文本默认补 `.SZ`”的污染路径 |
+| `internal/domain/enums.go`、`internal/llm/extractor.go` | 补充 `MarketBJ`，并让 `.BJ` 后缀推断为北交所市场 | 保持 `ValidateTSCode` 允许北交所代码后的领域字段一致性 |
+| `internal/service/document.go` | 在 `rules.Generate` 前再次调用 `llm.ValidateIntent` | 防止未来替换 analyzer、测试 stub 或 Agent 输出绕过 LLM 层校验 |
+| `cmd/api/m0_nacos_integration_test.go` | 新增真实启动链路 HTTP 集成测试 | 通过启动脚本同源 Nacos 环境变量、`bootstrap.Build`、HTTP 上传和分析接口覆盖合格/不合格用例 |
+| `internal/llm/extractor_test.go` | 新增非写库单元测试 | 覆盖非法 symbol 重试、文本 symbol 不补后缀、标准 ts_code 校验和 `.BJ` 市场推断 |
+
+M0 的当前运行链路为：
+
+```text
+Nacos 配置 -> bootstrap.Build
+-> parser.Parse
+-> llm.ModelAnalyzer.Analyze
+-> normalizeSymbol
+-> ValidateIntent / ValidateTSCode
+-> service 二次 ValidateIntent
+-> rules.Generate
+-> trade_candidate_plans
+```
+
+合格用例：
+
+| 输入 | 预期 |
+| --- | --- |
+| `300502.SZ` | 通过校验，HTTP 分析返回 `200`，生成 1 条候选计划 |
+| `600519` | 归一为 `600519.SH`，通过校验 |
+| `000001.sz` | 归一为 `000001.SZ`，通过校验 |
+| `430047` | 归一为 `430047.BJ`，市场推断为 `BJ` |
+
+不合格用例：
+
+| 输入 | 预期 |
+| --- | --- |
+| `CPO板块` | 不补后缀，触发 `symbol must be a valid ts_code like 000001.SZ` |
+| `A股贵金属个股` | 不补后缀，触发同样错误 |
+| `CPO板块.SZ` | 主体不是 6 位数字，触发同样错误 |
+| `新易盛` | M0 不做名称解析，触发同样错误 |
+
+测试方案分两层：
+
+1. 默认单元测试和构建：覆盖 LLM 校验、默认包测试和构建门禁；M0 真实 HTTP/Nacos/MySQL 链路测试在未确认写库时会跳过。
+
+```bash
+env GOTOOLCHAIN=local go test -count=1 ./...
+env GOTOOLCHAIN=local go build ./...
+```
+
+2. 真实 Nacos/MySQL/HTTP 集成测试：默认跳过，执行前必须显式确认写真实库。测试会从 `bootstrap_go122.env.example` 注入与启动脚本一致的 Nacos 配置，调用 `bootstrap.Build` 正常初始化服务，再通过 HTTP 上传文档和调用 `/api/v1/documents/{id}/analyze`。该测试会写入 Nacos 配置指向的 `documents`、`parse_runs` 和 `trade_candidate_plans`；LLM endpoint 在服务完成 Nacos 初始化后切到本地 OpenAI-compatible mock，用于稳定覆盖合法和不合法模型输出。
+
+```powershell
+$env:FINANCE_SYS_M0_NACOS_INTEGRATION='1'
+$env:FINANCE_SYS_M0_NACOS_DML_ACK='write-real-db'
+$env:GOTOOLCHAIN='local'
+go test -count=1 ./cmd/api -run TestHTTPM0AnalyzeRejectsInvalidSymbolsWithNacosBootstrap
+```
+
+验收结论：
+
+- 2026-05-23 已执行真实 Nacos/MySQL/HTTP 集成测试 `go test -count=1 ./cmd/api -run TestHTTPM0AnalyzeRejectsInvalidSymbolsWithNacosBootstrap -v`，通过；日志确认 `config_source:"nacos"`、DB 连接成功、合法用例生成 `300502.SZ`、不合法用例失败且文档状态为 `FAILED`。
+- 2026-05-23 已补充 `FINANCE_SYS_M0_NACOS_INTEGRATION=1` 与 `FINANCE_SYS_M0_NACOS_DML_ACK=write-real-db` 双开关保护，避免默认测试误写真实库。
+- 2026-05-23 已执行 `go test -count=1 ./...`，通过。
+- 2026-05-23 已执行 `go build ./...`，通过。
+
 ### 18.3 M1：证券主数据阶段
 
 目标：把“这是不是一个真实可追踪证券”的判断从 AI 输出转移到本地数据库。

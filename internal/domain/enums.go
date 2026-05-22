@@ -68,6 +68,8 @@ const (
 	MarketSH Market = "SH"
 	// MarketSZ 表示深圳证券交易所市场。
 	MarketSZ Market = "SZ"
+	// MarketBJ 表示北京证券交易所市场。
+	MarketBJ Market = "BJ"
 )
 
 // CandidatePlanStatus 表示规则引擎生成的候选计划状态。
