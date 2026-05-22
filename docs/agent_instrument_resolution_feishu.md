@@ -930,3 +930,526 @@ type TrackablePlanIntent struct {
 - Tushare stock_basic：<https://tushare.pro/document/2?doc_id=25>
 - Tushare trade_cal：<https://tushare.pro/document/2?doc_id=26>
 - Tushare daily：<https://tushare.pro/document/2?doc_id=27>
+
+## 18. 逐步实现路径和阶段目标
+
+本章把前面的技术方案拆成可以逐步落地的工程路径。核心思路不是一次性把 Python Agent、MCP、skills、主数据、CPA 全部做完，而是先把脏数据入口关住，再让系统具备“识别真实证券”的能力，最后再接入 Agent 和外部工具。
+
+实施顺序遵循四个原则：
+
+1. 先止血，再增强。先保证 `trade_candidate_plans` 不再写入伪代码。
+2. 先本地确定性，再外部工具。先建设 `security_master`，再接 Tushare MCP / 东方财富 MCP。
+3. 先稳定契约，再智能编排。先定义 Go 与 Agent 之间的 JSON schema，再让 LangGraph 承担复杂流程。
+4. 先可观测，再扩大范围。每一步都要能知道解析过程为什么成功或失败。
+
+### 18.1 总体里程碑
+
+```mermaid
+flowchart LR
+    M0[M0 止血: 禁止伪代码入库] --> M1[M1 证券主数据: security_master]
+    M1 --> M2[M2 本地解析器: internal/instrument]
+    M2 --> M3[M3 CPA 改造: 只吃可追踪输入]
+    M3 --> M4[M4 Python Agent sidecar]
+    M4 --> M5[M5 Skill loader 和规则样例]
+    M5 --> M6[M6 MCP 兜底召回]
+    M6 --> M7[M7 观测、回归、灰度切换]
+```
+
+阶段目标：
+
+| 阶段 | 目标 | 完成后的效果 |
+| --- | --- | --- |
+| M0 | 止血 | `CPO板块.SZ`、`A股贵金属个股.SZ` 这类伪代码不再进入候选计划。 |
+| M1 | 建证券主数据 | 系统有本地“证券身份证库”，能存股票、ETF、别名和上市状态。 |
+| M2 | 本地解析器 | 不依赖 Agent，也能把 `新易盛`、`旭创` 解析成真实 `ts_code`。 |
+| M3 | CPA 改造 | `rules` 只接收可追踪证券，板块/主题/泛称进入不可追踪记录。 |
+| M4 | Agent sidecar | Python Agent 能读文本、查本地库、输出稳定 JSON。 |
+| M5 | Skill loader | 标的解析规则进入项目内文件，能版本化、审计和测试。 |
+| M6 | MCP 兜底 | 本地查不到时能调用外部工具召回候选，但仍需本地校验。 |
+| M7 | 观测和灰度 | 每次解析有过程记录、失败原因、回归样例和开关。 |
+
+### 18.2 M0：止血阶段
+
+目标：先阻断“任意文本补 `.SZ/.SH`”造成的脏数据。
+
+实施内容：
+
+1. 删除或废弃当前 `normalizeSymbol` 里“非 6 开头就补 `.SZ`”的逻辑。
+2. 新增 `ValidateTSCode` / `ValidateSymbol` 这类纯校验函数。
+3. `PlanIntent.symbol` 如果不是标准格式，不再进入 `rules.Generate`。
+4. LLM 输出非法标的时，当前分析可以失败，也可以落为不可追踪目标；但不能写入 `trade_candidate_plans`。
+5. 增加针对以下输入的单元测试：
+   - `300502.SZ`：合法。
+   - `600519.SH`：合法。
+   - `CPO板块`：非法。
+   - `A股贵金属个股`：非法。
+   - `CPO板块.SZ`：非法，因为主体不是 6 位数字。
+
+代码落点：
+
+```text
+internal/llm/extractor.go
+internal/domain/enums.go
+internal/rules/engine.go
+internal/service/document.go
+internal/llm/extractor_test.go
+internal/rules/engine_test.go
+```
+
+验收标准：
+
+```text
+go test ./...
+go build ./...
+```
+
+并且用现有样例跑分析时，`trade_candidate_plans` 中不再出现非标准 `ts_code`。
+
+### 18.3 M1：证券主数据阶段
+
+目标：把“这是不是一个真实可追踪证券”的判断从 AI 输出转移到本地数据库。
+
+新增表：
+
+```text
+security_master
+security_aliases
+```
+
+实施内容：
+
+1. 在 `migrations/` 新增建表 SQL。
+2. 执行 `go run generate.go` 同步 `internal/domain/db_model`。
+3. 在 `internal/dal/security_master.go` 增加主数据查询 DML。
+4. 在 `internal/dal/security_alias.go` 增加别名查询 DML。
+5. 新增最小初始化脚本或管理命令，至少写入：
+   - `300502.SZ / 新易盛`
+   - `300308.SZ / 中际旭创`
+   - `旭创 -> 300308.SZ`
+6. 暂时不把全量 Tushare 同步做进文档分析链路；主数据同步和文档分析要解耦。
+
+DAL 方法建议：
+
+```go
+SecurityMasters.QueryByTSCode(ctx, db, param)
+SecurityMasters.QueryBySymbol(ctx, db, param)
+SecurityMasters.QueryActiveByName(ctx, db, param)
+SecurityAliases.QueryByNormalizedAlias(ctx, db, param)
+```
+
+阶段性验收：
+
+- 能通过名称查到 `新易盛 -> 300502.SZ`。
+- 能通过别名查到 `旭创 -> 中际旭创 -> 300308.SZ`。
+- `CPO板块` 查不到证券主数据。
+- `A股贵金属个股` 查不到证券主数据。
+
+### 18.4 M2：本地 Instrument Resolver 阶段
+
+目标：在 Go 侧先建一个确定性标的解析器，即使 Python Agent 还没接入，也能完成最小可用解析。
+
+新增目录：
+
+```text
+internal/instrument/
+  resolver.go
+  normalize.go
+  types.go
+  resolver_test.go
+```
+
+职责划分：
+
+- `normalize.go`：处理名称归一化，例如去空格、全角半角、常见标点。
+- `types.go`：定义 `ResolvedInstrument`、`UntrackableTarget`、`ResolutionCandidate`。
+- `resolver.go`：按 `ts_code -> symbol -> name -> alias -> fuzzy candidates` 的顺序解析。
+- `resolver_test.go`：覆盖当前已知问题样例。
+
+解析策略：
+
+```text
+输入 raw_name
+-> 如果是标准 ts_code，查 security_master
+-> 如果是 6 位 symbol，查 security_master
+-> 如果是证券简称，查 security_master.name
+-> 如果是别名，查 security_aliases
+-> 多候选则返回 AMBIGUOUS
+-> 板块/主题/泛称则返回 UNTRACKABLE
+```
+
+这一步先不要调用外部工具，不要引入 LangGraph，不要把问题做大。目标是先把本地确定性规则跑通。
+
+### 18.5 M3：CPA 和 rules 输入改造阶段
+
+目标：让交易计划生成链路只接收“已经验明身份”的证券。
+
+新增或调整结构：
+
+```go
+type TrackablePlanIntent struct {
+    SourceIntentID string
+    TSCode string
+    Symbol string
+    SecurityName string
+    AssetType AssetType
+    Market Market
+    Direction TradeDirection
+    ReferencePrice float64
+    ReferencePriceNote ReferencePriceNote
+    Thesis string
+    Evidence []EvidenceSpan
+    Risks []string
+    Confidence float64
+}
+```
+
+实施内容：
+
+1. 在 `internal/service` 增加 CPA 装配逻辑。
+2. CPA 输入可以先来自旧 LLM `PlanIntent + internal/instrument`，后续再切 Agent 输出。
+3. `rules.Generate` 入参改为 `TrackablePlanIntent`。
+4. `trade_candidate_plans.symbol` 写入标准 `ts_code` 或新增 `ts_code` 字段后写入 `ts_code`。
+5. 不可追踪目标写入 `untrackable_targets`，不要丢弃。
+
+关键约束：
+
+- CPA 不调用 LLM。
+- CPA 不调用 MCP。
+- CPA 不猜测证券代码。
+- CPA 不修复非法 symbol。
+- CPA 只接收 resolver 或 Agent 已经确认的证券。
+
+阶段性验收：
+
+- `CPO板块` 会生成不可追踪记录，不生成候选交易计划。
+- `新易盛` 能生成候选交易计划。
+- `旭创` 通过 alias 能生成 `300308.SZ` 对应候选交易计划。
+
+### 18.6 M4：Python Agent sidecar 阶段
+
+目标：在 Go 主系统旁边启动一个 Python 服务，负责更复杂的抽取、工具调用、消歧和稳定 JSON 输出。
+
+新增目录：
+
+```text
+agent/
+  pyproject.toml
+  README.md
+  app/
+    main.py
+    config.py
+    graph.py
+    schemas.py
+    skills.py
+    tools/
+    nodes/
+  tests/
+```
+
+接口：
+
+```text
+POST /v1/resolve-document
+```
+
+请求包含：
+
+```json
+{
+  "schema_version": "agent_resolution_request.v1",
+  "document_id": 19,
+  "parse_run_id": 14,
+  "trade_date": "2026-05-17",
+  "chunks": [
+    {
+      "chunk_index": 0,
+      "text": "..."
+    }
+  ]
+}
+```
+
+响应包含：
+
+```json
+{
+  "schema_version": "agent_resolution.v1",
+  "status": "RESOLVED",
+  "candidate_plan_inputs": [],
+  "recommendation_events": [],
+  "untrackable_targets": [],
+  "warnings": [],
+  "debug": {
+    "graph_run_id": "...",
+    "skill_hash": "...",
+    "tools_used": []
+  }
+}
+```
+
+LangGraph 节点最小集：
+
+```text
+load_skill
+extract_raw_intents
+resolve_with_local_security
+classify_untrackable
+validate_output
+```
+
+先不接 MCP 时，Agent 仍然有价值：它可以比单次 LLM 更清晰地拆分“原始目标、可追踪证券、不可追踪目标、证据”。
+
+Go 侧新增：
+
+```text
+internal/agentclient/
+  client.go
+  types.go
+  client_test.go
+```
+
+调用策略：
+
+- 超时来自 Nacos 配置。
+- 失败按 `agent.max_retries` 重试。
+- 返回 schema version 不匹配则失败。
+- Agent 返回 `FAILED` 时，当前分析失败或只落解析失败记录，不进入 rules。
+
+### 18.7 M5：项目内 Skill loader 阶段
+
+目标：把标的解析规则从“写在 prompt 里的散文”变成项目内可版本化文件。
+
+新增：
+
+```text
+agent/skills/instrument_resolution/SKILL.md
+agent/skills/instrument_resolution/examples.jsonl
+```
+
+`SKILL.md` 应明确写入：
+
+- 不允许编造 `ts_code`。
+- 板块、主题、泛称不能进入候选计划。
+- MCP 返回候选必须回本地 `security_master` 校验。
+- 多候选不确定时返回 `AMBIGUOUS`。
+- 只有 `asset_type in (STOCK, ETF)` 且 `list_status = L` 才能进入 `candidate_plan_inputs`。
+
+loader 行为：
+
+1. Agent 启动时读取 `SKILL.md`。
+2. 计算 `skill_hash`。
+3. 每次 Agent 响应带上 `skill_hash`。
+4. `instrument_resolution_runs` 记录本次使用的 `skill_hash`。
+
+这样后续如果规则变了，可以追溯某一次解析使用的是哪版规则。
+
+### 18.8 M6：MCP 兜底阶段
+
+目标：本地解析失败或歧义时，允许 Agent 使用外部工具召回候选。
+
+接入顺序：
+
+1. Tushare MCP：优先用于股票、ETF 基础信息候选。
+2. 东方财富 MCP：用于概念、板块、常用简称辅助判断。
+
+使用约束：
+
+```text
+本地查不到
+-> MCP 召回候选
+-> 候选写入 resolution candidates
+-> 回本地 security_master 校验
+-> 本地仍没有则不进 CPA
+```
+
+禁止行为：
+
+- 禁止 MCP 返回一个名字后直接写 `trade_candidate_plans`。
+- 禁止 Agent 根据常识生成 `ts_code`。
+- 禁止把板块代码当作股票代码。
+- 禁止把东方财富概念/板块直接当成 Tushare 可追踪证券。
+
+阶段性验收：
+
+- MCP 工具超时不会拖垮 Go 主链路。
+- MCP 返回多候选时不会强行选择。
+- MCP 找到候选但本地未校验时，不进入候选计划。
+
+### 18.9 M7：观测、回归和灰度切换阶段
+
+目标：让这条新链路可排查、可回归、可切换。
+
+新增表：
+
+```text
+instrument_resolution_runs
+untrackable_targets
+```
+
+记录内容：
+
+- 输入文档 ID、parse run ID、chunk 范围。
+- Agent schema version、agent version、skill hash。
+- 使用了哪些工具。
+- 每个 raw target 的解析结果。
+- 失败原因。
+- 进入 CPA 的候选数量。
+- 进入不可追踪目标的数量。
+
+新增 API 建议：
+
+```text
+GET /api/v1/documents/{id}/resolution-runs
+GET /api/v1/resolution-runs/{id}
+GET /api/v1/documents/{id}/untrackable-targets
+```
+
+灰度开关：
+
+```json
+{
+  "agent": {
+    "enabled": true,
+    "shadow_mode": false,
+    "allow_legacy_llm_fallback": false
+  }
+}
+```
+
+切换策略：
+
+1. `shadow_mode=true`：旧链路仍生成计划，新链路只记录解析结果，用于对比。
+2. `agent.enabled=true` 且 `shadow_mode=false`：正式由 Agent + CPA 链路生成计划。
+3. `allow_legacy_llm_fallback=false`：Agent 失败时不回退旧链路，避免脏数据重新进入。
+
+### 18.10 推荐开发顺序
+
+第一批 PR：止血和主数据基础。
+
+```text
+M0 + M1
+```
+
+产出：
+
+- migrations。
+- db_model 更新。
+- DAL。
+- TSCode 校验。
+- 禁止伪 symbol 入库。
+- 最小主数据样例。
+
+第二批 PR：本地 resolver 和 CPA。
+
+```text
+M2 + M3
+```
+
+产出：
+
+- `internal/instrument`。
+- `TrackablePlanIntent`。
+- `rules.Generate` 入参切换。
+- `untrackable_targets`。
+- 当前样例回归测试。
+
+第三批 PR：Agent sidecar 最小闭环。
+
+```text
+M4 + M5
+```
+
+产出：
+
+- `agent/` Python 工程。
+- FastAPI 接口。
+- LangGraph 最小节点。
+- Pydantic schema。
+- SKILL.md loader。
+- Go `agentclient`。
+
+第四批 PR：MCP 和观测增强。
+
+```text
+M6 + M7
+```
+
+产出：
+
+- Tushare MCP 工具。
+- 东方财富 MCP 工具。
+- resolution run 查询 API。
+- shadow mode 对比。
+- 回归样例集。
+
+### 18.11 每阶段测试清单
+
+M0 测试：
+
+- 非 6 位主体 symbol 被拒绝。
+- `CPO板块.SZ` 被拒绝。
+- 合法 `300502.SZ` 通过。
+
+M1 测试：
+
+- `security_master` 唯一键生效。
+- `security_aliases` 能通过 `旭创` 找到 `中际旭创`。
+- 退市或非 `L` 状态不能进入候选计划。
+
+M2 测试：
+
+- `新易盛` 解析为 `300502.SZ`。
+- `旭创` 解析为 `300308.SZ`。
+- `CPO板块` 输出 `UntrackableTarget`。
+- 多候选返回 `AMBIGUOUS`。
+
+M3 测试：
+
+- CPA 不接收非法 symbol。
+- `rules.Generate` 不再接收原始 `PlanIntent`。
+- 不可追踪目标不会写入 `trade_candidate_plans`。
+
+M4 测试：
+
+- Agent schema 校验失败会返回 `FAILED`。
+- Go 收到 schema version 不匹配会失败。
+- Agent 超时按配置重试。
+
+M5 测试：
+
+- 修改 `SKILL.md` 后 `skill_hash` 变化。
+- Agent 响应包含 `skill_hash`。
+- resolution run 记录 `skill_hash`。
+
+M6 测试：
+
+- MCP 超时返回 warning，不直接污染计划。
+- MCP 返回候选后必须本地校验。
+- 外部工具不可用时，本地 resolver 仍可工作。
+
+M7 测试：
+
+- shadow mode 不影响旧链路写计划。
+- 正式模式只用 Agent + CPA 写计划。
+- 查询 API 能看到解析过程和失败原因。
+
+### 18.12 最终目标状态
+
+最终希望达到的状态是：
+
+```text
+文章中出现真实股票名
+-> 解析成唯一 ts_code
+-> CPA 放行
+-> rules 生成候选计划
+-> Tushare 可追踪
+```
+
+```text
+文章中出现板块、主题、泛称
+-> 记录推荐事件或不可追踪目标
+-> 不生成候选交易计划
+-> 不污染 trade_candidate_plans
+```
+
+这条路径完成后，系统就从“AI 说什么就落什么”升级为“AI 找线索，本地证券主数据验身份，CPA 放行，rules 算交易参数”。这既保留了 Agent 的灵活性，也保留了 Go 主系统的确定性和可审计性。
