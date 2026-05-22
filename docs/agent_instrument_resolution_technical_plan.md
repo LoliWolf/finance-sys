@@ -972,18 +972,287 @@ flowchart LR
 
 目标：先阻断“任意文本补 `.SZ/.SH`”造成的脏数据。
 
-实施内容：
+M0 只做防污染，不引入 `security_master`，不接 Agent，不改大表结构。它的任务是把当前链路中最危险的一段切断：LLM 可以继续抽取 `PlanIntent`，但只有明确是标准证券代码的 intent 才能进入 `rules.Generate` 和 `trade_candidate_plans`。
+
+#### 18.2.1 当前具体问题点
+
+当前代码里有三个直接风险点：
+
+1. `internal/llm/extractor.go` 的 `normalizeSymbol` 会把任意不带 `.` 的文本补成后缀。
+2. `ValidateIntent` 只检查 `symbol` 非空，没有检查 `symbol` 是否真的是 `000001.SZ` 这种格式。
+3. `internal/service/document.go` 在拿到 `intents` 后直接循环调用 `s.rules.Generate`，没有二次拦截。
+
+当前危险路径：
+
+```text
+LLM 输出 "CPO板块"
+-> normalizeSymbol("CPO板块")
+-> "CPO板块.SZ"
+-> ValidateIntent 通过
+-> rules.Generate
+-> trade_candidate_plans.symbol = "CPO板块.SZ"
+```
+
+M0 要把这条路径改成：
+
+```text
+LLM 输出 "CPO板块"
+-> normalizeSymbol 不再补后缀
+-> ValidateIntent 判断不是合法 ts_code
+-> 本轮 LLM 结果失败并触发配置内重试
+-> 重试后仍不合法则分析失败
+-> 不写 trade_candidate_plans
+```
+
+#### 18.2.2 第一刀：收紧 symbol 归一化
+
+修改文件：
+
+```text
+internal/llm/extractor.go
+```
+
+把 `normalizeSymbol` 从“补全函数”改成“轻量格式归一函数”。它只能做安全转换：
+
+- 去前后空格。
+- 转大写。
+- 把 `sh600519` / `SH600519` 这类可明确识别的格式转成 `600519.SH`，如果暂时不想支持可以先不做。
+- 把 `600519.SH` 保持为 `600519.SH`。
+- 把 `000001.sz` 转成 `000001.SZ`。
+- 不允许把 `CPO板块`、`新易盛`、`A股贵金属个股` 自动补成 `.SZ`。
+
+建议第一版保持最保守：
+
+```go
+func normalizeSymbol(value string) string {
+    value = strings.ToUpper(strings.TrimSpace(value))
+    return value
+}
+```
+
+如果要兼容纯 6 位数字，也只能在格式明确时补后缀：
+
+```go
+func normalizeSymbol(value string) string {
+    value = strings.ToUpper(strings.TrimSpace(value))
+    if tsCodePattern.MatchString(value) {
+        return value
+    }
+    if symbolPattern.MatchString(value) {
+        if strings.HasPrefix(value, "6") {
+            return value + ".SH"
+        }
+        if strings.HasPrefix(value, "0") || strings.HasPrefix(value, "3") {
+            return value + ".SZ"
+        }
+        if strings.HasPrefix(value, "8") || strings.HasPrefix(value, "4") {
+            return value + ".BJ"
+        }
+    }
+    return value
+}
+```
+
+注意：M0 可以接受纯 6 位数字补后缀，因为它仍是代码格式；但不能接受中文、英文主题词、板块词补后缀。
+
+#### 18.2.3 第二刀：新增标准代码校验
+
+修改文件：
+
+```text
+internal/llm/extractor.go
+```
+
+新增正则和校验函数：
+
+```go
+var (
+    tsCodePattern = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
+    symbolPattern = regexp.MustCompile(`^\d{6}$`)
+)
+
+func ValidateTSCode(symbol string) bool {
+    return tsCodePattern.MatchString(strings.ToUpper(strings.TrimSpace(symbol)))
+}
+```
+
+`ValidateIntent` 增加硬校验：
+
+```go
+func ValidateIntent(intent domain.PlanIntent) error {
+    if intent.Symbol == "" {
+        return fmt.Errorf("symbol is required")
+    }
+    if !ValidateTSCode(intent.Symbol) {
+        return fmt.Errorf("symbol must be a valid ts_code like 000001.SZ")
+    }
+    ...
+}
+```
+
+错误信息要稳定，测试里按这句断言即可。
+
+#### 18.2.4 第三刀：不要让非法 intent 静默丢失
+
+当前 `validatePlans` 已经会在 `ValidateIntent` 出错时返回错误，因此 M0 不建议在 LLM 层静默过滤非法 intent。原因是静默过滤会制造另一个问题：模型输出了 2 条，其中 1 条合法、1 条非法，系统只保存合法那条，看起来像“分析成功”，但实际上遗漏了不可追踪目标。
+
+M0 的推荐策略：
+
+```text
+任意 intent 非法
+-> 本次模型输出整体失败
+-> 按 llm.max_retries 重试
+-> 重试仍失败
+-> 文档分析失败
+-> 不写新的 candidate plans
+```
+
+这样最保守，但不会污染交易计划表。等 M2/M3 有 `untrackable_targets` 后，再把非法目标转为不可追踪记录，而不是让整篇分析失败。
+
+#### 18.2.5 第四刀：service 层加二次保险
+
+修改文件：
+
+```text
+internal/service/document.go
+```
+
+虽然 LLM 层已经校验，`DocumentService` 在进入 `rules.Generate` 前仍建议加二次保险，避免未来换 analyzer、测试 stub 或 Agent 输出绕过 LLM 校验。
+
+建议加一个非常小的接口或函数：
+
+```go
+type IntentValidator interface {
+    Validate(intent domain.PlanIntent) error
+}
+```
+
+M0 如果不想引入新接口，也可以先在 service 层调用 `llm.ValidateIntent(intent)`。更干净的做法是把 `ValidateTSCode` 下沉到 `internal/domain` 或新增 `internal/instrument` 的轻量校验文件，但不要在 M0 引入 DB 查询。
+
+service 层策略：
+
+```go
+for _, intent := range intents {
+    if err := llm.ValidateIntent(intent); err != nil {
+        s.logger.ErrorContext(ctx, "document service analyze invalid intent", ...)
+        _ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+        return nil, fmt.Errorf("invalid plan intent: %w", err)
+    }
+    plan := s.rules.Generate(intent, ...)
+}
+```
+
+注意：这里不要 `continue`。M0 目标是防污染，不是尽量生成部分计划。
+
+#### 18.2.6 第五刀：rules 层保持纯假设
+
+修改文件：
+
+```text
+internal/rules/engine.go
+```
+
+M0 不建议把复杂校验塞进 rules。rules 的边界仍然是“输入已经可信，我只算价格和仓位”。但可以加一个非常轻的防御日志或早期返回，避免误用：
+
+```go
+if intent.Symbol == "" {
+    // 仅作为防御，不承担主校验职责。
+}
+```
+
+推荐不在 M0 改 rules 行为，只改 tests，明确 rules 测试输入都必须是标准 `ts_code`。
+
+#### 18.2.7 测试清单和用例名
+
+修改文件：
+
+```text
+internal/llm/extractor_test.go
+internal/service/document_test.go 或现有 service 测试文件
+internal/rules/engine_test.go
+```
+
+LLM 层测试：
+
+```text
+TestNormalizeSymbolDoesNotAppendExchangeToText
+TestValidateIntentRejectsNonTSCodeSymbol
+TestValidateIntentAcceptsTSCode
+TestAnalyzeRetriesWhenModelReturnsInvalidSymbol
+```
+
+必须覆盖：
+
+| 输入 | 期望 |
+| --- | --- |
+| `CPO板块` | 不变，且 ValidateIntent 报错 |
+| `A股贵金属个股` | 不变，且 ValidateIntent 报错 |
+| `CPO板块.SZ` | ValidateIntent 报错 |
+| `新易盛` | ValidateIntent 报错，M0 不做名称解析 |
+| `300502.SZ` | 通过 |
+| `000001.sz` | normalize 后 `000001.SZ`，通过 |
+| `600519.SH` | 通过 |
+| `600519` | 如果保留纯代码补后缀，则 normalize 后 `600519.SH`，通过 |
+
+service 层测试：
+
+```text
+TestAnalyzeDocumentFailsWhenAnalyzerReturnsInvalidSymbol
+```
+
+测试目标：
+
+- 构造 analyzer stub 返回 `Symbol: "CPO板块.SZ"`。
+- 调用 `AnalyzeDocument`。
+- 断言返回错误。
+- 断言没有写入新的 `trade_candidate_plans`。
+- 断言 document 状态变成 `FAILED`，或至少不会变成 `PLANNED`。
+
+rules 层测试：
+
+```text
+TestGeneratePlanUsesValidatedTSCode
+```
+
+只需要把现有测试里的 symbol 明确写成 `300502.SZ`、`600519.SH` 这类标准格式。
+
+#### 18.2.8 是否要新增不可追踪表
+
+M0 不新增 `untrackable_targets`。原因是 M0 是止血，不是完整解析。此时如果引入不可追踪表，会牵连 migration、db_model、DAL、service 查询 API，范围会膨胀到 M2/M3。
+
+M0 对不可追踪目标的处理方式：
+
+```text
+非法 symbol
+-> 分析失败
+-> 日志记录 symbol 和错误原因
+-> 不写 trade_candidate_plans
+```
+
+等 M2/M3 实现后，再改成：
+
+```text
+非法 / 不可追踪目标
+-> 写 untrackable_targets
+-> 合法证券继续进入 candidate_plan_inputs
+```
+
+#### 18.2.9 M0 修改顺序
+
+建议按这个顺序提交，方便回滚和 review：
 
 1. 删除或废弃当前 `normalizeSymbol` 里“非 6 开头就补 `.SZ`”的逻辑。
 2. 新增 `ValidateTSCode` / `ValidateSymbol` 这类纯校验函数。
-3. `PlanIntent.symbol` 如果不是标准格式，不再进入 `rules.Generate`。
-4. LLM 输出非法标的时，当前分析可以失败，也可以落为不可追踪目标；但不能写入 `trade_candidate_plans`。
-5. 增加针对以下输入的单元测试：
+3. `ValidateIntent` 增加 `ts_code` 格式校验。
+4. `DocumentService` 在进入 `rules.Generate` 前加二次校验。
+5. `rules` 测试输入全部改成标准 `ts_code`。
+6. 增加针对以下输入的单元测试：
    - `300502.SZ`：合法。
    - `600519.SH`：合法。
    - `CPO板块`：非法。
    - `A股贵金属个股`：非法。
    - `CPO板块.SZ`：非法，因为主体不是 6 位数字。
+   - `新易盛`：非法，M0 阶段不做名称到代码解析。
 
 代码落点：
 
@@ -1004,6 +1273,20 @@ go build ./...
 ```
 
 并且用现有样例跑分析时，`trade_candidate_plans` 中不再出现非标准 `ts_code`。
+
+#### 18.2.10 M0 不做什么
+
+为了保持止血阶段足够小，M0 明确不做：
+
+- 不接 Python Agent。
+- 不建 `security_master`。
+- 不建 `untrackable_targets`。
+- 不把 `新易盛` 解析成 `300502.SZ`。
+- 不把 `旭创` 解析成 `300308.SZ`。
+- 不做 Tushare / 东方财富 MCP 查询。
+- 不让 rules 自己判断标的是否合法。
+
+这些能力从 M1 开始逐步补齐。
 
 ### 18.3 M1：证券主数据阶段
 
