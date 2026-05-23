@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"finance-sys/internal/config"
@@ -29,6 +30,7 @@ type Server struct {
 	db        *gorm.DB
 	runtime   *config.Runtime
 	documents *service.DocumentService
+	security  *service.SecurityService
 	reloader  ConfigReloader
 	logger    *slog.Logger
 }
@@ -37,6 +39,7 @@ func NewServer(
 	db *gorm.DB,
 	runtime *config.Runtime,
 	documents *service.DocumentService,
+	security *service.SecurityService,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
@@ -44,6 +47,7 @@ func NewServer(
 		db:        db,
 		runtime:   runtime,
 		documents: documents,
+		security:  security,
 		reloader:  reloader,
 		logger:    logger,
 	}
@@ -72,6 +76,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
 		r.Get("/plans", s.handleListPlans)
+		r.Get("/admin/security/lookup", s.handleLookupSecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
 	})
 	return router
@@ -257,6 +262,34 @@ func (s *Server) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logRequest(r, slog.LevelInfo, "handle reload config success")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
+}
+
+func (s *Server) handleLookupSecurity(w http.ResponseWriter, r *http.Request) {
+	if s.security == nil {
+		s.logRequest(r, slog.LevelWarn, "handle lookup security not enabled")
+		writeError(w, http.StatusNotImplemented, errors.New("security service not enabled"))
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		s.logRequest(r, slog.LevelWarn, "handle lookup security missing query")
+		writeError(w, http.StatusBadRequest, errors.New("query is required"))
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle lookup security start", "query", query)
+	result, err := s.security.Lookup(r.Context(), query)
+	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle lookup security failed", "query", query, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if result.Empty() {
+		s.logRequest(r, slog.LevelInfo, "handle lookup security not found", "query", query)
+		writeError(w, http.StatusNotFound, fmt.Errorf("security not found for query %q", query))
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle lookup security success", "query", query, "direct_count", len(result.DirectMatches), "alias_count", len(result.AliasMatches))
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {

@@ -330,18 +330,18 @@ func parseRunToModel(run domain.ParseRun) (*db_model.ParseRun, error) {
 		ParserVersion:   run.ParserVersion,
 		ErrorMessage:    run.ErrorMessage,
 		CleanedText:     run.CleanedText,
-		ChunksJson:      chunks,
-		RawMetadataJson: rawMetadata,
+		ChunksJSON:      chunks,
+		RawMetadataJSON: rawMetadata,
 	}, nil
 }
 
 func mapParseRun(row *db_model.ParseRun) (*domain.ParseRun, error) {
 	var chunks []domain.Chunk
 	rawMetadata := make(map[string]any)
-	if err := json.Unmarshal(row.ChunksJson, &chunks); err != nil {
+	if err := json.Unmarshal(row.ChunksJSON, &chunks); err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(row.RawMetadataJson, &rawMetadata); err != nil {
+	if err := json.Unmarshal(row.RawMetadataJSON, &rawMetadata); err != nil {
 		return nil, err
 	}
 	return &domain.ParseRun{
@@ -387,8 +387,8 @@ func candidatePlanToModel(plan domain.CandidatePlan) (*db_model.TradeCandidatePl
 		Confidence:     plan.Confidence,
 		Status:         string(plan.Status),
 		Thesis:         plan.Thesis,
-		RisksJson:      risks,
-		EvidenceJson:   evidence,
+		RisksJSON:      risks,
+		EvidenceJSON:   evidence,
 		PricingNote:    plan.PricingNote,
 		ConfigVersion:  plan.ConfigVersion,
 		RuleVersion:    plan.RuleVersion,
@@ -410,10 +410,10 @@ func mapPlanRows(rows []db_model.TradeCandidatePlan) ([]domain.CandidatePlan, er
 func mapPlan(row *db_model.TradeCandidatePlan) (*domain.CandidatePlan, error) {
 	var risks []string
 	var evidence []domain.EvidenceSpan
-	if err := json.Unmarshal(row.RisksJson, &risks); err != nil {
+	if err := json.Unmarshal(row.RisksJSON, &risks); err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(row.EvidenceJson, &evidence); err != nil {
+	if err := json.Unmarshal(row.EvidenceJSON, &evidence); err != nil {
 		return nil, err
 	}
 	return &domain.CandidatePlan{

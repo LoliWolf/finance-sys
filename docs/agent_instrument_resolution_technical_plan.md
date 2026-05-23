@@ -760,8 +760,13 @@ CREATE TABLE `security_aliases` (
 新增：
 
 ```text
+M3:
+internal/service/candidate_assembler.go
+internal/domain/trackable_intent.go
+internal/domain/instrument_resolution.go
+
+M4:
 internal/agentclient
-internal/instrument
 ```
 
 `DocumentService` 从：
@@ -773,6 +778,10 @@ parser -> llm.Analyze -> rules.Generate -> trade_candidate_plans
 改成：
 
 ```text
+M3:
+parser -> llm.Analyze -> CPA -> rules.Generate -> trade_candidate_plans
+
+M4 及以后:
 parser -> agentclient.ResolveDocument -> CPA -> rules.Generate -> trade_candidate_plans
 ```
 
@@ -873,42 +882,61 @@ type TrackablePlanIntent struct {
 4. 导入最小样例：
    - `300502.SZ 新易盛`
    - `300308.SZ 中际旭创`
-5. 本地 resolver 能解析名称和 alias。
+5. M1 查询服务能返回名称和别名命中结果，供 M3 候选计划装配器使用。
 
-### 15.3 M2：Agent sidecar
+### 15.3 M2：不单独实施
+
+M2 原计划做独立“标的解析器”（Instrument Resolver，标的解析器）。这部分不再单独立项，必要能力并入 M3。
+
+取消的内容：
+
+1. 不新增单独 `internal/instrument` 大包。
+2. 不新增只读管理接口 `GET /api/v1/admin/instruments/resolve`。
+3. 不新增独立 M2 集成测试。
+4. 不新增数据定义语言（DDL）迁移。
+
+保留并并入 M3 的内容：
+
+1. 本地证券主数据查询。
+2. 证券简称和别名解析。
+3. 板块、主题、行业、泛称的不可追踪判断。
+4. 只允许真实可追踪证券进入规则引擎。
+
+### 15.4 M3：本地标的解析、候选计划装配器和规则输入改造
+
+1. 在 Go 主系统内增加薄的标的解析逻辑，不拆独立大阶段。
+2. 候选计划装配器（CPA，Candidate Plan Assembler，候选计划装配器）负责把大语言模型输出的交易意图转换成可追踪交易意图。
+3. `rules.Generate` 改成只接收可追踪交易意图。
+4. `trade_candidate_plans.symbol` 明确只写入证券标准代码（ts_code）。
+5. 不可追踪目标先记录日志和分析明细，不新增持久化表。
+
+### 15.5 M4：Python 智能体旁路服务
 
 1. 新增 `agent/` 工程。
-2. FastAPI 暴露 `/v1/resolve-document`。
-3. LangGraph 实现节点。
-4. Pydantic 校验输出。
-5. Go `internal/agentclient` 调用 sidecar。
+2. 快速应用程序接口框架（FastAPI）暴露 `/v1/resolve-document`。
+3. 语言图编排框架（LangGraph）实现节点。
+4. 数据校验库（Pydantic）校验输出。
+5. Go 主系统通过智能体客户端调用旁路服务。
 
-### 15.4 M3：Skill loader
+### 15.6 M5：规则文件加载器
 
 1. 新增项目内 `SKILL.md`。
-2. 启动加载并计算 hash。
-3. 响应中返回 skill hash。
-4. 落库审计。
+2. 启动加载并计算哈希值（hash）。
+3. 响应中返回规则文件哈希值。
+4. 后续需要审计时再考虑落库。
 
-### 15.5 M4：MCP 工具
+### 15.7 M6：模型上下文协议工具
 
-1. 接 Tushare MCP。
-2. 接东方财富 MCP。
+1. 接入 Tushare 模型上下文协议（MCP，Model Context Protocol，模型上下文协议）工具。
+2. 接入东方财富模型上下文协议工具。
 3. 只做候选召回。
-4. MCP 候选必须过本地 security master。
+4. 外部工具返回的候选必须重新通过本地证券主数据校验。
 
-### 15.6 M5：CPA 切换
+### 15.8 M7：观测和回归
 
-1. `rules.Generate` 改入参。
-2. CPA 只遍历 `candidate_plan_inputs`。
-3. 不可追踪目标写库。
-4. `trade_candidate_plans.symbol` 明确存 `ts_code`。
-
-### 15.7 M6：观测和回归
-
-1. 保存 `instrument_resolution_runs`。
-2. 保存 `untrackable_targets`。
-3. 增加 API 查询解析结果。
+1. 保存标的解析过程记录。
+2. 保存不可追踪目标记录。
+3. 增加应用程序接口（API）查询解析结果。
 4. 增加回归样例。
 
 ## 16. 验收标准
@@ -916,9 +944,9 @@ type TrackablePlanIntent struct {
 1. 不再出现 `CPO板块.SZ`、`A股贵金属个股.SZ`。
 2. `新易盛` 解析为 `300502.SZ`。
 3. `旭创` 解析为 `300308.SZ` 或通过 alias 指向 `中际旭创`。
-4. 板块、主题、泛称进入 `untrackable_targets`。
-5. CPA 只接收 Agent 稳定 JSON。
-6. Agent 输出先过 Pydantic，再过 Go 校验。
+4. 板块、主题、泛称不能进入候选计划；是否落 `untrackable_targets` 放到 M7 观测阶段再决定。
+5. 候选计划装配器（CPA，Candidate Plan Assembler，候选计划装配器）只接收已经解析确认的可追踪证券。
+6. 智能体（Agent）接入后，输出先过数据校验库（Pydantic），再过 Go 主系统校验。
 7. `go test ./...` 和 `go build ./...` 通过。
 
 ## 17. 调研来源
@@ -946,12 +974,12 @@ type TrackablePlanIntent struct {
 
 ```mermaid
 flowchart LR
-    M0[M0 止血: 禁止伪代码入库] --> M1[M1 证券主数据: security_master]
-    M1 --> M2[M2 本地解析器: internal/instrument]
-    M2 --> M3[M3 CPA 改造: 只吃可追踪输入]
-    M3 --> M4[M4 Python Agent sidecar]
-    M4 --> M5[M5 Skill loader 和规则样例]
-    M5 --> M6[M6 MCP 兜底召回]
+    M0[M0 止血: 禁止伪代码入库] --> M1[M1 证券主数据: security_master 证券主数据表]
+    M1 --> M2[M2 不单独实施: 并入 M3]
+    M2 --> M3[M3 本地标的解析 + CPA 改造 + rules 输入改造]
+    M3 --> M4[M4 Python Agent sidecar Python 智能体旁路服务]
+    M4 --> M5[M5 Skill loader 规则文件加载器和规则样例]
+    M5 --> M6[M6 MCP 模型上下文协议兜底召回]
     M6 --> M7[M7 观测、回归、灰度切换]
 ```
 
@@ -960,12 +988,12 @@ flowchart LR
 | 阶段 | 目标 | 完成后的效果 |
 | --- | --- | --- |
 | M0 | 止血 | `CPO板块.SZ`、`A股贵金属个股.SZ` 这类伪代码不再进入候选计划。 |
-| M1 | 建证券主数据 | 系统有本地“证券身份证库”，能存股票、ETF、别名和上市状态。 |
-| M2 | 本地解析器 | 不依赖 Agent，也能把 `新易盛`、`旭创` 解析成真实 `ts_code`。 |
-| M3 | CPA 改造 | `rules` 只接收可追踪证券，板块/主题/泛称进入不可追踪记录。 |
-| M4 | Agent sidecar | Python Agent 能读文本、查本地库、输出稳定 JSON。 |
-| M5 | Skill loader | 标的解析规则进入项目内文件，能版本化、审计和测试。 |
-| M6 | MCP 兜底 | 本地查不到时能调用外部工具召回候选，但仍需本地校验。 |
+| M1 | 建证券主数据 | 系统有本地“证券身份证库”，能存股票、交易型开放式指数基金（ETF，Exchange Traded Fund，交易型开放式指数基金）、别名和上市状态。 |
+| M2 | 不单独实施 | 原本的本地标的解析器能力合并进 M3，避免过早拆包和新增验证接口。 |
+| M3 | 本地标的解析、候选计划装配器和规则输入改造 | `rules` 只接收可追踪证券，板块/主题/泛称不生成候选计划。 |
+| M4 | Python 智能体旁路服务 | Python 智能体能读文本、查本地库、输出稳定的 JavaScript 对象表示法（JSON）数据。 |
+| M5 | 规则文件加载器 | 标的解析规则进入项目内文件，能版本化、审计和测试。 |
+| M6 | 模型上下文协议兜底 | 本地查不到时能调用外部工具召回候选，但仍需本地校验。 |
 | M7 | 观测和灰度 | 每次解析有过程记录、失败原因、回归样例和开关。 |
 
 ### 18.2 M0：止血阶段
@@ -1107,7 +1135,7 @@ M0 的推荐策略：
 -> 不写新的 candidate plans
 ```
 
-这样最保守，但不会污染交易计划表。等 M2/M3 有 `untrackable_targets` 后，再把非法目标转为不可追踪记录，而不是让整篇分析失败。
+这样最保守，但不会污染交易计划表。M3 先在主链路里识别不可追踪目标并记录日志；如果后续确实需要查询不可追踪目标，再放到 M7 观测阶段设计 `untrackable_targets`。
 
 #### 18.2.5 第四刀：service 层加二次保险
 
@@ -1127,7 +1155,7 @@ type IntentValidator interface {
 }
 ```
 
-M0 如果不想引入新接口，也可以先在 service 层调用 `llm.ValidateIntent(intent)`。更干净的做法是把 `ValidateTSCode` 下沉到 `internal/domain` 或新增 `internal/instrument` 的轻量校验文件，但不要在 M0 引入 DB 查询。
+M0 如果不想引入新接口，也可以先在 service 层调用 `llm.ValidateIntent(intent)`。更干净的做法是把 `ValidateTSCode` 下沉到 `internal/domain` 的轻量校验文件，但不要在 M0 引入 DB 查询。
 
 service 层策略：
 
@@ -1218,7 +1246,7 @@ TestGeneratePlanUsesValidatedTSCode
 
 #### 18.2.8 是否要新增不可追踪表
 
-M0 不新增 `untrackable_targets`。原因是 M0 是止血，不是完整解析。此时如果引入不可追踪表，会牵连 migration、db_model、DAL、service 查询 API，范围会膨胀到 M2/M3。
+M0 不新增 `untrackable_targets`。原因是 M0 是止血，不是完整解析。此时如果引入不可追踪表，会牵连 migration、db_model、DAL、service 查询 API，范围会膨胀到 M3/M7。
 
 M0 对不可追踪目标的处理方式：
 
@@ -1229,12 +1257,13 @@ M0 对不可追踪目标的处理方式：
 -> 不写 trade_candidate_plans
 ```
 
-等 M2/M3 实现后，再改成：
+等 M3 主链路改造后，再改成：
 
 ```text
 非法 / 不可追踪目标
--> 写 untrackable_targets
--> 合法证券继续进入 candidate_plan_inputs
+-> 记录结构化日志或分析明细
+-> 合法证券继续进入可追踪交易意图
+-> 后续 M7 如需查询，再写 untrackable_targets
 ```
 
 #### 18.2.9 M0 修改顺序
@@ -1367,81 +1396,615 @@ go test -count=1 ./cmd/api -run TestHTTPM0AnalyzeRejectsInvalidSymbolsWithNacosB
 
 目标：把“这是不是一个真实可追踪证券”的判断从 AI 输出转移到本地数据库。
 
-新增表：
+#### 18.3.1 阶段边界和交付物
+
+M1 只建设本地证券主数据字典，不把它接进文档分析主链路。当前系统在 M0 已经阻断伪 `ts_code` 入库；M1 的目标是让后续 M3 候选计划装配器有一个确定性、可审计、可手工修正的数据源。
+
+本阶段当前已落地交付物：
+
+1. DDL 已合入 `migrations/DDL.sql`：`security_master`、`security_aliases`。
+2. 用户已手动在目标 MySQL 执行 DDL，真实 Nacos/MySQL 链路测试已验证新表可写可查。
+3. `generate.go` 已加入新表生成配置，并已执行 `go run generate.go` 同步 GORM 模型。
+4. 已生成 `internal/domain/db_model/security_master.gen.go`、`internal/domain/db_model/security_alias.gen.go`。
+5. 已新增 DAL 查询与幂等写入封装：`internal/dal/security_master.go`、`internal/dal/security_alias.go`。
+6. 已新增 M1 只读查询服务和管理接口：`internal/service/security.go`、`GET /api/v1/admin/security/lookup`。
+7. 已新增真实链路测试，覆盖 `新易盛`、`中际旭创`、`旭创`、板块/泛称无效输入和退市样例。
+
+本阶段明确不做：
+
+- 不接 Python Agent。
+- 不接 Tushare MCP / 东方财富 MCP。
+- 不做全量 Tushare 同步。
+- 不改 `rules.Generate` 入参。
+- 不让文档分析链路自动通过名称生成候选计划。
+- 不新增 `untrackable_targets`，该表放到 M7 观测阶段再按需要处理。
+- 不把 M1 lookup 接入现有文档分析主链路；M1 只提供后续 M3 候选计划装配器所需的本地主数据能力。
+
+#### 18.3.2 数据口径
+
+`security_master` 表示系统认可的可追踪证券身份，一行对应一个稳定 `ts_code`。M1 只允许 A 股股票和 ETF 进入主数据，后续如要支持指数、可转债或港美股，必须先扩展 `asset_type` 和 resolver 规则。
+
+字段口径：
+
+| 字段 | 口径 |
+| --- | --- |
+| `ts_code` | Tushare 标准代码，例如 `300502.SZ`。这是系统内证券身份主键。 |
+| `symbol` | 6 位代码主体，例如 `300502`。 |
+| `name` | 官方简称，例如 `新易盛`。 |
+| `full_name` | 官方全称，M1 可为空。 |
+| `exchange` | 交易所代码，建议使用 `SSE`、`SZSE`、`BSE`。 |
+| `market` | 当前系统市场枚举，使用 `SH`、`SZ`、`BJ`。 |
+| `asset_type` | M1 只使用 `STOCK`、`ETF`。 |
+| `list_status` | 上市状态，沿用 Tushare 口径：`L` 上市、`D` 退市、`P` 暂停、`G` 待上市。 |
+| `is_active` | 是否允许进入后续候选计划，M1 默认只有 `list_status = L` 且 `is_active = 1` 可用。 |
+| `source` | 数据来源，M1 用 `MANUAL`，后续可扩展 `TUSHARE`、`IMPORT`。 |
+| `raw_json` | 来源原始扩展字段，M1 手工数据写 `{}`。 |
+
+`security_aliases` 表示可手工维护的别名、简称、常用叫法。一条别名可以指向多只证券，因此 `QueryByNormalizedAlias` 必须返回列表，由 M3 候选计划装配器判断唯一、歧义或不可追踪。
+
+别名归一化规则在 M1 保持最小确定性：
 
 ```text
-security_master
-security_aliases
+strings.TrimSpace
+-> 合并连续空白为一个空格
+-> 英文转小写
+-> 中文保持原文
 ```
 
-实施内容：
+全角半角、繁简转换、拼音缩写、模糊匹配都放到 M3 或后续智能体阶段，不在 M1 DAL 中实现。
 
-1. 在 `migrations/` 新增建表 SQL。
-2. 执行 `go run generate.go` 同步 `internal/domain/db_model`。
-3. 在 `internal/dal/security_master.go` 增加主数据查询 DML。
-4. 在 `internal/dal/security_alias.go` 增加别名查询 DML。
-5. 新增最小初始化脚本或管理命令，至少写入：
-   - `300502.SZ / 新易盛`
-   - `300308.SZ / 中际旭创`
-   - `旭创 -> 300308.SZ`
-6. 暂时不把全量 Tushare 同步做进文档分析链路；主数据同步和文档分析要解耦。
+#### 18.3.3 DDL 设计
 
-DAL 方法建议：
+当前落地方式：
+
+```text
+migrations/DDL.sql
+```
+
+这次按仓库现状继续维护单个 DDL 文件，没有额外保留 `migrations/002_security_master.sql`。如果后续改成增量迁移体系，再把本段拆成独立 migration。
+
+DDL 核心结构：
+
+```sql
+CREATE TABLE `security_master` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `ts_code` varchar(16) COLLATE utf8mb4_general_ci NOT NULL,
+  `symbol` varchar(16) COLLATE utf8mb4_general_ci NOT NULL,
+  `name` varchar(128) COLLATE utf8mb4_general_ci NOT NULL,
+  `full_name` varchar(255) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `exchange` varchar(16) COLLATE utf8mb4_general_ci NOT NULL,
+  `market` varchar(16) COLLATE utf8mb4_general_ci NOT NULL,
+  `asset_type` varchar(32) COLLATE utf8mb4_general_ci NOT NULL,
+  `list_status` varchar(8) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'L',
+  `list_date` date DEFAULT NULL,
+  `delist_date` date DEFAULT NULL,
+  `industry` varchar(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `source` varchar(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'MANUAL',
+  `raw_json` json NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_security_master_ts_code` (`ts_code`),
+  KEY `idx_security_master_symbol` (`symbol`),
+  KEY `idx_security_master_name` (`name`),
+  KEY `idx_security_master_market_symbol` (`market`, `symbol`),
+  KEY `idx_security_master_asset_status` (`asset_type`, `list_status`, `is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `security_aliases` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `security_master_id` bigint NOT NULL,
+  `alias` varchar(128) COLLATE utf8mb4_general_ci NOT NULL,
+  `normalized_alias` varchar(128) COLLATE utf8mb4_general_ci NOT NULL,
+  `alias_type` varchar(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'MANUAL',
+  `source` varchar(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'MANUAL',
+  `confidence` double NOT NULL DEFAULT '1',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_security_aliases_alias_master_type` (`normalized_alias`, `security_master_id`, `alias_type`),
+  KEY `idx_security_aliases_normalized_active` (`normalized_alias`, `is_active`),
+  KEY `idx_security_aliases_master` (`security_master_id`),
+  CONSTRAINT `fk_security_aliases_master` FOREIGN KEY (`security_master_id`) REFERENCES `security_master` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+```
+
+设计取舍：
+
+- `security_master.ts_code` 使用唯一键，避免同一证券身份重复。
+- `security_aliases.normalized_alias` 不单独唯一，因为一个别名可能对应多个证券，必须把歧义暴露给 resolver。
+- `raw_json` 保留原始来源字段，后续 Tushare 导入时可追溯，但业务查询不能依赖第三方原始字段。
+- M1 不建外键到 `trade_candidate_plans`，因为主数据只提供解析能力，不承担交易计划生命周期。
+
+#### 18.3.4 最小种子数据
+
+M1 至少准备以下数据，用来覆盖当前问题样例：
+
+```sql
+INSERT INTO `security_master`
+  (`ts_code`, `symbol`, `name`, `full_name`, `exchange`, `market`, `asset_type`, `list_status`, `industry`, `is_active`, `source`, `raw_json`)
+VALUES
+  ('300502.SZ', '300502', '新易盛', '', 'SZSE', 'SZ', 'STOCK', 'L', '', 1, 'MANUAL', JSON_OBJECT()),
+  ('300308.SZ', '300308', '中际旭创', '', 'SZSE', 'SZ', 'STOCK', 'L', '', 1, 'MANUAL', JSON_OBJECT())
+ON DUPLICATE KEY UPDATE
+  `symbol` = VALUES(`symbol`),
+  `name` = VALUES(`name`),
+  `full_name` = VALUES(`full_name`),
+  `exchange` = VALUES(`exchange`),
+  `market` = VALUES(`market`),
+  `asset_type` = VALUES(`asset_type`),
+  `list_status` = VALUES(`list_status`),
+  `industry` = VALUES(`industry`),
+  `is_active` = VALUES(`is_active`),
+  `source` = VALUES(`source`),
+  `raw_json` = VALUES(`raw_json`),
+  `updated_at` = CURRENT_TIMESTAMP;
+
+INSERT INTO `security_aliases`
+  (`security_master_id`, `alias`, `normalized_alias`, `alias_type`, `source`, `confidence`, `is_active`)
+SELECT `id`, '旭创', '旭创', 'COMMON_NAME', 'MANUAL', 1, 1
+FROM `security_master`
+WHERE `ts_code` = '300308.SZ'
+ON DUPLICATE KEY UPDATE
+  `alias` = VALUES(`alias`),
+  `source` = VALUES(`source`),
+  `confidence` = VALUES(`confidence`),
+  `is_active` = VALUES(`is_active`),
+  `updated_at` = CURRENT_TIMESTAMP;
+```
+
+种子数据不是完整证券库，只用于验证主数据和别名查询链路。全量导入或 Tushare 同步放到后续独立任务，不能塞进文档分析事务。
+
+#### 18.3.5 生成模型和 generate.go 改造
+
+DDL 执行后已继续改造 `generate.go`。当前生成策略有三个关键点：
+
+- 新表加入 `g.ApplyBasic`，输出模型仍放在 `internal/domain/db_model`。
+- `gorm.io/gen` query 代码输出到临时目录，执行结束清理，避免重新引入项目不再维护的 query 层。
+- 复数表名通过 `WithFileNameStrategy` 映射到现有单数文件名风格，例如 `security_aliases -> security_alias`。
+
+核心配置：
 
 ```go
-SecurityMasters.QueryByTSCode(ctx, db, param)
-SecurityMasters.QueryBySymbol(ctx, db, param)
-SecurityMasters.QueryActiveByName(ctx, db, param)
-SecurityAliases.QueryByNormalizedAlias(ctx, db, param)
+g.GenerateModelAs("security_master", "SecurityMaster",
+    gen.FieldRename("ts_code", "TSCode"),
+    gen.FieldRename("raw_json", "RawJSON"),
+    gen.FieldType("list_date", "*time.Time"),
+    gen.FieldType("delist_date", "*time.Time"),
+    gen.FieldType("raw_json", "[]byte"),
+)
+g.GenerateModelAs("security_aliases", "SecurityAlias",
+    gen.FieldRename("alias", "AliasName"),
+)
 ```
 
-阶段性验收：
+执行：
 
-- 能通过名称查到 `新易盛 -> 300502.SZ`。
-- 能通过别名查到 `旭创 -> 中际旭创 -> 300308.SZ`。
-- `CPO板块` 查不到证券主数据。
-- `A股贵金属个股` 查不到证券主数据。
+```powershell
+$env:GOTOOLCHAIN='local'
+go run generate.go
+```
 
-### 18.4 M2：本地 Instrument Resolver 阶段
-
-目标：在 Go 侧先建一个确定性标的解析器，即使 Python Agent 还没接入，也能完成最小可用解析。
-
-新增目录：
+已生成：
 
 ```text
-internal/instrument/
-  resolver.go
-  normalize.go
-  types.go
-  resolver_test.go
+internal/domain/db_model/security_master.gen.go
+internal/domain/db_model/security_alias.gen.go
 ```
 
-职责划分：
+当前生成字段名以 `RawJSON`、`AliasName` 为准。由于这次生成也把既有 JSON 字段统一成 `RawJSON`、`ChunksJSON`、`RawMetadataJSON`、`RisksJSON`、`EvidenceJSON`，同步更新了引用这些字段的代码。
 
-- `normalize.go`：处理名称归一化，例如去空格、全角半角、常见标点。
-- `types.go`：定义 `ResolvedInstrument`、`UntrackableTarget`、`ResolutionCandidate`。
-- `resolver.go`：按 `ts_code -> symbol -> name -> alias -> fuzzy candidates` 的顺序解析。
-- `resolver_test.go`：覆盖当前已知问题样例。
+#### 18.3.6 DAL 设计
 
-解析策略：
+已新增文件：
 
 ```text
-输入 raw_name
--> 如果是标准 ts_code，查 security_master
--> 如果是 6 位 symbol，查 security_master
--> 如果是证券简称，查 security_master.name
--> 如果是别名，查 security_aliases
--> 多候选则返回 AMBIGUOUS
--> 板块/主题/泛称则返回 UNTRACKABLE
+internal/dal/security_master.go
+internal/dal/security_alias.go
 ```
 
-这一步先不要调用外部工具，不要引入 LangGraph，不要把问题做大。目标是先把本地确定性规则跑通。
+单例命名：
 
-### 18.5 M3：CPA 和 rules 输入改造阶段
+```go
+var SecurityMasters = &SecurityMasterDML{}
+var SecurityAliases = &SecurityAliasDML{}
+```
 
-目标：让交易计划生成链路只接收“已经验明身份”的证券。
+`security_master` 已实现方法：
 
-新增或调整结构：
+```go
+func (*SecurityMasterDML) Create(ctx context.Context, db *gorm.DB, model *db_model.SecurityMaster) error
+func (*SecurityMasterDML) UpsertByTSCode(ctx context.Context, db *gorm.DB, model *db_model.SecurityMaster) error
+func (*SecurityMasterDML) QueryByTSCode(ctx context.Context, db *gorm.DB, tsCode string) (*db_model.SecurityMaster, error)
+func (*SecurityMasterDML) QueryBySymbol(ctx context.Context, db *gorm.DB, symbol string) ([]db_model.SecurityMaster, error)
+func (*SecurityMasterDML) QueryActiveByName(ctx context.Context, db *gorm.DB, name string) ([]db_model.SecurityMaster, error)
+func (*SecurityMasterDML) QueryByParam(ctx context.Context, db *gorm.DB, param QueryParam) ([]db_model.SecurityMaster, error)
+```
+
+查询口径：
+
+- `QueryByTSCode` 精确返回一条；不存在返回 `dal.ErrNotFound`。
+- `QueryBySymbol` 返回列表，调用方不能假设 6 位代码天然唯一。
+- `QueryActiveByName` 只查 `name = ? AND list_status = 'L' AND is_active = 1`。
+- DAL 只做精确查询，不做模糊匹配、不做 alias fallback、不判断板块主题。
+
+`security_aliases` 已实现方法：
+
+```go
+func (*SecurityAliasDML) Create(ctx context.Context, db *gorm.DB, model *db_model.SecurityAlias) error
+func (*SecurityAliasDML) UpsertByAliasAndSecurityID(ctx context.Context, db *gorm.DB, model *db_model.SecurityAlias) error
+func (*SecurityAliasDML) QueryByNormalizedAlias(ctx context.Context, db *gorm.DB, normalizedAlias string) ([]db_model.SecurityAlias, error)
+func (*SecurityAliasDML) QueryActiveByNormalizedAlias(ctx context.Context, db *gorm.DB, normalizedAlias string) ([]db_model.SecurityAlias, error)
+func (*SecurityAliasDML) QueryBySecurityMasterID(ctx context.Context, db *gorm.DB, securityMasterID int64) ([]db_model.SecurityAlias, error)
+```
+
+`QueryActiveByNormalizedAlias` 只过滤 alias 自身 `is_active = 1`。是否允许进入后续结果由 service/resolver 再读取 `security_master` 后统一判断，当前 M1 lookup 只返回 `security_master.list_status = 'L'` 且 `security_master.is_active = 1` 的结果。
+
+M1 同时新增 `SecurityService.Lookup` 作为后续 resolver 的最小可复用入口，当前查找顺序是：
+
+```text
+标准 ts_code -> security_master.ts_code
+6 位 symbol -> security_master.symbol
+证券简称 -> security_master.name
+归一化别名 -> security_aliases.normalized_alias -> security_master
+```
+
+当前 HTTP 只读验证入口：
+
+```text
+GET /api/v1/admin/security/lookup?query=新易盛
+GET /api/v1/admin/security/lookup?query=旭创
+```
+
+接口返回 `domain.SecurityLookupResult`；无匹配返回 `404`，缺少 query 返回 `400`。该接口不调用 LLM、不写交易计划、不接文档分析主链路。
+
+#### 18.3.7 初始化入口
+
+M1 当前不新增独立 seed 命令，避免在主链路之外引入额外维护面。最小验证数据通过 SQL 或测试内 DAL upsert 写入。后续如果需要批量初始化，再新增：
+
+```text
+cmd/seed-security-master/main.go
+```
+
+输入可以先固定为最小样例或读取本地 JSON/CSV。命令只负责写 `security_master` 和 `security_aliases`，不调用 LLM、不调用文档分析、不调用 rules。
+
+当前真实链路测试中的 seed 方式是通过 DAL 幂等写入：
+
+```text
+dal.SecurityMasters.UpsertByTSCode
+dal.SecurityAliases.UpsertByAliasAndSecurityID
+```
+
+这样可以同时验证 DML 封装和查询接口，不需要为 M1 单独引入运行时依赖。
+
+最小 JSON 结构建议：
+
+```json
+{
+  "securities": [
+    {
+      "ts_code": "300502.SZ",
+      "symbol": "300502",
+      "name": "新易盛",
+      "exchange": "SZSE",
+      "market": "SZ",
+      "asset_type": "STOCK",
+      "list_status": "L",
+      "aliases": []
+    },
+    {
+      "ts_code": "300308.SZ",
+      "symbol": "300308",
+      "name": "中际旭创",
+      "exchange": "SZSE",
+      "market": "SZ",
+      "asset_type": "STOCK",
+      "list_status": "L",
+      "aliases": ["旭创"]
+    }
+  ]
+}
+```
+
+#### 18.3.8 测试和验收
+
+M1 测试当前按真实服务链路覆盖，不直接绕过 HTTP handler：
+
+```text
+cmd/api/m1_security_lookup_integration_test.go
+TestHTTPM1SecurityLookupWithNacosBootstrap
+```
+
+测试启动方式：
+
+- 默认 `go test ./...` 编译该测试但跳过真实数据库写入。
+- 显式设置 `FINANCE_SYS_M1_NACOS_INTEGRATION=1` 和 `FINANCE_SYS_M1_NACOS_DML_ACK=write-real-db` 后才执行。
+- 测试从 `bootstrap_go122.env.example` 注入 Nacos bootstrap 环境变量，调用 `bootstrap.Build` 初始化配置、DB、service 和 HTTP server。
+- 测试先通过 DAL 幂等写入最小数据，再通过 HTTP 调用 `/api/v1/admin/security/lookup` 验证结果。
+
+覆盖查询：
+
+| 输入 | 期望 |
+| --- | --- |
+| `300502.SZ` | HTTP 200，direct match 返回 `300502.SZ / 新易盛`。 |
+| `新易盛` | HTTP 200，direct match 返回 `300502.SZ / 新易盛`。 |
+| `旭创` | HTTP 200，alias match 返回 `300308.SZ / 中际旭创`。 |
+| 空 query | HTTP 400。 |
+| `CPO板块` | HTTP 404。 |
+| `A股贵金属个股` | HTTP 404。 |
+| `M1退市样例`，`list_status = D` 且 `is_active = 0` | HTTP 404，不进入 active 查询结果。 |
+
+默认测试和构建：
+
+```powershell
+$env:GOTOOLCHAIN='local'
+go test ./...
+go build ./...
+```
+
+真实 Nacos/MySQL/HTTP 集成测试：
+
+```powershell
+$env:FINANCE_SYS_M1_NACOS_INTEGRATION='1'
+$env:FINANCE_SYS_M1_NACOS_DML_ACK='write-real-db'
+$env:GOTOOLCHAIN='local'
+go test -count=1 ./cmd/api -run TestHTTPM1SecurityLookupWithNacosBootstrap -v
+```
+
+2026-05-23 验收结论：
+
+- `go test -count=1 ./cmd/api -run TestHTTPM1SecurityLookupWithNacosBootstrap -v` 通过；日志确认 `config_source:"nacos"`、DB 连接成功、HTTP 正反例符合预期。
+- `go test ./...` 通过。
+- `go build ./...` 通过。
+
+#### 18.3.9 M1 当前实现清单和下一停点
+
+当前 M1 已完成：
+
+```text
+1. DDL 已合入 migrations/DDL.sql。
+2. 用户已手动执行 DDL。
+3. 已执行 go run generate.go，同步 security_master / security_aliases GORM 模型。
+4. 已新增 db_model、domain DTO、DAL、SecurityService。
+5. 已把 SecurityService 装配进 bootstrap.App 和 HTTP server。
+6. 已新增 GET /api/v1/admin/security/lookup。
+7. 已新增并跑通真实 Nacos/MySQL/HTTP 集成测试。
+8. 已完成 gofmt、go test ./...、go build ./...。
+```
+
+当前停点不再是数据定义语言（DDL），而是 M3 主链路改造之前：
+
+- M1 仍然不接入文档分析主链路。
+- M1 lookup 可用于人工验证主数据和别名，但不会生成 `CandidatePlan`。
+- 下一步直接进入 M3，把 `SecurityService` 查询能力并入候选计划装配器。
+- M3 第一版不新增表结构；如果实现中发现必须扩展表结构，必须先补数据定义语言并等待用户手动执行。
+
+### 18.4 M2：不单独实施，能力并入 M3
+
+结论：M2 不再作为独立工程阶段。原计划里的“标的解析器”（Instrument Resolver，标的解析器）有价值，但不值得单独新增一个目录、一个只读管理接口和一套独立集成测试。
+
+保留的能力并入 M3：
+
+1. 把 `新易盛`、`旭创` 这类自然语言标的解析为证券标准代码（ts_code）。
+2. 把 `CPO板块`、`A股贵金属个股` 这类表达识别为不可追踪目标。
+3. 识别多候选歧义，不静默选择第一条。
+4. 只允许股票和交易型开放式指数基金（ETF，Exchange Traded Fund，交易型开放式指数基金）进入候选计划。
+
+取消的独立交付物：
+
+1. 不新增 `internal/instrument` 大包。
+2. 不新增 `GET /api/v1/admin/instruments/resolve` 只读接口。
+3. 不新增 `cmd/api/m2_instrument_resolver_integration_test.go`。
+4. 不新增 M2 专属环境变量。
+5. 不新增数据定义语言（DDL，Data Definition Language，数据定义语言）迁移。
+
+合并原因：
+
+1. M1 已经提供证券主数据表（security_master）和证券别名表（security_aliases），M3 可以直接复用现有服务。
+2. 独立标的解析器如果暂时不接主链路，只能作为验证工具，投入产出比不高。
+3. 真正的业务闭环发生在 M3：解析后的标的必须进入候选计划装配器，再进入规则引擎。
+4. 减少目录和接口数量，降低后续维护成本。
+
+### 18.5 M3：本地标的解析、候选计划装配器和规则输入改造阶段
+
+目标：M3 把“模型抽出来的交易意图”变成“规则引擎可以安全计算的可追踪交易意图”。这一步是主链路改造，不是旁路验证工具。
+
+#### 18.5.1 M3 概念解释
+
+M3 是第三个里程碑阶段。它解决的是一个核心问题：大语言模型可以从文章里读出“推荐了什么”，但它读出的内容可能是股票、交易型开放式指数基金、板块、主题、行业、泛称或写错的简称。规则引擎不能直接消费这些原始文本，必须先经过本地证券主数据确认。
+
+M3 的完整职责是三件事：
+
+1. 本地标的解析：把原始标的文本解析成唯一证券，或者明确判断为不可追踪、存在歧义、未找到。
+2. 候选计划装配器：把可追踪证券和原始交易意图合并成规则引擎输入。
+3. 规则输入改造：让 `rules.Generate` 只接收可追踪交易意图，不再接收原始大语言模型输出。
+
+关键英文词汇翻译：
+
+| 英文词汇 | 中文翻译 | 本方案里的含义 |
+| --- | --- | --- |
+| M3 | 第三个里程碑阶段 | 本地标的解析、候选计划装配器和规则输入改造合并后的阶段。 |
+| LLM | 大语言模型 | 当前 `internal/llm` 调用的模型，只负责抽取交易意图。 |
+| PlanIntent | 交易意图 | 大语言模型从文本里抽出的原始推荐表达。 |
+| Instrument | 标的 | 文章中出现的股票、基金、板块、主题、行业或泛称。 |
+| Instrument Resolver | 标的解析器 | 把原始标的文本解析成证券身份或不可追踪结论的逻辑；M3 内联实现，不单独成阶段。 |
+| Security | 证券 | 可以在交易市场追踪的股票或交易型开放式指数基金。 |
+| security_master | 证券主数据表 | M1 建好的本地证券身份证库。 |
+| security_aliases | 证券别名表 | M1 建好的简称、俗称、别名映射表。 |
+| ts_code | 证券标准代码 | 证券唯一身份，例如 `300502.SZ`。 |
+| symbol | 字段名或代码主体 | 在旧交易意图里暂时承载原始标的文本；在主数据里表示 6 位代码主体。 |
+| alias | 别名 | 用户或研报常用的非官方简称，例如 `旭创`。 |
+| CPA | 候选计划装配器 | Candidate Plan Assembler 的缩写，负责把可追踪证券装配成规则输入。 |
+| Candidate Plan Assembler | 候选计划装配器 | CPA 的完整英文名称。 |
+| TrackablePlanIntent | 可追踪交易意图 | 已经确认有真实证券标准代码的交易意图。 |
+| CandidatePlan | 候选计划 | 规则引擎计算出的候选交易计划。 |
+| rules | 规则引擎 | `internal/rules`，只负责确定性生成入场价、止损价、止盈价和仓位。 |
+| JSON | JavaScript 对象表示法 | Go 主系统、智能体和接口之间传输结构化数据的格式。 |
+| API | 应用程序接口 | 系统对外或模块间调用的接口。 |
+| HTTP | 超文本传输协议 | 当前管理接口和业务接口使用的网络协议。 |
+| DDL | 数据定义语言 | 创建或修改数据库表结构的语句。 |
+| MCP | 模型上下文协议 | 后续调用外部工具的协议，M3 不接入。 |
+| Agent | 智能体 | 后续 Python 旁路服务，M3 不依赖它。 |
+| sidecar | 旁路服务 | 和 Go 主系统并行运行的外部服务。 |
+| status | 状态 | 标的解析结果的分类。 |
+| reason | 原因 | 标的解析成功或失败的可读原因。 |
+
+#### 18.5.2 为什么 M3 要合并原 M2 能力
+
+原 M2 如果单独做，只能回答“这个词能不能解析成证券”。但业务真正需要的是“能不能安全生成候选计划”。这两个问题放在一起做更直接：
+
+```text
+交易意图
+-> 本地证券主数据确认身份
+-> 候选计划装配器生成可追踪交易意图
+-> 规则引擎生成候选计划
+```
+
+合并后的好处：
+
+1. 少一个阶段，少一个接口，少一套环境变量。
+2. 标的解析结果马上被主链路使用，不做只读验证工具。
+3. 测试直接覆盖真实业务路径，而不是覆盖一个暂时独立的查询接口。
+4. 发现需要持久化不可追踪目标时再补数据定义语言，不提前加表。
+
+#### 18.5.3 阶段边界
+
+M3 做：
+
+1. 在 Go 主系统内实现薄的本地标的解析逻辑。
+2. 复用 M1 的 `SecurityService.Lookup`。
+3. 增加候选计划装配器逻辑。
+4. 修改 `DocumentService.AnalyzeDocument` 的主链路。
+5. 修改 `rules.Generate` 入参为可追踪交易意图。
+6. 调整大语言模型输出校验，使原始标的文本可以进入 M3，但不能直接进入规则引擎。
+7. 增加单元测试和真实链路集成测试。
+
+M3 不做：
+
+1. 不接 Python 智能体。
+2. 不接模型上下文协议工具。
+3. 不新增独立标的解析应用程序接口。
+4. 不新增 `internal/instrument` 大包。
+5. 不新增数据定义语言迁移。
+6. 不把板块、主题、行业、泛称写入候选计划。
+7. 不做模糊纠错、拼音缩写、向量检索或大语言模型消歧。
+
+#### 18.5.4 主链路变化
+
+M3 前的安全链路是：
+
+```text
+文档解析
+-> 大语言模型抽取交易意图
+-> 交易意图必须已经是证券标准代码
+-> 规则引擎生成候选计划
+```
+
+这个链路安全，但不够有用，因为 `新易盛`、`旭创` 这种自然语言名称会在大语言模型校验阶段失败。
+
+M3 后的链路改成：
+
+```text
+文档解析
+-> 大语言模型抽取交易意图
+-> 候选计划装配器解析标的
+   -> 可追踪证券：生成可追踪交易意图
+   -> 不可追踪目标：记录原因，不生成候选计划
+   -> 存在歧义或未找到：本次分析失败，避免静默漏掉真实证券
+-> 规则引擎只接收可追踪交易意图
+-> 写入候选计划
+```
+
+核心原则：大语言模型可以输出原始标的文本，但原始标的文本永远不能越过候选计划装配器直接进入规则引擎。
+
+#### 18.5.5 建议文件改动
+
+M3 不新增独立 `internal/instrument` 目录，优先把逻辑放在现有边界里：
+
+```text
+internal/domain/instrument_resolution.go
+internal/domain/trackable_intent.go
+internal/service/candidate_assembler.go
+internal/service/document.go
+internal/rules/engine.go
+internal/llm/extractor.go
+```
+
+职责说明：
+
+| 文件 | 职责 |
+| --- | --- |
+| `internal/domain/instrument_resolution.go` | 定义标的解析结果、状态、候选和不可追踪原因。 |
+| `internal/domain/trackable_intent.go` | 定义可追踪交易意图，作为规则引擎唯一输入。 |
+| `internal/service/candidate_assembler.go` | 实现候选计划装配器，调用证券查询、执行标的解析、输出可追踪交易意图。 |
+| `internal/service/document.go` | 把旧的“交易意图直接进规则引擎”改成“交易意图先进候选计划装配器”。 |
+| `internal/rules/engine.go` | 把规则生成入口改为接收可追踪交易意图。 |
+| `internal/llm/extractor.go` | 调整交易意图校验，允许 `symbol` 暂时承载原始标的文本。 |
+
+如果实现时发现 `candidate_assembler.go` 过大，再拆成同包私有文件，例如 `candidate_assembler_normalize.go`、`candidate_assembler_classify.go`。仍然不需要先创建独立大包。
+
+#### 18.5.6 标的解析状态
+
+M3 使用四类解析状态：
+
+| 状态值 | 中文含义 | 处理方式 |
+| --- | --- | --- |
+| `RESOLVED` | 已解析 | 唯一命中有效证券，可以进入候选计划装配器。 |
+| `AMBIGUOUS` | 存在歧义 | 命中多只有效证券，不自动选择，本次分析失败。 |
+| `UNTRACKABLE` | 不可追踪 | 板块、主题、行业、泛称、指数等，不生成候选计划。 |
+| `NOT_FOUND` | 未找到 | 本地证券主数据和别名都查不到，本次分析失败。 |
+
+M3 只允许以下资产进入 `RESOLVED`：
+
+1. 股票（STOCK，股票）。
+2. 交易型开放式指数基金（ETF，Exchange Traded Fund，交易型开放式指数基金）。
+
+即使未来主数据表里出现指数、行业、板块，也不能在 M3 作为候选计划标的放行。
+
+#### 18.5.7 标的解析规则
+
+解析顺序保持确定性：
+
+```text
+原始标的文本
+-> 去前后空格、统一大小写、合并连续空白
+-> 如果是证券标准代码，查证券主数据表
+-> 如果是 6 位代码主体，查证券主数据表
+-> 如果明显是板块、主题、行业、泛称，标记不可追踪
+-> 按证券简称查证券主数据表
+-> 按别名查证券别名表
+-> 如果唯一命中有效股票或交易型开放式指数基金，标记已解析
+-> 如果命中多个有效证券，标记存在歧义
+-> 如果查不到，标记未找到
+```
+
+不可追踪规则只做高置信判断：
+
+| 类型 | 规则示例 | 状态 |
+| --- | --- | --- |
+| 板块 | `CPO板块`、`半导体板块` | 不可追踪 |
+| 主题 | `人工智能主线`、`算力赛道` | 不可追踪 |
+| 行业 | `贵金属行业`、`光模块产业链` | 不可追踪 |
+| 泛称 | `A股贵金属个股`、`相关标的`、`龙头股` | 不可追踪 |
+| 指数 | `沪深300指数`、`中证红利指数` | 不可追踪 |
+
+M3 不做：
+
+1. 不把 `新易胜` 模糊改成 `新易盛`。
+2. 不把 `zjxc` 猜成 `中际旭创`。
+3. 不根据上下文猜测交易所。
+4. 不调用大语言模型做二次判断。
+
+#### 18.5.8 候选计划装配器行为
+
+候选计划装配器输入是大语言模型返回的交易意图列表，输出分为两类：
+
+1. 可追踪交易意图：进入规则引擎。
+2. 被拒绝交易意图：记录原因，不进入规则引擎。
+
+建议结构：
 
 ```go
 type TrackablePlanIntent struct {
@@ -1449,41 +2012,165 @@ type TrackablePlanIntent struct {
     TSCode string
     Symbol string
     SecurityName string
-    AssetType AssetType
-    Market Market
-    Direction TradeDirection
+    AssetType string
+    Market string
+    Direction domain.TradeDirection
     ReferencePrice float64
-    ReferencePriceNote ReferencePriceNote
     Thesis string
-    Evidence []EvidenceSpan
-    Risks []string
     Confidence float64
+}
+
+type RejectedPlanIntent struct {
+    SourceIntentID string
+    RawSymbol string
+    Status string
+    Reason string
 }
 ```
 
-实施内容：
+字段中文解释：
 
-1. 在 `internal/service` 增加 CPA 装配逻辑。
-2. CPA 输入可以先来自旧 LLM `PlanIntent + internal/instrument`，后续再切 Agent 输出。
-3. `rules.Generate` 入参改为 `TrackablePlanIntent`。
-4. `trade_candidate_plans.symbol` 写入标准 `ts_code` 或新增 `ts_code` 字段后写入 `ts_code`。
-5. 不可追踪目标写入 `untrackable_targets`，不要丢弃。
+| 字段 | 中文含义 |
+| --- | --- |
+| `SourceIntentID` | 原始交易意图编号。 |
+| `TSCode` | 证券标准代码。 |
+| `Symbol` | 6 位代码主体。 |
+| `SecurityName` | 证券简称。 |
+| `AssetType` | 资产类型。 |
+| `Market` | 市场。 |
+| `Direction` | 交易方向。 |
+| `ReferencePrice` | 参考价格。 |
+| `Thesis` | 交易理由。 |
+| `Confidence` | 置信度。 |
+| `RawSymbol` | 大语言模型输出的原始标的文本。 |
+| `Status` | 解析状态。 |
+| `Reason` | 拒绝原因。 |
 
-关键约束：
+处理策略：
 
-- CPA 不调用 LLM。
-- CPA 不调用 MCP。
-- CPA 不猜测证券代码。
-- CPA 不修复非法 symbol。
-- CPA 只接收 resolver 或 Agent 已经确认的证券。
+1. 有至少一条可追踪交易意图时，只为可追踪交易意图生成候选计划。
+2. 不可追踪交易意图写结构化日志，不进入候选计划。
+3. 出现存在歧义或未找到时，默认让本次分析失败，避免看起来成功但漏掉真实证券。
+4. 如果全部交易意图都是不可追踪目标，本次分析失败，返回“没有可追踪证券”。
 
-阶段性验收：
+#### 18.5.9 大语言模型校验调整
 
-- `CPO板块` 会生成不可追踪记录，不生成候选交易计划。
-- `新易盛` 能生成候选交易计划。
-- `旭创` 通过 alias 能生成 `300308.SZ` 对应候选交易计划。
+M0 阶段为了止血，要求 `symbol` 必须是证券标准代码。M3 实施时需要调整这个门禁：
 
-### 18.6 M4：Python Agent sidecar 阶段
+1. 大语言模型层继续校验 `symbol` 非空。
+2. 大语言模型层继续校验方向、参考价格、交易理由、置信度。
+3. 大语言模型层不再要求 `symbol` 必须已经是证券标准代码。
+4. `DocumentService` 必须保证原始交易意图只能进入候选计划装配器，不能直接进入规则引擎。
+5. 单元测试必须覆盖“原始中文标的不能直接调用规则引擎”。
+
+这样不会回到 M0 前的污染问题，因为真正的安全门从大语言模型校验层移动到了候选计划装配器和规则引擎输入类型。
+
+#### 18.5.10 规则引擎输入改造
+
+规则引擎入口从：
+
+```text
+rules.Generate(PlanIntent)
+```
+
+改成：
+
+```text
+rules.Generate(TrackablePlanIntent)
+```
+
+改造后的边界：
+
+1. 规则引擎不查询数据库。
+2. 规则引擎不调用大语言模型。
+3. 规则引擎不判断标的是否真实。
+4. 规则引擎只相信可追踪交易意图。
+5. 同样输入必须得到同样候选计划。
+
+候选计划入库要求：
+
+1. `trade_candidate_plans.symbol` 写证券标准代码，例如 `300502.SZ`。
+2. 不再写 `CPO板块.SZ` 这类伪代码。
+3. 如果后续要单独新增 `ts_code` 字段，必须先补数据定义语言并等待用户手动执行。
+4. M3 第一版不强制新增字段，优先复用现有 `symbol` 字段保存证券标准代码。
+
+#### 18.5.11 测试方案
+
+单元测试：
+
+```text
+internal/service/candidate_assembler_test.go
+internal/rules/engine_test.go
+internal/llm/extractor_test.go
+```
+
+建议用例：
+
+| 用例 | 输入 | 期望 |
+| --- | --- | --- |
+| 标准代码 | `300502.SZ` | 解析为 `新易盛`，生成候选计划。 |
+| 官方简称 | `新易盛` | 解析为 `300502.SZ`，生成候选计划。 |
+| 别名 | `旭创` | 通过别名解析为 `300308.SZ`，生成候选计划。 |
+| 板块 | `CPO板块` | 标记不可追踪，不生成候选计划。 |
+| 泛称 | `A股贵金属个股` | 标记不可追踪，不生成候选计划。 |
+| 多候选别名 | 同一别名指向多只有效证券 | 本次分析失败，返回存在歧义。 |
+| 查不到 | `不存在的股票简称` | 本次分析失败，返回未找到。 |
+| 规则防线 | 原始 `PlanIntent` | 不能直接传给规则引擎。 |
+
+真实链路集成测试建议：
+
+```text
+cmd/api/m3_candidate_assembler_integration_test.go
+TestHTTPM3AnalyzeDocumentResolvesSecurityWithNacosBootstrap
+```
+
+测试要求：
+
+1. 从 Nacos 配置链路初始化 Go 主系统。
+2. 通过 DAL 幂等写入最小证券主数据和别名。
+3. 使用测试替身大语言模型返回 `新易盛`、`旭创`、`CPO板块` 等交易意图。
+4. 只通过现有文档分析接口触发主链路，不新增 M2 查询接口。
+5. 验证候选计划只包含 `300502.SZ`、`300308.SZ` 这类证券标准代码。
+6. 默认 `go test ./...` 不写真实 MySQL；真实链路测试必须通过显式环境变量开启。
+
+默认门禁：
+
+```powershell
+$env:GOTOOLCHAIN='local'
+go test ./...
+go build ./...
+```
+
+#### 18.5.12 实施顺序
+
+推荐顺序：
+
+```text
+1. 新增 domain 层的标的解析结果和可追踪交易意图结构。
+2. 新增 service 层候选计划装配器，先覆盖纯单元测试。
+3. 复用 SecurityService.Lookup，完成标准代码、6 位代码、简称、别名解析。
+4. 增加不可追踪分类和歧义处理。
+5. 调整 llm.ValidateIntent，使 symbol 可以承载原始标的文本。
+6. 修改 rules.Generate 入参为 TrackablePlanIntent。
+7. 修改 DocumentService.AnalyzeDocument，把 PlanIntent 先交给候选计划装配器。
+8. 增加主链路集成测试。
+9. 运行 gofmt、go test ./...、go build ./...。
+10. 更新 M3 实现状态和验收结论。
+```
+
+#### 18.5.13 数据定义语言边界
+
+M3 第一版不需要新增数据定义语言。
+
+不落库的内容：
+
+1. 标的解析过程。
+2. 不可追踪目标。
+3. 歧义候选列表。
+
+这些内容先通过结构化日志和测试断言覆盖。后续如果要在页面或接口里查询解析过程，再放到 M7 观测阶段设计 `instrument_resolution_runs`、`untrackable_targets` 等表。届时必须先更新迁移脚本，等待用户手动执行数据定义语言，再继续生成模型和改代码。
+
+### 18.6 M4：Python 智能体旁路服务阶段
 
 目标：在 Go 主系统旁边启动一个 Python 服务，负责更复杂的抽取、工具调用、消歧和稳定 JSON 输出。
 
@@ -1573,7 +2260,7 @@ internal/agentclient/
 - 返回 schema version 不匹配则失败。
 - Agent 返回 `FAILED` 时，当前分析失败或只落解析失败记录，不进入 rules。
 
-### 18.7 M5：项目内 Skill loader 阶段
+### 18.7 M5：项目内规则文件加载器阶段
 
 目标：把标的解析规则从“写在 prompt 里的散文”变成项目内可版本化文件。
 
@@ -1601,7 +2288,7 @@ loader 行为：
 
 这样后续如果规则变了，可以追溯某一次解析使用的是哪版规则。
 
-### 18.8 M6：MCP 兜底阶段
+### 18.8 M6：模型上下文协议兜底阶段
 
 目标：本地解析失败或歧义时，允许 Agent 使用外部工具召回候选。
 
@@ -1697,21 +2384,21 @@ M0 + M1
 - 禁止伪 symbol 入库。
 - 最小主数据样例。
 
-第二批 PR：本地 resolver 和 CPA。
+第二批 PR：M3 本地标的解析、候选计划装配器和规则输入改造。
 
 ```text
-M2 + M3
+M3
 ```
 
 产出：
 
-- `internal/instrument`。
+- service 层候选计划装配器。
+- 本地标的解析逻辑。
 - `TrackablePlanIntent`。
 - `rules.Generate` 入参切换。
-- `untrackable_targets`。
 - 当前样例回归测试。
 
-第三批 PR：Agent sidecar 最小闭环。
+第三批 PR：Python 智能体旁路服务和规则文件加载器最小闭环。
 
 ```text
 M4 + M5
@@ -1720,13 +2407,13 @@ M4 + M5
 产出：
 
 - `agent/` Python 工程。
-- FastAPI 接口。
-- LangGraph 最小节点。
-- Pydantic schema。
-- SKILL.md loader。
-- Go `agentclient`。
+- 快速应用程序接口框架（FastAPI）接口。
+- 语言图编排框架（LangGraph）最小节点。
+- 数据校验库（Pydantic）结构定义。
+- 规则文件（SKILL.md）加载器。
+- Go 智能体客户端。
 
-第四批 PR：MCP 和观测增强。
+第四批 PR：模型上下文协议和观测增强。
 
 ```text
 M6 + M7
@@ -1734,10 +2421,10 @@ M6 + M7
 
 产出：
 
-- Tushare MCP 工具。
-- 东方财富 MCP 工具。
-- resolution run 查询 API。
-- shadow mode 对比。
+- Tushare 模型上下文协议工具。
+- 东方财富模型上下文协议工具。
+- 解析过程查询应用程序接口。
+- 影子模式对比。
 - 回归样例集。
 
 ### 18.11 每阶段测试清单
@@ -1754,42 +2441,39 @@ M1 测试：
 - `security_aliases` 能通过 `旭创` 找到 `中际旭创`。
 - 退市或非 `L` 状态不能进入候选计划。
 
-M2 测试：
+M3 测试：
 
 - `新易盛` 解析为 `300502.SZ`。
 - `旭创` 解析为 `300308.SZ`。
-- `CPO板块` 输出 `UntrackableTarget`。
-- 多候选返回 `AMBIGUOUS`。
-
-M3 测试：
-
-- CPA 不接收非法 symbol。
+- `CPO板块` 标记为不可追踪。
+- 多候选返回存在歧义。
+- 候选计划装配器不接收非法标的。
 - `rules.Generate` 不再接收原始 `PlanIntent`。
 - 不可追踪目标不会写入 `trade_candidate_plans`。
 
 M4 测试：
 
-- Agent schema 校验失败会返回 `FAILED`。
-- Go 收到 schema version 不匹配会失败。
-- Agent 超时按配置重试。
+- 智能体结构定义校验失败会返回失败。
+- Go 主系统收到结构版本不匹配会失败。
+- 智能体超时按配置重试。
 
 M5 测试：
 
-- 修改 `SKILL.md` 后 `skill_hash` 变化。
-- Agent 响应包含 `skill_hash`。
-- resolution run 记录 `skill_hash`。
+- 修改 `SKILL.md` 后规则文件哈希值变化。
+- 智能体响应包含规则文件哈希值。
+- 解析过程记录规则文件哈希值。
 
 M6 测试：
 
-- MCP 超时返回 warning，不直接污染计划。
-- MCP 返回候选后必须本地校验。
-- 外部工具不可用时，本地 resolver 仍可工作。
+- 模型上下文协议工具超时返回告警，不直接污染计划。
+- 模型上下文协议工具返回候选后必须本地校验。
+- 外部工具不可用时，本地标的解析仍可工作。
 
 M7 测试：
 
-- shadow mode 不影响旧链路写计划。
-- 正式模式只用 Agent + CPA 写计划。
-- 查询 API 能看到解析过程和失败原因。
+- 影子模式不影响旧链路写计划。
+- 正式模式只用智能体和候选计划装配器写计划。
+- 查询应用程序接口能看到解析过程和失败原因。
 
 ### 18.12 最终目标状态
 

@@ -7,7 +7,7 @@ CREATE TABLE `config_snapshots` (
   `raw_json` json NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=25 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=47 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- documents: table
 CREATE TABLE `documents` (
@@ -27,7 +27,7 @@ CREATE TABLE `documents` (
   UNIQUE KEY `uk_documents_sha256` (`sha256`),
   KEY `idx_documents_status` (`status`),
   KEY `idx_documents_created_at` (`created_at`)
-) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=46 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- No native definition for element: idx_documents_status (index)
 
@@ -49,9 +49,67 @@ CREATE TABLE `parse_runs` (
   PRIMARY KEY (`id`),
   KEY `idx_parse_runs_document` (`document_id`,`created_at`),
   CONSTRAINT `fk_parse_runs_document` FOREIGN KEY (`document_id`) REFERENCES `documents` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=41 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- No native definition for element: idx_parse_runs_document (index)
+
+-- security_aliases: table
+CREATE TABLE `security_aliases` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `security_master_id` bigint NOT NULL,
+  `alias` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `normalized_alias` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `alias_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'MANUAL',
+  `source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'MANUAL',
+  `confidence` double NOT NULL DEFAULT '1',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_security_aliases_alias_master_type` (`normalized_alias`,`security_master_id`,`alias_type`),
+  KEY `idx_security_aliases_normalized_active` (`normalized_alias`,`is_active`),
+  KEY `idx_security_aliases_master` (`security_master_id`),
+  CONSTRAINT `fk_security_aliases_master` FOREIGN KEY (`security_master_id`) REFERENCES `security_master` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- No native definition for element: idx_security_aliases_master (index)
+
+-- No native definition for element: idx_security_aliases_normalized_active (index)
+
+-- security_master: table
+CREATE TABLE `security_master` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `ts_code` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `symbol` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `full_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `exchange` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `market` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `asset_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `list_status` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'L',
+  `list_date` date DEFAULT NULL,
+  `delist_date` date DEFAULT NULL,
+  `industry` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'MANUAL',
+  `raw_json` json NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_security_master_ts_code` (`ts_code`),
+  KEY `idx_security_master_symbol` (`symbol`),
+  KEY `idx_security_master_name` (`name`),
+  KEY `idx_security_master_market_symbol` (`market`,`symbol`),
+  KEY `idx_security_master_asset_status` (`asset_type`,`list_status`,`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- No native definition for element: idx_security_master_symbol (index)
+
+-- No native definition for element: idx_security_master_name (index)
+
+-- No native definition for element: idx_security_master_market_symbol (index)
+
+-- No native definition for element: idx_security_master_asset_status (index)
 
 -- trade_candidate_plans: table
 CREATE TABLE `trade_candidate_plans` (
@@ -87,7 +145,7 @@ CREATE TABLE `trade_candidate_plans` (
   KEY `idx_trade_candidate_plans_symbol_trade_date` (`symbol`,`trade_date`),
   CONSTRAINT `fk_trade_candidate_plans_document` FOREIGN KEY (`document_id`) REFERENCES `documents` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_trade_candidate_plans_parse_run` FOREIGN KEY (`parse_run_id`) REFERENCES `parse_runs` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=22 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- No native definition for element: idx_trade_candidate_plans_document (index)
 

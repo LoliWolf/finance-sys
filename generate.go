@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"finance-sys/internal/bootstrap"
@@ -43,18 +44,37 @@ func main() {
 		fatal(logger, "ping mysql", err)
 	}
 
+	queryOutPath := filepath.Join(os.TempDir(), "finance_sys_gorm_gen_query")
+	defer os.RemoveAll(queryOutPath)
+
 	g := gen.NewGenerator(gen.Config{
-		OutPath:           "internal/dal/query",
-		ModelPkgPath:      "internal/domain/db_model",
+		OutPath:           queryOutPath,
+		ModelPkgPath:      filepath.Join("internal", "domain", "db_model"),
 		FieldWithIndexTag: true,
 		FieldWithTypeTag:  true,
 		Mode:              gen.WithDefaultQuery | gen.WithQueryInterface,
 	})
 	g.UseDB(db)
+	g.WithFileNameStrategy(func(tableName string) string {
+		switch tableName {
+		case "config_snapshots":
+			return "config_snapshot"
+		case "documents":
+			return "document"
+		case "parse_runs":
+			return "parse_run"
+		case "security_aliases":
+			return "security_alias"
+		case "trade_candidate_plans":
+			return "trade_candidate_plan"
+		default:
+			return tableName
+		}
+	})
 	g.ApplyBasic(
 		g.GenerateModelAs("config_snapshots", "ConfigSnapshot",
 			gen.FieldRename("sha256", "Sha256"),
-			gen.FieldRename("raw_json", "RawJson"),
+			gen.FieldRename("raw_json", "RawJSON"),
 			gen.FieldType("raw_json", "[]byte"),
 		),
 		g.GenerateModelAs("documents", "Document",
@@ -62,20 +82,30 @@ func main() {
 			gen.FieldRename("pdf_ocr_enabled", "PdfOcrEnabled"),
 		),
 		g.GenerateModelAs("parse_runs", "ParseRun",
-			gen.FieldRename("chunks_json", "ChunksJson"),
-			gen.FieldRename("raw_metadata_json", "RawMetadataJson"),
+			gen.FieldRename("chunks_json", "ChunksJSON"),
+			gen.FieldRename("raw_metadata_json", "RawMetadataJSON"),
 			gen.FieldType("chunks_json", "[]byte"),
 			gen.FieldType("raw_metadata_json", "[]byte"),
 		),
+		g.GenerateModelAs("security_master", "SecurityMaster",
+			gen.FieldRename("ts_code", "TSCode"),
+			gen.FieldRename("raw_json", "RawJSON"),
+			gen.FieldType("list_date", "*time.Time"),
+			gen.FieldType("delist_date", "*time.Time"),
+			gen.FieldType("raw_json", "[]byte"),
+		),
+		g.GenerateModelAs("security_aliases", "SecurityAlias",
+			gen.FieldRename("alias", "AliasName"),
+		),
 		g.GenerateModelAs("trade_candidate_plans", "TradeCandidatePlan",
-			gen.FieldRename("risks_json", "RisksJson"),
-			gen.FieldRename("evidence_json", "EvidenceJson"),
+			gen.FieldRename("risks_json", "RisksJSON"),
+			gen.FieldRename("evidence_json", "EvidenceJSON"),
 			gen.FieldType("risks_json", "[]byte"),
 			gen.FieldType("evidence_json", "[]byte"),
 		),
 	)
 	g.Execute()
-	logger.Info("gorm gen completed", "source", snapshot.Source, "out_path", "internal/dal/query", "model_path", "internal/domain/db_model")
+	logger.Info("gorm gen completed", "source", snapshot.Source, "out_path", queryOutPath, "model_path", "internal/domain/db_model")
 }
 
 func fatal(logger *slog.Logger, step string, err error) {

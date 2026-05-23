@@ -28,6 +28,7 @@ type App struct {
 	Logger          *slog.Logger
 	DB              *gorm.DB
 	DocumentService *service.DocumentService
+	SecurityService *service.SecurityService
 	HTTPServer      *httpapi.Server
 	Watcher         *nacoscfg.Watcher
 	Reloader        *nacoscfg.Reloader
@@ -69,7 +70,7 @@ func Build(ctx context.Context) (*App, error) {
 			ConfigVersion: snapshot.Config.Meta.ConfigVersion,
 			Source:        snapshot.Source,
 			Sha256:        snapshot.SHA256,
-			RawJson:       snapshot.Raw,
+			RawJSON:       snapshot.Raw,
 		})
 	}
 
@@ -77,6 +78,7 @@ func Build(ctx context.Context) (*App, error) {
 	analyzer := llm.NewModelAnalyzer(runtime, logger)
 	ruleEngine := rules.New(logger)
 	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, ruleEngine, logger)
+	securityService := service.NewSecurityService(db, logger)
 
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader
@@ -85,13 +87,14 @@ func Build(ctx context.Context) (*App, error) {
 		reloader = nacoscfg.NewReloader(loader, runtime, db, logger)
 	}
 
-	httpServer := httpapi.NewServer(db, runtime, documentService, reloader, logger)
+	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, reloader, logger)
 	logger.Info("bootstrap build completed")
 	return &App{
 		Runtime:         runtime,
 		Logger:          logger,
 		DB:              db,
 		DocumentService: documentService,
+		SecurityService: securityService,
 		HTTPServer:      httpServer,
 		Watcher:         watcher,
 		Reloader:        reloader,
