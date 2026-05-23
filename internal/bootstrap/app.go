@@ -77,8 +77,9 @@ func Build(ctx context.Context) (*App, error) {
 	parserService := parser.New(logger)
 	analyzer := llm.NewModelAnalyzer(runtime, logger)
 	ruleEngine := rules.New(logger)
-	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, ruleEngine, logger)
 	securityService := service.NewSecurityService(db, logger)
+	candidateAssembler := service.NewCandidateAssembler(securityService, logger)
+	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, candidateAssembler, ruleEngine, logger)
 
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader

@@ -35,6 +35,7 @@ func TestHTTPM0AnalyzeRejectsInvalidSymbolsWithNacosBootstrap(t *testing.T) {
 
 	app := buildIntegrationApp(t, ctx)
 	defer app.Close()
+	seedM1SecurityLookupFixtures(t, ctx, app.DB)
 
 	var invalidAttempts atomic.Int32
 	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -97,8 +98,8 @@ func TestHTTPM0AnalyzeRejectsInvalidSymbolsWithNacosBootstrap(t *testing.T) {
 	})
 	invalidStatus, invalidBody := analyzeDocumentBody(t, baseURL, invalidDocumentID)
 	require.Equal(t, http.StatusInternalServerError, invalidStatus, string(invalidBody))
-	require.Contains(t, string(invalidBody), "symbol must be a valid ts_code like 000001.SZ")
-	require.Equal(t, int32(2), invalidAttempts.Load())
+	require.Contains(t, string(invalidBody), "no trackable securities resolved")
+	require.Equal(t, int32(1), invalidAttempts.Load())
 
 	invalidDocument, err := app.DocumentService.GetDocumentByID(ctx, invalidDocumentID)
 	require.NoError(t, err)

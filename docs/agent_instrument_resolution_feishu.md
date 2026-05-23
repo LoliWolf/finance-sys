@@ -763,7 +763,6 @@ CREATE TABLE `security_aliases` (
 M3:
 internal/service/candidate_assembler.go
 internal/domain/trackable_intent.go
-internal/domain/instrument_resolution.go
 
 M4:
 internal/agentclient
@@ -789,7 +788,9 @@ parser -> agentclient.ResolveDocument -> CPA -> rules.Generate -> trade_candidat
 
 ```go
 type TrackablePlanIntent struct {
-    SourceIntentID     string
+    Analyst            string
+    Institution        string
+    RawSymbol          string
     TSCode             string
     Symbol             string
     SecurityName       string
@@ -808,8 +809,9 @@ type TrackablePlanIntent struct {
 结构字段中文解释：
 
 - `TrackablePlanIntent`：可追踪交易意图。
-- `SourceIntentID`：原始意图 ID。
+- `RawSymbol`：大语言模型输出的原始标的文本。
 - `TSCode`：Tushare 证券代码。
+- `Symbol`：6 位代码主体。
 - `SecurityName`：证券名称。
 - `AssetType`：资产类型。
 - `Market`：市场。
@@ -1924,24 +1926,24 @@ M3 后的链路改成：
 M3 不新增独立 `internal/instrument` 目录，优先把逻辑放在现有边界里：
 
 ```text
-internal/domain/instrument_resolution.go
 internal/domain/trackable_intent.go
 internal/service/candidate_assembler.go
 internal/service/document.go
 internal/rules/engine.go
 internal/llm/extractor.go
+cmd/api/m3_candidate_assembler_integration_test.go
 ```
 
 职责说明：
 
 | 文件 | 职责 |
 | --- | --- |
-| `internal/domain/instrument_resolution.go` | 定义标的解析结果、状态、候选和不可追踪原因。 |
-| `internal/domain/trackable_intent.go` | 定义可追踪交易意图，作为规则引擎唯一输入。 |
+| `internal/domain/trackable_intent.go` | 定义标的解析结果、状态、候选、不可追踪原因和可追踪交易意图，作为规则引擎唯一输入。 |
 | `internal/service/candidate_assembler.go` | 实现候选计划装配器，调用证券查询、执行标的解析、输出可追踪交易意图。 |
 | `internal/service/document.go` | 把旧的“交易意图直接进规则引擎”改成“交易意图先进候选计划装配器”。 |
 | `internal/rules/engine.go` | 把规则生成入口改为接收可追踪交易意图。 |
 | `internal/llm/extractor.go` | 调整交易意图校验，允许 `symbol` 暂时承载原始标的文本。 |
+| `cmd/api/m3_candidate_assembler_integration_test.go` | 通过 Nacos 初始化、HTTP 上传和分析接口验证 M3 真实主链路。 |
 
 如果实现时发现 `candidate_assembler.go` 过大，再拆成同包私有文件，例如 `candidate_assembler_normalize.go`、`candidate_assembler_classify.go`。仍然不需要先创建独立大包。
 
@@ -1972,9 +1974,9 @@ M3 只允许以下资产进入 `RESOLVED`：
 -> 去前后空格、统一大小写、合并连续空白
 -> 如果是证券标准代码，查证券主数据表
 -> 如果是 6 位代码主体，查证券主数据表
--> 如果明显是板块、主题、行业、泛称，标记不可追踪
 -> 按证券简称查证券主数据表
 -> 按别名查证券别名表
+-> 如果查不到且明显是板块、主题、行业、泛称，标记不可追踪
 -> 如果唯一命中有效股票或交易型开放式指数基金，标记已解析
 -> 如果命中多个有效证券，标记存在歧义
 -> 如果查不到，标记未找到
@@ -2004,35 +2006,37 @@ M3 不做：
 1. 可追踪交易意图：进入规则引擎。
 2. 被拒绝交易意图：记录原因，不进入规则引擎。
 
-建议结构：
+已实现结构：
 
 ```go
 type TrackablePlanIntent struct {
-    SourceIntentID string
+    Analyst string
+    Institution string
+    RawSymbol string
     TSCode string
     Symbol string
     SecurityName string
-    AssetType string
-    Market string
+    AssetType domain.AssetType
+    Market domain.Market
     Direction domain.TradeDirection
     ReferencePrice float64
+    ReferencePriceNote domain.ReferencePriceNote
     Thesis string
+    Evidence []domain.EvidenceSpan
+    Risks []string
     Confidence float64
 }
-
-type RejectedPlanIntent struct {
-    SourceIntentID string
-    RawSymbol string
-    Status string
-    Reason string
-}
 ```
+
+被拒绝交易意图不新增独立落库结构，统一通过 `InstrumentResolution` 返回给调用方并写结构化日志。
 
 字段中文解释：
 
 | 字段 | 中文含义 |
 | --- | --- |
-| `SourceIntentID` | 原始交易意图编号。 |
+| `Analyst` | 分析师。 |
+| `Institution` | 机构。 |
+| `RawSymbol` | 大语言模型输出的原始标的文本。 |
 | `TSCode` | 证券标准代码。 |
 | `Symbol` | 6 位代码主体。 |
 | `SecurityName` | 证券简称。 |
@@ -2040,9 +2044,11 @@ type RejectedPlanIntent struct {
 | `Market` | 市场。 |
 | `Direction` | 交易方向。 |
 | `ReferencePrice` | 参考价格。 |
+| `ReferencePriceNote` | 参考价格说明。 |
 | `Thesis` | 交易理由。 |
+| `Evidence` | 证据片段。 |
+| `Risks` | 风险。 |
 | `Confidence` | 置信度。 |
-| `RawSymbol` | 大语言模型输出的原始标的文本。 |
 | `Status` | 解析状态。 |
 | `Reason` | 拒绝原因。 |
 
@@ -2061,7 +2067,7 @@ M0 阶段为了止血，要求 `symbol` 必须是证券标准代码。M3 实施�
 2. 大语言模型层继续校验方向、参考价格、交易理由、置信度。
 3. 大语言模型层不再要求 `symbol` 必须已经是证券标准代码。
 4. `DocumentService` 必须保证原始交易意图只能进入候选计划装配器，不能直接进入规则引擎。
-5. 单元测试必须覆盖“原始中文标的不能直接调用规则引擎”。
+5. 规则引擎入口通过 Go 类型改成 `TrackablePlanIntent`，原始 `PlanIntent` 在编译期不能直接传入。
 
 这样不会回到 M0 前的污染问题，因为真正的安全门从大语言模型校验层移动到了候选计划装配器和规则引擎输入类型。
 
@@ -2096,7 +2102,7 @@ rules.Generate(TrackablePlanIntent)
 
 #### 18.5.11 测试方案
 
-单元测试：
+已实现单元测试：
 
 ```text
 internal/service/candidate_assembler_test.go
@@ -2104,7 +2110,7 @@ internal/rules/engine_test.go
 internal/llm/extractor_test.go
 ```
 
-建议用例：
+已覆盖用例：
 
 | 用例 | 输入 | 期望 |
 | --- | --- | --- |
@@ -2115,9 +2121,9 @@ internal/llm/extractor_test.go
 | 泛称 | `A股贵金属个股` | 标记不可追踪，不生成候选计划。 |
 | 多候选别名 | 同一别名指向多只有效证券 | 本次分析失败，返回存在歧义。 |
 | 查不到 | `不存在的股票简称` | 本次分析失败，返回未找到。 |
-| 规则防线 | 原始 `PlanIntent` | 不能直接传给规则引擎。 |
+| 规则防线 | 原始 `PlanIntent` | `rules.Generate` 只接收 `TrackablePlanIntent`，编译期阻断。 |
 
-真实链路集成测试建议：
+真实链路集成测试：
 
 ```text
 cmd/api/m3_candidate_assembler_integration_test.go
@@ -2133,12 +2139,30 @@ TestHTTPM3AnalyzeDocumentResolvesSecurityWithNacosBootstrap
 5. 验证候选计划只包含 `300502.SZ`、`300308.SZ` 这类证券标准代码。
 6. 默认 `go test ./...` 不写真实 MySQL；真实链路测试必须通过显式环境变量开启。
 
+实际集成测试覆盖：
+
+| 分支 | 模型输出 | 期望 |
+| --- | --- | --- |
+| 合格 | `新易盛`、`旭创`、`CPO板块` | HTTP 200，只生成 `300502.SZ`、`300308.SZ` 两条候选计划，`CPO板块` 被跳过。 |
+| 未找到 | `不存在的股票简称` | HTTP 500，文档状态为失败，不生成候选计划。 |
+| 全不可追踪 | `A股贵金属个股` | HTTP 500，文档状态为失败，不生成候选计划。 |
+| 歧义 | `重名标的` 指向两只有效证券 | HTTP 500，文档状态为失败，不生成候选计划。 |
+
 默认门禁：
 
 ```powershell
 $env:GOTOOLCHAIN='local'
 go test ./...
 go build ./...
+```
+
+M3 真实链路验证命令：
+
+```powershell
+$env:FINANCE_SYS_M3_NACOS_INTEGRATION='1'
+$env:FINANCE_SYS_M3_NACOS_DML_ACK='write-real-db'
+$env:GOTOOLCHAIN='local'
+go test -count=1 ./cmd/api -run TestHTTPM3AnalyzeDocumentResolvesSecurityWithNacosBootstrap -v
 ```
 
 #### 18.5.12 实施顺序
@@ -2169,6 +2193,37 @@ M3 第一版不需要新增数据定义语言。
 3. 歧义候选列表。
 
 这些内容先通过结构化日志和测试断言覆盖。后续如果要在页面或接口里查询解析过程，再放到 M7 观测阶段设计 `instrument_resolution_runs`、`untrackable_targets` 等表。届时必须先更新迁移脚本，等待用户手动执行数据定义语言，再继续生成模型和改代码。
+
+#### 18.5.14 M3 实施状态与验收结果
+
+当前 M3 已完成代码实现和验证。
+
+实现清单：
+
+| 文件 | 状态 |
+| --- | --- |
+| `internal/domain/trackable_intent.go` | 已新增解析状态、解析候选和可追踪交易意图结构。 |
+| `internal/service/candidate_assembler.go` | 已新增候选计划装配器，复用 M1 证券查询服务。 |
+| `internal/service/document.go` | 已接入候选计划装配器，原始交易意图不再直接进入规则引擎。 |
+| `internal/rules/engine.go` | 已改为只接收 `TrackablePlanIntent`，候选计划 `symbol` 写证券标准代码。 |
+| `internal/llm/extractor.go` | 已改为结构化校验，允许 `symbol` 保留原始标的文本。 |
+| `internal/bootstrap/app.go` | 已装配 `SecurityService` 和 `CandidateAssembler`。 |
+| `cmd/api/m3_candidate_assembler_integration_test.go` | 已新增 Nacos + HTTP 真实链路集成测试。 |
+
+验证结果：
+
+```text
+go test ./...
+通过
+
+go test -count=1 ./cmd/api -run TestHTTPM3AnalyzeDocumentResolvesSecurityWithNacosBootstrap -v
+通过
+
+go build ./...
+通过
+```
+
+本轮未新增数据定义语言，未修改 `migrations/`，无需用户额外执行增量 DDL。
 
 ### 18.6 M4：Python 智能体旁路服务阶段
 

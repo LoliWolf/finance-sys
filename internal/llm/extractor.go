@@ -21,6 +21,7 @@ const systemPrompt = `You extract structured T+1 trade intents from Chinese rese
 Return JSON only.
 Do not generate entry price, stop loss, take profit, or position.
 Only extract facts explicitly supported by the source text.
+For symbol, keep the source instrument text or code. Do not invent a ts_code or exchange suffix.
 The confidence field is your extraction confidence for this structured record, not an investment rating from the source text. It must be a number in (0,1].
 Output shape:
 {"plans":[{"analyst":"","institution":"","symbol":"","asset_type":"","market":"","direction":"LONG or SHORT","reference_price":0,"reference_price_note":"","thesis":"","evidence":[{"chunk_index":0,"text":""}],"risks":[""],"confidence":0.0}]}`
@@ -334,11 +335,8 @@ func normalizeAndMergeIntents(intents []domain.PlanIntent) ([]domain.PlanIntent,
 }
 
 func ValidateIntent(intent domain.PlanIntent) error {
-	if intent.Symbol == "" {
+	if strings.TrimSpace(intent.Symbol) == "" {
 		return fmt.Errorf("symbol is required")
-	}
-	if !ValidateTSCode(intent.Symbol) {
-		return fmt.Errorf("symbol must be a valid ts_code like 000001.SZ")
 	}
 	if intent.Direction != domain.TradeDirectionLong && intent.Direction != domain.TradeDirectionShort {
 		return fmt.Errorf("direction must be LONG or SHORT")

@@ -28,16 +28,17 @@ type planAnalyzer interface {
 }
 
 type ruleEngine interface {
-	Generate(intent domain.PlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan
+	Generate(intent domain.TrackablePlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan
 }
 
 type DocumentService struct {
-	db       *gorm.DB
-	runtime  *config.Runtime
-	parser   documentParser
-	analyzer planAnalyzer
-	rules    ruleEngine
-	logger   *slog.Logger
+	db        *gorm.DB
+	runtime   *config.Runtime
+	parser    documentParser
+	analyzer  planAnalyzer
+	assembler *CandidateAssembler
+	rules     ruleEngine
+	logger    *slog.Logger
 }
 
 func NewDocumentService(
@@ -45,16 +46,18 @@ func NewDocumentService(
 	runtime *config.Runtime,
 	parser documentParser,
 	analyzer planAnalyzer,
+	assembler *CandidateAssembler,
 	rules ruleEngine,
 	logger *slog.Logger,
 ) *DocumentService {
 	return &DocumentService{
-		db:       db,
-		runtime:  runtime,
-		parser:   parser,
-		analyzer: analyzer,
-		rules:    rules,
-		logger:   logger,
+		db:        db,
+		runtime:   runtime,
+		parser:    parser,
+		analyzer:  analyzer,
+		assembler: assembler,
+		rules:     rules,
+		logger:    logger,
 	}
 }
 
@@ -148,15 +151,28 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 	}
 	s.logger.InfoContext(ctx, "document service analyze llm success", "document_id", documentID, "parse_run_id", parseRun.ID, "intent_count", len(intents))
 
-	tradeDate := s.tradeDate(cfg)
-	plans := make([]domain.CandidatePlan, 0, len(intents))
 	for _, intent := range intents {
 		if err := llm.ValidateIntent(intent); err != nil {
 			s.logger.ErrorContext(ctx, "document service analyze invalid intent", "document_id", documentID, "parse_run_id", parseRun.ID, "symbol", intent.Symbol, "error", err.Error())
 			_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
 			return nil, fmt.Errorf("invalid plan intent: %w", err)
 		}
-		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "symbol", intent.Symbol, "direction", intent.Direction, "confidence", intent.Confidence)
+	}
+	trackableIntents, resolutions, err := s.assembler.Assemble(ctx, intents)
+	for _, resolution := range resolutions {
+		s.logger.InfoContext(ctx, "document service analyze instrument resolved", "document_id", documentID, "parse_run_id", parseRun.ID, "raw_symbol", resolution.RawSymbol, "status", resolution.Status, "target_kind", resolution.TargetKind, "candidate_count", len(resolution.Candidates), "reason", resolution.Reason)
+	}
+	if err != nil {
+		s.logger.ErrorContext(ctx, "document service analyze candidate assembly failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", err.Error())
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		return nil, err
+	}
+	s.logger.InfoContext(ctx, "document service analyze candidate assembly success", "document_id", documentID, "parse_run_id", parseRun.ID, "trackable_intent_count", len(trackableIntents), "raw_intent_count", len(intents))
+
+	tradeDate := s.tradeDate(cfg)
+	plans := make([]domain.CandidatePlan, 0, len(trackableIntents))
+	for _, intent := range trackableIntents {
+		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "direction", intent.Direction, "confidence", intent.Confidence)
 		plan := s.rules.Generate(intent, cfg.Rules, tradeDate, cfg.Meta.ConfigVersion)
 		plan.DocumentID = document.ID
 		plan.ParseRunID = parseRun.ID

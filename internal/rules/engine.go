@@ -18,16 +18,16 @@ func New(logger *slog.Logger) *Engine {
 	return &Engine{logger: logger}
 }
 
-func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan {
+func (e *Engine) Generate(intent domain.TrackablePlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan {
 	if e.logger != nil {
-		e.logger.Info("rules generate start", "symbol", intent.Symbol, "direction", intent.Direction, "reference_price", intent.ReferencePrice, "confidence", intent.Confidence, "trade_date", tradeDate.Format(time.DateOnly))
+		e.logger.Info("rules generate start", "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "direction", intent.Direction, "reference_price", intent.ReferencePrice, "confidence", intent.Confidence, "trade_date", tradeDate.Format(time.DateOnly))
 	}
 	plan := domain.CandidatePlan{
 		DocumentID:     0,
 		ParseRunID:     0,
 		Analyst:        intent.Analyst,
 		Institution:    intent.Institution,
-		Symbol:         intent.Symbol,
+		Symbol:         intent.TSCode,
 		AssetType:      intent.AssetType,
 		Market:         intent.Market,
 		Strategy:       domain.RuleStrategy(cfg.Strategy),
@@ -48,7 +48,7 @@ func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, trad
 		plan.Status = domain.CandidatePlanStatusNeedsReview
 		plan.PricingNote = "missing explicit price in source text"
 		if e.logger != nil {
-			e.logger.Warn("rules generate needs review missing price", "symbol", intent.Symbol, "direction", intent.Direction)
+			e.logger.Warn("rules generate needs review missing price", "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "direction", intent.Direction)
 		}
 		return plan
 	}
@@ -74,7 +74,7 @@ func (e *Engine) Generate(intent domain.PlanIntent, cfg config.RulesConfig, trad
 		plan.Status = domain.CandidatePlanStatusNeedsReview
 		plan.PricingNote = fmt.Sprintf("confidence %.2f below threshold %.2f", intent.Confidence, cfg.MinConfidence)
 		if e.logger != nil {
-			e.logger.Warn("rules generate needs review low confidence", "symbol", intent.Symbol, "confidence", intent.Confidence, "threshold", cfg.MinConfidence)
+			e.logger.Warn("rules generate needs review low confidence", "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "confidence", intent.Confidence, "threshold", cfg.MinConfidence)
 		}
 	}
 	if e.logger != nil {
