@@ -9,6 +9,7 @@ type Config struct {
 	Database    DatabaseConfig    `json:"database"`
 	Document    DocumentConfig    `json:"document"`
 	LLM         LLMConfig         `json:"llm"`
+	Agent       AgentConfig       `json:"agent"`
 	Rules       RulesConfig       `json:"rules"`
 }
 
@@ -110,6 +111,24 @@ type LLMConfig struct {
 	Model      string      `json:"model"`
 	TimeoutMS  int         `json:"timeout_ms"`
 	MaxRetries int         `json:"max_retries"`
+}
+
+type AgentConfig struct {
+	Enabled                bool            `json:"enabled"`
+	Mode                   AgentMode       `json:"mode"`
+	Endpoint               string          `json:"endpoint"`
+	HealthEndpoint         string          `json:"health_endpoint"`
+	TimeoutMS              int             `json:"timeout_ms"`
+	MaxRetries             int             `json:"max_retries"`
+	SchemaVersion          string          `json:"schema_version"`
+	Auth                   AgentAuthConfig `json:"auth"`
+	AllowLegacyLLMFallback bool            `json:"allow_legacy_llm_fallback"`
+}
+
+type AgentAuthConfig struct {
+	Enabled     bool   `json:"enabled"`
+	HeaderName  string `json:"header_name"`
+	StaticToken string `json:"static_token"`
 }
 
 type RulesConfig struct {

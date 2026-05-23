@@ -459,7 +459,7 @@ class CandidatePlanInput(BaseModel):
     confidence: float = Field(gt=0, le=1)
 
 class AgentResolutionOutput(BaseModel):
-    schema_version: Literal["agent_resolution.v1"]
+    schema_version: Literal["agent.resolve_document.response.v1"]
     agent_version: str
     status: Literal["RESOLVED", "PARTIAL", "FAILED"]
     candidate_plan_inputs: list[CandidatePlanInput]
@@ -470,6 +470,8 @@ class AgentResolutionOutput(BaseModel):
 ```
 
 CPA 只读取 `candidate_plan_inputs`。
+
+说明：上面是早期稳定结构示意，M4 落地时以 18.6.4 的 `agent.resolve_document.request.v1` 和 `agent.resolve_document.response.v1` 为准。
 
 关键字段中文解释：
 
@@ -831,10 +833,17 @@ type TrackablePlanIntent struct {
 {
   "agent": {
     "enabled": true,
-    "endpoint": "http://127.0.0.1:18080",
-    "timeout_ms": 60000,
+    "mode": "primary",
+    "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
+    "health_endpoint": "http://127.0.0.1:8108/healthz",
+    "timeout_ms": 15000,
     "max_retries": 1,
-    "schema_version": "agent_resolution.v1",
+    "schema_version": "agent.resolve_document.response.v1",
+    "auth": {
+      "enabled": true,
+      "header_name": "X-Agent-Token",
+      "static_token": ""
+    },
     "allow_legacy_llm_fallback": false
   },
   "instrument": {
@@ -854,10 +863,13 @@ type TrackablePlanIntent struct {
 配置字段中文解释：
 
 - `agent.enabled`：是否启用 Agent。
+- `agent.mode`：Agent 模式，`primary` 表示正式使用，`shadow` 表示影子模式。
 - `agent.endpoint`：Agent HTTP 地址。
+- `agent.health_endpoint`：Agent 健康检查地址。
 - `agent.timeout_ms`：调用 Agent 的超时时间。
 - `agent.max_retries`：Agent 调用失败后的重试次数。
 - `agent.schema_version`：期望的稳定 JSON schema 版本。
+- `agent.auth`：Go 调用 Agent 时使用的服务间认证配置。
 - `agent.allow_legacy_llm_fallback`：是否允许回退到旧 LLM 链路。
 - `instrument.trackable_asset_types`：允许进入候选计划的资产类型。
 - `instrument.allow_sector_as_plan`：是否允许板块直接生成计划，阶段内应为 false。
@@ -2227,7 +2239,99 @@ go build ./...
 
 ### 18.6 M4：Python 智能体旁路服务阶段
 
-目标：在 Go 主系统旁边启动一个 Python 服务，负责更复杂的抽取、工具调用、消歧和稳定 JSON 输出。
+目标：在 Go 主系统旁边启动一个 Python 智能体旁路服务，让“读文章、抽取原始交易意图、必要时辅助查证券、输出稳定结构”的工作从单次大语言模型调用升级为可编排流程。
+
+M4 的核心结论：**Python 智能体只增强抽取和解析，不替代 Go 主系统的最终安全门。** 任何 Agent 输出都必须回到 Go 侧校验，再进入 M3 候选计划装配器，最后才进入规则引擎。
+
+#### 18.6.1 M4 边界
+
+M4 做：
+
+1. 新增 Python 智能体旁路服务。
+2. 新增 Go 侧 `internal/agentclient` 客户端。
+3. 新增 Agent HTTP 契约和 Go/Python 双侧结构校验。
+4. 在 Go 主链路增加可配置的分析器路由：继续支持旧 `LLM Analyzer`，也支持 `Agent Analyzer`。
+5. Agent 输出仍经过 M3 候选计划装配器二次校验。
+6. 增加单元测试和真实链路集成测试。
+
+M4 不做：
+
+1. 不新增数据库表。
+2. 不实现 `SKILL.md` 规则文件加载器；该部分留到 M5。
+3. 不接模型上下文协议工具；该部分留到 M6。
+4. 不新增行情、估值、价格、仓位生成能力。
+5. 不允许 Agent 直接写候选计划。
+6. 不允许 Agent 绕过 M3 候选计划装配器。
+7. 不允许 Agent 返回入场价、止损价、止盈价或仓位。
+
+关键英文词汇翻译：
+
+| 英文词汇 | 中文翻译 | 本方案里的含义 |
+| --- | --- | --- |
+| Agent | 智能体 | Python 旁路服务，负责更复杂的文本理解和结构化输出。 |
+| Sidecar | 旁路服务 | 与 Go 主系统并行部署，通过 HTTP 被 Go 调用的独立进程。 |
+| FastAPI | 快速应用程序接口框架 | Python HTTP 服务框架。 |
+| Uvicorn | Python 异步服务启动器 | 启动 FastAPI 服务的运行器。 |
+| LangGraph | 语言图编排框架 | 编排抽取、查证、分类、校验等节点。 |
+| Pydantic | Python 数据校验库 | 定义请求和响应结构，并强制校验字段。 |
+| Schema | 结构定义 | 请求和响应的字段契约。 |
+| Stable JSON | 稳定 JSON | 字段名、枚举值和含义固定的 JSON 响应。 |
+| Analyzer | 分析器 | Go 主系统里负责把解析文本转换成交易意图的组件。 |
+| Agent Client | 智能体客户端 | Go 侧调用 Python Agent 的 HTTP 客户端。 |
+| Shadow Mode | 影子模式 | 只调用 Agent 做对比，不用 Agent 结果写候选计划。M4 先设计接口，正式观测放到 M7。 |
+| Fallback | 回退 | Agent 失败后是否回到旧 LLM 链路。默认关闭。 |
+| Retry | 重试 | 调用 Agent 失败后的有限次数重试。 |
+| Timeout | 超时 | 单次 Agent HTTP 调用的最大等待时间。 |
+
+#### 18.6.2 M4 后的主链路
+
+M3 当前链路：
+
+```text
+parser
+-> llm.Analyze
+-> CandidateAssembler
+-> rules.Generate
+-> trade_candidate_plans
+```
+
+M4 增加 Agent 后的正式链路：
+
+```text
+parser
+-> AnalysisRouter
+   -> AgentAnalyzer
+      -> agentclient.ResolveDocument
+      -> Python Agent /v1/resolve-document
+      -> Pydantic 校验
+      -> Go schema 校验
+      -> 转换为 PlanIntent
+-> CandidateAssembler
+   -> SecurityService.Lookup 再校验证券身份
+-> rules.Generate
+-> trade_candidate_plans
+```
+
+保留旧链路：
+
+```text
+parser
+-> AnalysisRouter
+   -> LLMAnalyzer
+-> CandidateAssembler
+-> rules.Generate
+-> trade_candidate_plans
+```
+
+关键约束：
+
+1. `DocumentService` 不直接理解 Agent 细节，只依赖 `planAnalyzer` 接口。
+2. `AnalysisRouter` 根据 Nacos 配置选择 `LLMAnalyzer` 或 `AgentAnalyzer`。
+3. `AgentAnalyzer` 返回的仍是 `[]domain.PlanIntent`，这样 M3 候选计划装配器可以复用。
+4. 如果 Agent 返回了已解析证券，Go 侧仍把证券标准代码交给 `CandidateAssembler` 再查本地主数据。
+5. 如果 Agent 只返回原始标的文本，M3 仍按当前逻辑解析。
+
+#### 18.6.3 Python 工程目录
 
 新增目录：
 
@@ -2236,15 +2340,58 @@ agent/
   pyproject.toml
   README.md
   app/
+    __init__.py
     main.py
     config.py
-    graph.py
     schemas.py
-    skills.py
-    tools/
+    graph.py
+    llm_client.py
+    security_client.py
     nodes/
+      __init__.py
+      extract_raw_intents.py
+      resolve_security.py
+      classify_untrackable.py
+      assemble_output.py
+      validate_output.py
+    prompts/
+      extract_raw_intents.md
   tests/
+    test_schemas.py
+    test_graph.py
+    test_resolve_document_api.py
 ```
+
+目录职责：
+
+| 路径 | 职责 |
+| --- | --- |
+| `agent/pyproject.toml` | Python 依赖、测试命令、格式化命令。 |
+| `agent/app/main.py` | FastAPI 应用入口，暴露健康检查和解析接口。 |
+| `agent/app/config.py` | 读取环境变量配置。 |
+| `agent/app/schemas.py` | Pydantic 请求、响应、内部节点结构。 |
+| `agent/app/graph.py` | LangGraph 节点编排。 |
+| `agent/app/llm_client.py` | OpenAI 兼容模型客户端。 |
+| `agent/app/security_client.py` | 调用 Go 内部证券查询接口的客户端。 |
+| `agent/app/nodes/` | 每个智能体步骤的实现。 |
+| `agent/app/prompts/` | Prompt 模板，M4 先放固定模板，M5 再改为 `SKILL.md` 加载。 |
+| `agent/tests/` | Python 单元测试和 API 测试。 |
+
+Python 版本建议：Python 3.11。
+
+依赖建议：
+
+| 依赖 | 用途 |
+| --- | --- |
+| `fastapi` | HTTP 服务。 |
+| `uvicorn` | 启动 HTTP 服务。 |
+| `pydantic` | 数据结构校验。 |
+| `langgraph` | 智能体节点编排。 |
+| `httpx` | 调用模型接口和 Go 内部接口。 |
+| `pytest` | Python 测试。 |
+| `respx` | `httpx` 调用测试替身。 |
+
+#### 18.6.4 Agent HTTP 接口
 
 接口：
 
@@ -2252,68 +2399,557 @@ agent/
 POST /v1/resolve-document
 ```
 
-请求包含：
+健康检查：
+
+```text
+GET /healthz
+```
+
+请求结构：
 
 ```json
 {
-  "schema_version": "agent_resolution_request.v1",
-  "document_id": 19,
-  "parse_run_id": 14,
-  "trade_date": "2026-05-17",
+  "schema_version": "agent.resolve_document.request.v1",
+  "request_id": "m4-20260523-000001",
+  "document": {
+    "document_id": 19,
+    "parse_run_id": 14,
+    "title": "专家纪要",
+    "author": "研究员A",
+    "institution": "示例机构"
+  },
+  "trade_date": "2026-05-24",
   "chunks": [
     {
       "chunk_index": 0,
-      "text": "..."
+      "text": "原文片段..."
     }
-  ]
-}
-```
-
-响应包含：
-
-```json
-{
-  "schema_version": "agent_resolution.v1",
-  "status": "RESOLVED",
-  "candidate_plan_inputs": [],
-  "recommendation_events": [],
-  "untrackable_targets": [],
-  "warnings": [],
-  "debug": {
-    "graph_run_id": "...",
-    "skill_hash": "...",
-    "tools_used": []
+  ],
+  "limits": {
+    "max_intents": 20,
+    "max_evidence_per_intent": 4
   }
 }
 ```
 
-LangGraph 节点最小集：
+响应结构：
 
-```text
-load_skill
-extract_raw_intents
-resolve_with_local_security
-classify_untrackable
-validate_output
+```json
+{
+  "schema_version": "agent.resolve_document.response.v1",
+  "agent_version": "m4-agent-0.1.0",
+  "status": "RESOLVED",
+  "raw_intents": [
+    {
+      "intent_id": "intent-1",
+      "raw_symbol": "新易盛",
+      "direction": "LONG",
+      "reference_price": 88.8,
+      "reference_price_note": "explicit_price_mention",
+      "thesis": "原文明确推荐新易盛",
+      "evidence": [
+        {
+          "chunk_index": 0,
+          "text": "推荐新易盛，参考价 88.8"
+        }
+      ],
+      "risks": ["波动加剧"],
+      "confidence": 0.81
+    }
+  ],
+  "candidate_plan_inputs": [
+    {
+      "intent_id": "intent-1",
+      "raw_symbol": "新易盛",
+      "security": {
+        "ts_code": "300502.SZ",
+        "symbol": "300502",
+        "name": "新易盛",
+        "asset_type": "STOCK",
+        "market": "SZ"
+      },
+      "direction": "LONG",
+      "reference_price": 88.8,
+      "reference_price_note": "explicit_price_mention",
+      "thesis": "原文明确推荐新易盛",
+      "evidence": [
+        {
+          "chunk_index": 0,
+          "text": "推荐新易盛，参考价 88.8"
+        }
+      ],
+      "risks": ["波动加剧"],
+      "confidence": 0.81
+    }
+  ],
+  "untrackable_targets": [
+    {
+      "raw_symbol": "CPO板块",
+      "target_kind": "SECTOR",
+      "reason": "板块不是单一可追踪证券",
+      "evidence": [
+        {
+          "chunk_index": 0,
+          "text": "CPO板块景气度提升"
+        }
+      ]
+    }
+  ],
+  "warnings": [],
+  "debug": {
+    "graph_run_id": "graph-run-001",
+    "nodes": ["extract_raw_intents", "resolve_security", "classify_untrackable", "assemble_output", "validate_output"],
+    "tools_used": ["go_security_lookup"],
+    "duration_ms": 1234
+  }
+}
 ```
 
-先不接 MCP 时，Agent 仍然有价值：它可以比单次 LLM 更清晰地拆分“原始目标、可追踪证券、不可追踪目标、证据”。
+状态值：
 
-Go 侧新增：
+| 状态 | 中文含义 | Go 侧处理 |
+| --- | --- | --- |
+| `RESOLVED` | 已完成解析 | 转换为 `PlanIntent`，继续走 M3。 |
+| `PARTIAL` | 部分解析 | 只有不存在未找到或歧义错误时才允许继续；Go 侧仍以 M3 为准。 |
+| `FAILED` | 解析失败 | 当前文档分析失败，不进入规则引擎。 |
+
+#### 18.6.5 Pydantic 校验规则
+
+M4 的 Pydantic 只保证 Agent 响应结构正确，不代表最终可以入库。最终入库仍由 Go 侧 M3 和 rules 决定。
+
+核心校验：
+
+```python
+class EvidenceSpan(BaseModel):
+    chunk_index: int = Field(ge=0)
+    text: str = Field(min_length=1, max_length=180)
+
+class AgentRawIntent(BaseModel):
+    intent_id: str = Field(min_length=1)
+    raw_symbol: str = Field(min_length=1, max_length=80)
+    direction: Literal["LONG", "SHORT"]
+    reference_price: float = Field(ge=0)
+    reference_price_note: str
+    thesis: str = Field(min_length=1, max_length=500)
+    evidence: list[EvidenceSpan] = Field(min_length=1, max_length=4)
+    risks: list[str] = Field(default_factory=list, max_length=5)
+    confidence: float = Field(gt=0, le=1)
+
+class AgentSecurity(BaseModel):
+    ts_code: str = Field(pattern=r"^\d{6}\.(SH|SZ|BJ)$")
+    symbol: str = Field(pattern=r"^\d{6}$")
+    name: str = Field(min_length=1)
+    asset_type: Literal["STOCK", "ETF"]
+    market: Literal["SH", "SZ", "BJ"]
+
+class AgentCandidatePlanInput(AgentRawIntent):
+    raw_symbol: str
+    security: AgentSecurity
+
+class AgentResolveDocumentResponse(BaseModel):
+    schema_version: Literal["agent.resolve_document.response.v1"]
+    agent_version: str
+    status: Literal["RESOLVED", "PARTIAL", "FAILED"]
+    raw_intents: list[AgentRawIntent]
+    candidate_plan_inputs: list[AgentCandidatePlanInput]
+    untrackable_targets: list[AgentUntrackableTarget]
+    warnings: list[str] = Field(default_factory=list)
+    debug: AgentDebug
+```
+
+约束：
+
+1. `reference_price` 可以为 0，表示原文没有明确价格。
+2. `confidence` 必须在 `(0,1]`。
+3. `direction` 只能是 `LONG` 或 `SHORT`。
+4. `candidate_plan_inputs.security.ts_code` 必须是证券标准代码格式。
+5. `candidate_plan_inputs.security.asset_type` 只允许 `STOCK` 或 `ETF`。
+6. `Agent` 不输出入场价、止损价、止盈价、仓位。
+
+#### 18.6.6 LangGraph 最小节点
+
+M4 最小节点：
+
+```text
+extract_raw_intents
+-> resolve_security
+-> classify_untrackable
+-> assemble_output
+-> validate_output
+```
+
+节点说明：
+
+| 节点 | 中文含义 | 输入 | 输出 | 失败策略 |
+| --- | --- | --- | --- | --- |
+| `extract_raw_intents` | 抽取原始交易意图 | 文档块 | 原始交易意图 | 模型失败则整个 Agent 失败。 |
+| `resolve_security` | 解析证券身份 | 原始交易意图 | 候选证券或未命中 | Go 查询接口失败则返回失败。 |
+| `classify_untrackable` | 分类不可追踪目标 | 未命中的原始标的 | 不可追踪目标 | 高置信分类为板块、主题、泛称；低置信保留未找到。 |
+| `assemble_output` | 装配稳定响应 | 所有中间结果 | Agent 响应草稿 | 不生成交易价格。 |
+| `validate_output` | 校验输出 | 响应草稿 | Pydantic 合法响应 | 校验失败则返回 `FAILED`。 |
+
+M4 暂不做复杂循环。只有模型请求可按配置重试；证券查询和输出校验失败直接失败，避免掩盖错误。
+
+#### 18.6.7 Agent 调用本地证券查询
+
+M4 不建议让 Python 直接连 MySQL。原因：
+
+1. 会复制 Go DAL 逻辑。
+2. 会把数据库账号暴露给旁路服务。
+3. 会让证券过滤规则分叉。
+
+推荐方式：Agent 通过 Go 内部 HTTP 工具查询证券。
+
+新增 Go 内部接口建议：
+
+```text
+POST /api/v1/internal/security/lookup
+```
+
+请求：
+
+```json
+{
+  "query": "旭创"
+}
+```
+
+响应复用 `domain.SecurityLookupResult`。
+
+接口约束：
+
+1. 只允许内网或本机访问。
+2. 必须带内部服务令牌。
+3. 返回只读结果，不执行写操作。
+4. 仍然复用 `SecurityService.Lookup`，不新增一套解析逻辑。
+
+如果 M4 第一版不想新增内部接口，也可以先让 Agent 只抽取 `raw_intents`，由 Go M3 完成本地解析。这样功能更小，但安全边界更简单。
+
+#### 18.6.8 Go 侧新增模块
+
+新增：
 
 ```text
 internal/agentclient/
   client.go
   types.go
+  analyzer.go
+  validate.go
   client_test.go
+  analyzer_test.go
 ```
 
-调用策略：
+职责：
 
-- 超时来自 Nacos 配置。
-- 失败按 `agent.max_retries` 重试。
-- 返回 schema version 不匹配则失败。
-- Agent 返回 `FAILED` 时，当前分析失败或只落解析失败记录，不进入 rules。
+| 文件 | 职责 |
+| --- | --- |
+| `types.go` | Go 版 Agent 请求和响应结构。 |
+| `client.go` | HTTP 调用、超时、重试、认证头。 |
+| `validate.go` | Go 侧 schema version、状态、字段二次校验。 |
+| `analyzer.go` | 实现 `Analyze(ctx, document, parseRun) ([]domain.PlanIntent, error)`。 |
+| `client_test.go` | 测 HTTP 状态码、超时、重试、schema 错误。 |
+| `analyzer_test.go` | 测 Agent 响应到 `PlanIntent` 的转换。 |
+
+新增分析器路由：
+
+```text
+internal/service/analysis_router.go
+```
+
+行为：
+
+```text
+agent.enabled=false
+-> 使用当前 LLMAnalyzer
+
+agent.enabled=true 且 agent.mode="primary"
+-> 使用 AgentAnalyzer
+
+agent.enabled=true 且 agent.mode="shadow"
+-> M4 第一版只记录日志，不改变候选计划写入来源；正式影子对比持久化放到 M7
+```
+
+建议 Nacos 配置：
+
+```json
+{
+  "agent": {
+    "enabled": false,
+    "mode": "primary",
+    "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
+    "health_endpoint": "http://127.0.0.1:8108/healthz",
+    "timeout_ms": 15000,
+    "max_retries": 1,
+    "schema_version": "agent.resolve_document.response.v1",
+    "auth": {
+      "enabled": true,
+      "header_name": "X-Agent-Token",
+      "static_token": ""
+    },
+    "allow_legacy_llm_fallback": false
+  }
+}
+```
+
+配置规则：
+
+1. 新增配置项时必须同步更新 `internal/config/types.go`、`internal/config/validate.go`、`configs/example_nacos_config.json`、`configs/example_nacos_config.annotated.jsonc`。
+2. `allow_legacy_llm_fallback` 默认 `false`，防止 Agent 失败后脏数据从旧链路回流。
+3. `timeout_ms` 必须有上限，例如不超过 60000。
+4. `max_retries` 来自配置，不在代码里写死。
+
+#### 18.6.9 Agent 响应到 Go 领域模型的转换
+
+转换规则：
+
+1. 优先读取 `candidate_plan_inputs`。
+2. 对每条 `candidate_plan_inputs` 生成 `domain.PlanIntent`：
+   - `Symbol` 使用 `security.ts_code`。
+   - `AssetType` 映射为 `A_SHARE` 或 `ETF`。
+   - `Market` 映射为 `SH`、`SZ`、`BJ`。
+   - 交易方向、参考价、理由、证据、风险、置信度从 Agent 输出复制。
+3. 如果 `candidate_plan_inputs` 为空但 `raw_intents` 非空，则把 `raw_symbol` 放入 `PlanIntent.Symbol`，交给 M3 解析。
+4. 如果 `status=FAILED`，直接返回错误。
+5. 如果 `schema_version` 不匹配，直接返回错误。
+
+为什么仍交给 M3：
+
+1. M3 是 Go 主系统最终安全门。
+2. Agent 可能误判、超时、版本不一致。
+3. Go 侧必须保证 `trade_candidate_plans.symbol` 只写本地主数据确认过的证券标准代码。
+
+#### 18.6.10 失败处理
+
+失败场景和处理：
+
+| 场景 | 处理 |
+| --- | --- |
+| Agent HTTP 超时 | 按 `agent.max_retries` 重试；仍失败则文档分析失败。 |
+| Agent 返回 4xx | 不重试，文档分析失败。 |
+| Agent 返回 5xx | 可重试，仍失败则文档分析失败。 |
+| 响应不是合法 JSON | 可重试，仍失败则文档分析失败。 |
+| `schema_version` 不匹配 | 不重试，文档分析失败。 |
+| Pydantic 返回 `FAILED` | 文档分析失败。 |
+| `candidate_plan_inputs` 里证券本地复核失败 | 交给 M3，按 M3 的未找到或歧义规则失败。 |
+| 只有不可追踪目标 | 文档分析失败，不生成候选计划。 |
+
+默认不回退旧 LLM 链路。只有在灰度阶段明确配置 `allow_legacy_llm_fallback=true` 时才允许回退，并且需要结构化日志记录。
+
+#### 18.6.11 安全和日志
+
+安全要求：
+
+1. Agent 服务默认只监听 `127.0.0.1` 或内网地址。
+2. Go 调 Agent 必须支持静态服务令牌。
+3. Agent 调 Go 内部接口也必须支持静态服务令牌。
+4. 日志不能输出模型 API Key、Agent Token、Nacos 密钥。
+5. Agent 不接收原始文件字节，只接收 parser 清洗后的文本块。
+6. Agent 不写数据库。
+
+Go 侧日志字段：
+
+```text
+document_id
+parse_run_id
+agent_request_id
+agent_status
+agent_version
+schema_version
+raw_intent_count
+candidate_plan_input_count
+untrackable_count
+duration_ms
+```
+
+Python 侧日志字段：
+
+```text
+request_id
+document_id
+parse_run_id
+graph_run_id
+node
+status
+duration_ms
+error_type
+```
+
+#### 18.6.12 测试方案
+
+Python 单元测试：
+
+```text
+agent/tests/test_schemas.py
+agent/tests/test_graph.py
+agent/tests/test_resolve_document_api.py
+```
+
+覆盖：
+
+1. 合法响应能通过 Pydantic。
+2. 非法 `ts_code` 被 Pydantic 拒绝。
+3. 非法方向被 Pydantic 拒绝。
+4. 置信度不在 `(0,1]` 被拒绝。
+5. Agent API 返回 `RESOLVED`、`PARTIAL`、`FAILED` 的结构稳定。
+6. 本地证券查询工具返回多个候选时，Agent 不强行选择。
+
+Go 单元测试：
+
+```text
+internal/agentclient/client_test.go
+internal/agentclient/analyzer_test.go
+internal/service/analysis_router_test.go
+```
+
+覆盖：
+
+1. Agent 超时按配置重试。
+2. Agent 返回 5xx 按配置重试。
+3. Agent 返回 4xx 不重试。
+4. schema version 不匹配失败。
+5. Agent `FAILED` 状态失败。
+6. `candidate_plan_inputs` 转换成 `PlanIntent`。
+7. `raw_intents` 在没有候选时仍能进入 M3。
+
+真实链路集成测试：
+
+```text
+cmd/api/m4_agent_analyzer_integration_test.go
+TestHTTPM4AnalyzeDocumentUsesAgentWithNacosBootstrap
+```
+
+测试要求：
+
+1. 从 Nacos 配置链路初始化 Go 主系统。
+2. 使用 `httptest.Server` 模拟 Python Agent。
+3. 通过 DAL 幂等写入 M1 证券主数据和别名。
+4. 通过 HTTP 上传文档，再调用 `/api/v1/documents/{id}/analyze`。
+5. Agent 返回 `新易盛`、`旭创`、`CPO板块`。
+6. 最终候选计划只包含 `300502.SZ`、`300308.SZ`。
+7. Agent 返回非法 schema 时，HTTP 500，文档状态为 `FAILED`，不生成候选计划。
+8. Agent 超时时，按 `agent.max_retries` 重试，仍失败则不进入 rules。
+
+真实链路测试门禁建议：
+
+```powershell
+$env:FINANCE_SYS_M4_NACOS_INTEGRATION='1'
+$env:FINANCE_SYS_M4_NACOS_DML_ACK='write-real-db'
+$env:GOTOOLCHAIN='local'
+go test -count=1 ./cmd/api -run TestHTTPM4AnalyzeDocumentUsesAgentWithNacosBootstrap -v
+```
+
+#### 18.6.13 实施顺序
+
+推荐顺序：
+
+```text
+1. 增加 agent 配置结构和配置校验。
+2. 新增 internal/agentclient/types.go，先固定 Go/Python 契约。
+3. 新增 agent/app/schemas.py，保持和 Go 契约一致。
+4. 实现 agentclient.Client 的 HTTP 调用、超时和重试。
+5. 实现 agentclient.Analyzer，把 Agent 响应转换成 []domain.PlanIntent。
+6. 增加 AnalysisRouter，在 bootstrap 中按配置选择 LLM 或 Agent。
+7. 搭建 agent/ FastAPI 服务和 /healthz、/v1/resolve-document。
+8. 实现 LangGraph 最小节点：抽取、查证、分类、装配、校验。
+9. 补 Go 单元测试和 Python 单元测试。
+10. 补 Nacos + HTTP 真实链路集成测试。
+11. 运行 gofmt、go test ./...、go build ./...。
+12. 运行 Python 测试。
+13. 更新 M4 实现状态和验收结论。
+```
+
+#### 18.6.14 数据定义语言边界
+
+M4 第一版不新增数据定义语言。
+
+不落库的内容：
+
+1. Agent 每个节点的中间状态。
+2. Agent debug 详情。
+3. 影子模式对比结果。
+4. 不可追踪目标明细。
+
+这些内容先通过结构化日志和测试断言覆盖。后续如果要查询解析过程、回放 Agent 输出或展示不可追踪目标，再放到 M7 设计 `instrument_resolution_runs` 和 `untrackable_targets`。届时必须先补迁移脚本，等待用户手动执行数据定义语言，再继续生成模型和改代码。
+
+#### 18.6.15 M4 验收标准
+
+M4 完成时必须满足：
+
+1. `agent.enabled=false` 时，现有 M3 链路行为不变。
+2. `agent.enabled=true` 时，文档分析接口能通过 Agent 获取交易意图。
+3. Agent 输出经过 Pydantic 校验和 Go 二次校验。
+4. Agent 输出仍经过 M3 候选计划装配器，本地证券复核失败不能进入 rules。
+5. Agent 不生成入场价、止损价、止盈价、仓位。
+6. Agent 超时、非法 schema、`FAILED` 状态都有明确失败结果。
+7. Nacos + HTTP 真实链路集成测试通过。
+8. `go test ./...`、`go build ./...`、Python 测试全部通过。
+9. 本阶段不需要用户执行增量 DDL。
+
+#### 18.6.16 M4 实施状态与验收结果
+
+本轮 M4 已完成代码落地，范围保持为“Python 智能体旁路服务 + Go 主链路可配置接入 + M3 复核”。没有新增数据定义语言（DDL，Data Definition Language，数据定义语言），不需要用户手动执行迁移脚本。
+
+已落地内容：
+
+1. 新增 `agent/` Python 工程目录，作为 M4 Python 智能体（Agent，智能体）服务根目录。
+2. `agent/app/main.py` 暴露健康检查 `/healthz` 和解析接口 `/v1/resolve-document`，使用 FastAPI（快速应用程序接口框架）。
+3. `agent/app/schemas.py` 使用 Pydantic（数据校验库）定义请求、响应、原始意图、候选计划输入和不可追踪目标结构。
+4. `agent/app/graph.py` 使用 LangGraph（图工作流框架）编排最小节点：抽取原始意图、解析候选、分类不可追踪目标。
+5. `agent/app/config.py` 已实现 Python 侧 Nacos 配置加载；Python 智能体与 Go 主系统读取同一份 Nacos JSON 文档。
+6. `agent/app/llm_client.py` 已实现 OpenAI 兼容模型客户端，并复用 Nacos `llm` 配置中的 `endpoint`、`api_key`、`model`、`timeout_ms`、`max_retries`。
+7. Python 智能体入站鉴权复用 Nacos `agent.auth` 配置；Go 侧用同一份 `agent.auth` 发起调用，Python 侧用同一份 `agent.auth` 校验调用。
+8. 无 Nacos 启动变量时，Python 才使用 `AGENT_LLM_*` 和 `AGENT_AUTH_*` 环境变量作为本地开发兜底。
+9. `agent/app/security_client.py` 只保留 Go 内部证券查询接口占位；M4 第一版不让 Python 直连 MySQL（关系型数据库），也不让 Python 编造 `ts_code`。
+10. 新增 `internal/agentclient/`，实现 Go 侧智能体客户端、请求响应结构、响应校验和 `AgentAnalyzer`。
+11. 新增 `internal/service/analysis_router.go`，根据 Nacos（配置中心）里的 `agent.enabled` 和 `agent.mode` 在旧大语言模型分析器与智能体分析器之间路由。
+12. `internal/bootstrap/app.go` 已接入 `AnalysisRouter`，`DocumentService` 仍只依赖 `planAnalyzer` 接口。
+13. `configs/example_nacos_config.json` 和 `configs/example_nacos_config.annotated.jsonc` 已新增 `agent` 配置段。
+14. 新增 `cmd/api/m4_agent_analyzer_integration_test.go`，通过 Nacos 启动 Go 服务，再用 HTTP（超文本传输协议）上传和分析文档，并用 `httptest.Server` 模拟 Python 智能体。
+
+当前 M4 第一版边界：
+
+1. Python 智能体可以返回 `candidate_plan_inputs`（候选计划输入），Go 侧仍会把其中的 `ts_code` 交给 M3 候选计划装配器重新查本地证券主数据。
+2. Python 智能体也可以只返回 `raw_intents`（原始意图），Go 侧 M3 会继续把 `新易盛`、`旭创` 解析为标准证券代码，并过滤 `CPO板块`。
+3. Python 智能体不生成入场价、止损价、止盈价和仓位；这些仍由 `internal/rules` 的确定性规则生成。
+4. Python 智能体不写数据库，不保存节点中间状态，不保存不可追踪目标明细。
+5. 智能体失败默认不回退旧大语言模型链路，避免旧链路把脏标的重新放进候选计划。
+
+新增测试覆盖：
+
+1. Python 单元测试：
+   - `agent/tests/test_schemas.py`：校验非法方向、非法置信度、非法 `ts_code`、成功响应无输出等结构错误。
+   - `agent/tests/test_graph.py`：校验最小图流程能抽取 `新易盛`、`旭创`、`CPO板块`，并把 `CPO板块` 分类为不可追踪目标。
+   - `agent/tests/test_resolve_document_api.py`：校验 `/healthz`、`/v1/resolve-document`、非法请求结构。
+   - `agent/tests/test_llm_client.py`：校验 OpenAI 兼容模型客户端的 JSON 抽取、5xx 重试和非法模型输出失败。
+   - `agent/tests/test_config.py`：校验 Python 能从同一份 Nacos JSON 中读取 `llm` 和 `agent.auth` 配置。
+2. Go 单元测试：
+   - `internal/agentclient/client_test.go`：校验 5xx 重试、4xx 不重试、超时重试。
+   - `internal/agentclient/analyzer_test.go`：校验候选计划输入转换、原始意图回落、版本不匹配失败、`FAILED` 状态失败。
+   - `internal/service/analysis_router_test.go`：校验关闭智能体、主模式、影子模式、允许回退、不允许回退。
+3. Go 集成测试：
+   - `cmd/api/m4_agent_analyzer_integration_test.go`：从 Nacos 启动服务，走真实 HTTP 上传和分析接口，覆盖有效候选输入、原始意图回落、非法 schema（结构版本）、`FAILED` 状态、超时重试。
+
+已执行验收命令：
+
+```powershell
+cd agent
+.\.venv\Scripts\python -m pytest -q
+
+cd ..
+$env:GOTOOLCHAIN='local'; go test ./...
+$env:GOTOOLCHAIN='local'; go build ./...
+$env:FINANCE_SYS_M4_NACOS_INTEGRATION='1'
+$env:FINANCE_SYS_M4_NACOS_DML_ACK='write-real-db'
+$env:GOTOOLCHAIN='local'; go test -count=1 ./cmd/api -run TestHTTPM4AnalyzeDocumentUsesAgentWithNacosBootstrap -v
+```
+
+验收结果：
+
+1. Python 测试：`14 passed`，仅 LangGraph 依赖自身输出弃用提示，不影响 M4 功能。
+2. Go 全量测试：`go test ./...` 通过。
+3. Go 全量构建：`go build ./...` 通过。
+4. M4 Nacos + HTTP 集成测试通过。
+5. 本阶段未新增 DDL，未修改 `migrations/`，未修改 `internal/domain/db_model/`。
 
 ### 18.7 M5：项目内规则文件加载器阶段
 
@@ -2410,7 +3046,7 @@ GET /api/v1/documents/{id}/untrackable-targets
 {
   "agent": {
     "enabled": true,
-    "shadow_mode": false,
+    "mode": "primary",
     "allow_legacy_llm_fallback": false
   }
 }
@@ -2418,8 +3054,8 @@ GET /api/v1/documents/{id}/untrackable-targets
 
 切换策略：
 
-1. `shadow_mode=true`：旧链路仍生成计划，新链路只记录解析结果，用于对比。
-2. `agent.enabled=true` 且 `shadow_mode=false`：正式由 Agent + CPA 链路生成计划。
+1. `agent.mode="shadow"`：旧链路仍生成计划，新链路只记录解析结果，用于对比。
+2. `agent.enabled=true` 且 `agent.mode="primary"`：正式由 Agent + CPA 链路生成计划。
 3. `allow_legacy_llm_fallback=false`：Agent 失败时不回退旧链路，避免脏数据重新进入。
 
 ### 18.10 推荐开发顺序
@@ -2453,10 +3089,10 @@ M3
 - `rules.Generate` 入参切换。
 - 当前样例回归测试。
 
-第三批 PR：Python 智能体旁路服务和规则文件加载器最小闭环。
+第三批 PR：Python 智能体旁路服务最小闭环。
 
 ```text
-M4 + M5
+M4
 ```
 
 产出：
@@ -2465,10 +3101,24 @@ M4 + M5
 - 快速应用程序接口框架（FastAPI）接口。
 - 语言图编排框架（LangGraph）最小节点。
 - 数据校验库（Pydantic）结构定义。
-- 规则文件（SKILL.md）加载器。
 - Go 智能体客户端。
+- 分析器路由和 Nacos `agent` 配置。
+- Agent + M3 真实链路集成测试。
 
-第四批 PR：模型上下文协议和观测增强。
+第四批 PR：规则文件加载器。
+
+```text
+M5
+```
+
+产出：
+
+- 规则文件（SKILL.md）加载器。
+- 规则文件哈希值。
+- Agent 响应携带规则文件哈希。
+- 规则样例回归集。
+
+第五批 PR：模型上下文协议和观测增强。
 
 ```text
 M6 + M7
@@ -2508,9 +3158,12 @@ M3 测试：
 
 M4 测试：
 
-- 智能体结构定义校验失败会返回失败。
-- Go 主系统收到结构版本不匹配会失败。
-- 智能体超时按配置重试。
+- Python Pydantic 校验非法 `ts_code`、非法方向、非法置信度。
+- Go `agentclient` 收到结构版本不匹配会失败。
+- Go `agentclient` 对 Agent 超时和 5xx 按配置重试。
+- Agent 返回 `FAILED` 时文档分析失败，不进入 rules。
+- Agent 返回 `candidate_plan_inputs` 时仍经过 M3 候选计划装配器复核。
+- Nacos + HTTP 真实链路集成测试能验证 Agent 输出 `新易盛`、`旭创`、`CPO板块` 时只落两条证券标准代码候选计划。
 
 M5 测试：
 

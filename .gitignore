@@ -21,3 +21,7 @@ cmd/api/cache
 .gocache_verify/
 testdata/游资大V复盘文章汇总2026
 cmd/api/__debug_*.exe
+agent/.venv/
+agent/.pytest_cache/
+agent/*.egg-info/
+agent/**/__pycache__/

@@ -52,6 +52,17 @@ func Validate(cfg *Config) error {
 		require(cfg.LLM.Endpoint != "", "llm.endpoint is required when llm.enabled is true")
 		require(cfg.LLM.Model != "", "llm.model is required when llm.enabled is true")
 	}
+	if cfg.Agent.Enabled {
+		require(cfg.Agent.Mode == AgentModePrimary || cfg.Agent.Mode == AgentModeShadow, "agent.mode must be primary or shadow when agent.enabled is true")
+		require(strings.TrimSpace(cfg.Agent.Endpoint) != "", "agent.endpoint is required when agent.enabled is true")
+		require(cfg.Agent.TimeoutMS > 0 && cfg.Agent.TimeoutMS <= 60000, "agent.timeout_ms must be in (0,60000] when agent.enabled is true")
+		require(cfg.Agent.MaxRetries >= 0, "agent.max_retries must be zero or positive")
+		require(strings.TrimSpace(cfg.Agent.SchemaVersion) != "", "agent.schema_version is required when agent.enabled is true")
+		if cfg.Agent.Auth.Enabled {
+			require(strings.TrimSpace(cfg.Agent.Auth.HeaderName) != "", "agent.auth.header_name is required when agent.auth.enabled is true")
+			require(strings.TrimSpace(cfg.Agent.Auth.StaticToken) != "", "agent.auth.static_token is required when agent.auth.enabled is true")
+		}
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},

@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"finance-sys/internal/agentclient"
 	"finance-sys/internal/config"
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain/db_model"
@@ -75,7 +76,9 @@ func Build(ctx context.Context) (*App, error) {
 	}
 
 	parserService := parser.New(logger)
-	analyzer := llm.NewModelAnalyzer(runtime, logger)
+	llmAnalyzer := llm.NewModelAnalyzer(runtime, logger)
+	agentAnalyzer := agentclient.NewAnalyzer(runtime, logger)
+	analyzer := service.NewAnalysisRouter(runtime, llmAnalyzer, agentAnalyzer, logger)
 	ruleEngine := rules.New(logger)
 	securityService := service.NewSecurityService(db, logger)
 	candidateAssembler := service.NewCandidateAssembler(securityService, logger)

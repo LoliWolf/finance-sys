@@ -93,6 +93,21 @@
     "timeout_ms": 20000,
     "max_retries": 2
   },
+  "agent": {
+    "enabled": false,
+    "mode": "primary",
+    "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
+    "health_endpoint": "http://127.0.0.1:8108/healthz",
+    "timeout_ms": 15000,
+    "max_retries": 1,
+    "schema_version": "agent.resolve_document.response.v1",
+    "auth": {
+      "enabled": false,
+      "header_name": "X-Agent-Token",
+      "static_token": ""
+    },
+    "allow_legacy_llm_fallback": false
+  },
   "rules": {
     "version": "rules-v2",
     "strategy": "TEXT_REFERENCE_PRICE",
