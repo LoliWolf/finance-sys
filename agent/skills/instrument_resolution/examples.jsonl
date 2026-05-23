@@ -1,0 +1,2 @@
+{"id":"valid_stock_alias","input":{"text":"推荐新易盛和旭创，关注CPO板块。"},"expected":{"raw_intents":["新易盛","旭创","CPO板块"],"trackable":["新易盛","旭创"],"untrackable":[{"raw_symbol":"CPO板块","target_kind":"SECTOR"}]}}
+{"id":"broad_phrase","input":{"text":"建议关注A股贵金属个股。"},"expected":{"raw_intents":["A股贵金属个股"],"trackable":[],"untrackable":[{"raw_symbol":"A股贵金属个股","target_kind":"BROAD_PHRASE"}]}}

@@ -96,8 +96,11 @@ type AgentUntrackableTarget struct {
 }
 
 type AgentDebug struct {
-	GraphRunID string   `json:"graph_run_id"`
-	Nodes      []string `json:"nodes"`
-	ToolsUsed  []string `json:"tools_used"`
-	DurationMS int64    `json:"duration_ms"`
+	GraphRunID   string   `json:"graph_run_id"`
+	Nodes        []string `json:"nodes"`
+	ToolsUsed    []string `json:"tools_used"`
+	DurationMS   int64    `json:"duration_ms"`
+	SkillName    string   `json:"skill_name"`
+	SkillVersion string   `json:"skill_version"`
+	SkillHash    string   `json:"skill_hash"`
 }

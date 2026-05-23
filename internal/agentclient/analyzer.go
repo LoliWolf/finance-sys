@@ -58,7 +58,7 @@ func (a *Analyzer) Analyze(ctx context.Context, document domain.Document, parsed
 		return nil, err
 	}
 	if a.logger != nil {
-		a.logger.InfoContext(ctx, "agent analyze completed", "document_id", document.ID, "parse_run_id", parsed.ID, "agent_status", response.Status, "agent_version", response.AgentVersion, "raw_intent_count", len(response.RawIntents), "candidate_plan_input_count", len(response.CandidatePlanInput), "untrackable_count", len(response.UntrackableTargets), "intent_count", len(intents))
+		a.logger.InfoContext(ctx, "agent analyze completed", "document_id", document.ID, "parse_run_id", parsed.ID, "agent_status", response.Status, "agent_version", response.AgentVersion, "skill_name", response.Debug.SkillName, "skill_version", response.Debug.SkillVersion, "skill_hash", response.Debug.SkillHash, "raw_intent_count", len(response.RawIntents), "candidate_plan_input_count", len(response.CandidatePlanInput), "untrackable_count", len(response.UntrackableTargets), "intent_count", len(intents))
 	}
 	return intents, nil
 }

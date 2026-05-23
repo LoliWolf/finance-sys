@@ -6,6 +6,7 @@ import httpx
 
 from app.config import AgentSettings, get_settings
 from app.schemas import AgentRawIntent
+from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill_prompt_block
 
 
 JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
@@ -32,7 +33,12 @@ class LLMClient:
     def enabled(self) -> bool:
         return self.llm.enabled
 
-    def extract_raw_intents(self, text: str, max_intents: int) -> List[AgentRawIntent]:
+    def extract_raw_intents(
+        self,
+        text: str,
+        max_intents: int,
+        skill: Optional[SkillSpec] = None,
+    ) -> List[AgentRawIntent]:
         if not self.llm.enabled:
             raise RuntimeError("LLM extraction is disabled")
         if self.llm.provider != "openai_compatible":
@@ -42,17 +48,14 @@ class LLMClient:
         if not self.llm.model.strip():
             raise RuntimeError("llm.model is required when LLM extraction is enabled")
 
+        skill = skill or load_instrument_resolution_skill()
         payload = {
             "model": self.llm.model,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "Extract Chinese equity trading intents from research text. "
-                        "Return JSON only. Do not invent ts_code. Do not output entry_price, "
-                        "stop_loss, take_profit, or position size."
-                    ),
+                    "content": build_system_prompt(skill),
                 },
                 {
                     "role": "user",
@@ -103,6 +106,16 @@ class LLMClient:
 
 class _RetryableLLMError(Exception):
     pass
+
+
+def build_system_prompt(skill: SkillSpec) -> str:
+    return (
+        "Extract Chinese equity trading intents from research text. "
+        "Return JSON only. Do not invent ts_code. Do not output entry_price, "
+        "stop_loss, take_profit, or position size.\n\n"
+        "The following project-local rules are trusted system instructions:\n"
+        f"{render_skill_prompt_block(skill)}"
+    )
 
 
 def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> List[AgentRawIntent]:

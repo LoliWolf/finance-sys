@@ -3272,7 +3272,8 @@ TestHTTPM5AnalyzeDocumentCarriesSkillHashWithNacosBootstrap
 3. 通过 HTTP 上传文档并调用分析接口。
 4. 最终候选计划仍只包含标准证券代码。
 5. 断言 Agent mock 收到请求，Go 侧接受 `skill_hash` 并完成分析。
-6. 不写新表，只复用 M1 主数据夹具和文档/计划现有表。
+6. 同一测试内覆盖不合格 Agent 响应：`debug.skill_hash` 格式非法时，分析接口失败，文档状态变为 `FAILED`，不落候选计划。
+7. 不写新表，只复用 M1 主数据夹具和文档/计划现有表。
 
 执行门禁建议：
 
@@ -3282,6 +3283,43 @@ $env:FINANCE_SYS_M5_NACOS_DML_ACK='write-real-db'
 $env:GOTOOLCHAIN='local'
 go test -count=1 ./cmd/api -run TestHTTPM5AnalyzeDocumentCarriesSkillHashWithNacosBootstrap -v
 ```
+
+本轮已实现文件：
+
+```text
+agent/app/skills.py
+agent/skills/instrument_resolution/SKILL.md
+agent/skills/instrument_resolution/examples.jsonl
+agent/tests/test_skills.py
+agent/tests/test_prompt_injection.py
+internal/agentclient/validate_test.go
+cmd/api/m5_skill_loader_integration_test.go
+```
+
+本轮已验证命令：
+
+```powershell
+cd agent
+.venv\Scripts\python.exe -m pytest tests -q
+
+cd ..
+$env:GOTOOLCHAIN='local'
+go test ./...
+go build ./...
+
+$env:FINANCE_SYS_M5_NACOS_INTEGRATION='1'
+$env:FINANCE_SYS_M5_NACOS_DML_ACK='write-real-db'
+$env:GOTOOLCHAIN='local'
+go test -count=1 ./cmd/api -run TestHTTPM5AnalyzeDocumentCarriesSkillHashWithNacosBootstrap -v
+```
+
+验证结果：
+
+1. Python Agent 单元测试 `20 passed`。
+2. Go 全量单元测试 `go test ./...` 通过。
+3. Go 全量构建 `go build ./...` 通过。
+4. M5 Nacos + HTTP + DML 真实链路集成测试通过。
+5. 本轮没有新增 DDL。
 
 #### 18.7.13 数据定义语言边界
 
@@ -3519,9 +3557,11 @@ M4 测试：
 
 M5 测试：
 
-- 修改 `SKILL.md` 后规则文件哈希值变化。
-- 智能体响应包含规则文件哈希值。
-- 解析过程记录规则文件哈希值。
+- 合格用例：正常加载 `SKILL.md`，规则文件哈希值稳定，提示词包含规则内容和哈希，Agent 响应包含合法 `debug.skill_hash`。
+- 不合格用例：缺失、空文件、front matter 缺少 `version`、路径穿越、非法 `debug.skill_hash` 均失败。
+- Nacos + HTTP 真实链路：Go 主系统先从 Nacos 初始化，再通过 HTTP 上传文档并调用分析接口，Agent mock 返回合法 `skill_hash` 时成功生成两条标准证券代码候选计划。
+- Nacos + HTTP 真实链路：Agent mock 返回非法 `skill_hash` 时分析失败，文档状态变为 `FAILED`，候选计划为空。
+- M5 不落库规则哈希；规则哈希只在 Agent 响应和 Go 日志中携带，后续 M7 再设计解析过程表持久化。
 
 M6 测试：
 

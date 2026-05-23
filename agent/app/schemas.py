@@ -112,6 +112,9 @@ class AgentDebug(StrictBaseModel):
     nodes: List[str] = Field(default_factory=list)
     tools_used: List[str] = Field(default_factory=list)
     duration_ms: int = Field(default=0, ge=0)
+    skill_name: str = ""
+    skill_version: str = ""
+    skill_hash: str = Field(default="", pattern=r"^(|sha256:[0-9a-f]{64})$")
 
 
 class AgentResolveDocumentResponse(StrictBaseModel):

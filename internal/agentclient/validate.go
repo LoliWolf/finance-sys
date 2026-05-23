@@ -8,7 +8,10 @@ import (
 	"finance-sys/internal/domain"
 )
 
-var agentTSCodeRe = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
+var (
+	agentTSCodeRe    = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
+	agentSkillHashRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+)
 
 func ValidateResponse(response *ResolveDocumentResponse, expectedSchemaVersion string) error {
 	if response == nil {
@@ -24,6 +27,9 @@ func ValidateResponse(response *ResolveDocumentResponse, expectedSchemaVersion s
 	default:
 		return fmt.Errorf("agent status must be RESOLVED, PARTIAL, or FAILED")
 	}
+	if err := validateDebug(response.Debug); err != nil {
+		return err
+	}
 	for i := range response.RawIntents {
 		if err := validateRawIntent(response.RawIntents[i]); err != nil {
 			return fmt.Errorf("agent raw_intents[%d]: %w", i, err)
@@ -33,6 +39,17 @@ func ValidateResponse(response *ResolveDocumentResponse, expectedSchemaVersion s
 		if err := validateCandidatePlanInput(response.CandidatePlanInput[i]); err != nil {
 			return fmt.Errorf("agent candidate_plan_inputs[%d]: %w", i, err)
 		}
+	}
+	return nil
+}
+
+func validateDebug(debug AgentDebug) error {
+	skillHash := strings.TrimSpace(debug.SkillHash)
+	if skillHash == "" {
+		return nil
+	}
+	if !agentSkillHashRe.MatchString(skillHash) {
+		return fmt.Errorf("agent debug.skill_hash must match sha256:<64 lowercase hex>")
 	}
 	return nil
 }
