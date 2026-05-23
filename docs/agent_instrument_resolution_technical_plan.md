@@ -3369,37 +3369,317 @@ M5 完成时必须满足：
 
 这样后续如果规则变了，可以先通过响应和日志追溯某一次解析使用的是哪版规则；等 M7 增加解析过程表后，再把 `skill_hash` 正式持久化。
 
-### 18.8 M6：模型上下文协议兜底阶段
+### 18.8 M6：Agent 标准证券代码解析工具阶段
 
-目标：本地解析失败或歧义时，允许 Agent 使用外部工具召回候选。
+目标：在 M5 已有规则文件基础上，让 Python Agent 尽量把原始标的解析成标准证券代码，并输出 `candidate_plan_inputs`。Go 主系统仍保留 M3 候选计划装配器作为最终安全门。
 
-接入顺序：
+M6 的核心结论：**Agent 可以更主动地找标准代码，但不能成为最终权威。** 外部 skill（技能）和 tool（工具）只负责“召回候选”和“补充证据”，最终仍必须经过本地 `security_master` 校验；校验通过后才能进入 `candidate_plan_inputs`，再由 Go 规则层生成候选计划。
 
-1. Tushare MCP：优先用于股票、ETF 基础信息候选。
-2. 东方财富 MCP：用于概念、板块、常用简称辅助判断。
+#### 18.8.1 M6 边界
 
-使用约束：
+M6 做：
+
+1. 新增 Agent 工具层（Tool Layer，工具层）。
+2. 新增本地证券查询工具，优先查询 Go 主系统的本地证券主数据。
+3. 接入用户已有 Tushare skill，或基于 Tushare 官方接口封装只读工具。
+4. 可选接入东方财富辅助工具，但只做别名、板块、主题辅助判断。
+5. Agent 尽量输出带标准证券代码的 `candidate_plan_inputs`。
+6. Agent 响应 `debug.tools_used` 记录实际使用了哪些工具。
+7. 每个引入的 skill/tool 必须登记来源、版本、链接、可信级别和用途。
+
+M6 不做：
+
+1. 不让外部工具直接写 `trade_candidate_plans`。
+2. 不让 Tushare 或东方财富返回值绕过本地 `security_master`。
+3. 不新增交易参数生成逻辑。
+4. 不把板块、行业、主题、指数、泛称包装成股票或 ETF。
+5. 不在文档分析事务里做全量 Tushare 同步。
+6. 不在 M6 新增解析过程表；工具轨迹持久化留到 M7。
+
+#### 18.8.2 关键名词
+
+| 英文词汇 | 中文翻译 | 本方案里的含义 |
+|-|-|-|
+| Tool | 工具 | Agent 可调用的确定性函数，例如本地证券查询、Tushare 查询。 |
+| Skill | 技能 | 对一组工具、提示词、规则和调用方式的封装。 |
+| MCP | 模型上下文协议 | 让 Agent 连接外部工具服务的协议。 |
+| Candidate Recall | 候选召回 | 根据原始标的找出可能匹配的证券候选。 |
+| Local Verification | 本地校验 | 用本地 `security_master` 验证候选是否真实、上市、可追踪。 |
+| Source Registry | 来源登记表 | 记录每个 skill/tool 从哪里来、是否官方、是否自研、版本和用途。 |
+
+#### 18.8.3 工具调用顺序
+
+M6 采用固定顺序，避免 Agent 任意挑工具：
 
 ```text
-本地查不到
--> MCP 召回候选
--> 候选写入 resolution candidates
--> 回本地 security_master 校验
--> 本地仍没有则不进 CPA
+raw_intents
+-> local_security_lookup_tool
+-> if unique local match: candidate_plan_inputs
+-> if no match or ambiguous: tushare_resolution_tool
+-> normalize external candidates
+-> local_security_verify_tool
+-> if unique verified match: candidate_plan_inputs
+-> if still no match: untrackable_targets or warnings
 ```
 
-禁止行为：
+顺序说明：
 
-- 禁止 MCP 返回一个名字后直接写 `trade_candidate_plans`。
-- 禁止 Agent 根据常识生成 `ts_code`。
-- 禁止把板块代码当作股票代码。
-- 禁止把东方财富概念/板块直接当成 Tushare 可追踪证券。
+1. 本地优先，因为本地 `security_master` 是系统内权威证券身份。
+2. Tushare 只在本地查不到或歧义时调用。
+3. 东方财富或 AKShare 只做辅助，不直接产出权威 `ts_code`。
+4. 多候选时不强行选择，返回 `AMBIGUOUS` 告警或保留 `raw_intents`。
+5. 所有工具都必须有超时、最大调用次数、只读约束。
 
-阶段性验收：
+#### 18.8.4 Skill 和 Tool 来源登记
 
-- MCP 工具超时不会拖垮 Go 主链路。
-- MCP 返回多候选时不会强行选择。
-- MCP 找到候选但本地未校验时，不进入候选计划。
+M6 要求每个拉入的 skill/tool 都写入来源登记。登记字段：
+
+| 字段 | 含义 |
+|-|-|
+| `tool_name` | 工具名称。 |
+| `source_type` | 来源类型：官方、社区高使用量、用户已有、自研生成。 |
+| `source_url` | 来源链接；自研生成则写项目路径。 |
+| `source_evidence` | 选择依据，例如官方文档、PyPI 下载量、GitHub star、用户提供。 |
+| `license` | 许可证或使用协议；未知必须写未知。 |
+| `allowed_use` | 在本系统里的允许用途。 |
+| `blocked_use` | 明确禁止用途。 |
+| `verified_at` | 引入或复核日期。 |
+
+首批候选清单：
+
+| 优先级 | skill/tool | 来源类型 | 来源和依据 | M6 用途 | 结论 |
+|-|-|-|-|-|-|
+| P0 | `local_security_lookup_tool` | 自研生成 | 项目内生成，调用 Go 主系统本地证券查询接口；路径建议 `agent/app/tools/local_security.py`。 | 查询本地 `security_master` / `security_alias`。 | 必选。 |
+| P0 | `local_security_verify_tool` | 自研生成 | 项目内生成，调用 Go 主系统本地校验接口；路径建议 `agent/app/tools/local_security.py`。 | 外部候选回本地复核。 | 必选。 |
+| P1 | `tushare_stock_basic_tool` | 官方优先 | Tushare 官方 `stock_basic` 文档：<https://tushare.pro/document/2?doc_id=25>；字段包含 `ts_code`、`symbol`、`name`、`exchange`、`list_status`。PyPI `tushare` 包月下载量约 749,698，来源：<https://pypistats.org/packages/tushare>。 | 按名称、代码、别名召回 A 股候选。 | 推荐优先。 |
+| P1 | 用户已有 `tushare skill` | 用户已有，待核验 | 来源为用户提供。引入前必须补仓库链接、版本、许可证、工具列表、安装方式、维护者信息。 | 如果功能覆盖 `stock_basic` 且能只读调用，可复用。 | 可用但必须登记。 |
+| P2 | `zhewenzhang/tushare_MCP` | 社区 MCP | GitHub：<https://github.com/zhewenzhang/tushare_MCP>；当前页面显示约 46 stars，README 声称 52 个金融工具，支持 stdio 和 HTTP 模式。 | 可作为 Tushare MCP 候选实现参考。 | 候选，不直接信任。 |
+| P2 | `smallfat-tushare` / PulseMCP 镜像 | 社区 MCP | PulseMCP：<https://www.pulsemcp.com/servers/smallfat-tushare>；页面声称 173 个数据接口和 17 个工具。 | 可作为 MCP 候选来源比较。 | 候选，不直接信任。 |
+| P3 | `akshare_eastmoney_assist_tool` | 社区高使用量 | AKShare GitHub：<https://github.com/akfamily/akshare>，约 19k stars；PyPI 月下载量约 2,818,515，来源：<https://pypistats.org/packages/akshare>；项目文档声明感谢东方财富等数据源。 | 辅助识别简称、概念、板块，不做最终证券身份。 | 可选辅助。 |
+
+选择规则：
+
+1. 有官方接口时优先官方接口。
+2. 没有官方 MCP 时，社区 MCP 只能作为工具实现参考或候选召回工具。
+3. 用户已有 skill 可以复用，但必须先补齐来源登记。
+4. 高下载量或高 star 只代表使用广，不代表数据权威。
+5. 任何外部候选都必须回本地校验。
+
+#### 18.8.5 Agent 响应契约调整
+
+M6 不升级响应 schema 版本，继续兼容 `agent.resolve_document.response.v1`。
+
+`candidate_plan_inputs` 从 M4/M5 的可选字段变成 M6 的主要目标字段：
+
+```json
+{
+  "candidate_plan_inputs": [
+    {
+      "intent_id": "raw-1",
+      "raw_symbol": "新易盛",
+      "security": {
+        "ts_code": "300502.SZ",
+        "symbol": "300502",
+        "name": "新易盛",
+        "asset_type": "STOCK",
+        "market": "SZ"
+      },
+      "direction": "LONG",
+      "reference_price": 88.8,
+      "reference_price_note": "explicit_price_mention",
+      "thesis": "source text contains an explicit investment target",
+      "evidence": [{"chunk_index": 0, "text": "推荐新易盛"}],
+      "risks": [],
+      "confidence": 0.81
+    }
+  ],
+  "debug": {
+    "tools_used": [
+      "local_security_lookup_tool",
+      "tushare_stock_basic_tool",
+      "local_security_verify_tool"
+    ]
+  }
+}
+```
+
+要求：
+
+1. `candidate_plan_inputs.security.ts_code` 必须是本地校验通过的标准代码。
+2. 如果只有外部候选但本地未校验通过，不能进入 `candidate_plan_inputs`。
+3. `tools_used` 只记录工具名，不记录 token、密钥、完整请求参数。
+4. 多候选时写入 `warnings`，不强行选择。
+
+#### 18.8.6 Go 主系统改造
+
+Go 侧提供给 Agent 的本地只读接口建议：
+
+```text
+POST /api/v1/internal/security/resolve
+POST /api/v1/internal/security/verify
+```
+
+`resolve` 输入：
+
+```json
+{
+  "query": "新易盛",
+  "max_candidates": 5
+}
+```
+
+`verify` 输入：
+
+```json
+{
+  "ts_code": "300502.SZ",
+  "raw_symbol": "新易盛"
+}
+```
+
+返回只包含标准化字段：
+
+```json
+{
+  "candidates": [
+    {
+      "ts_code": "300502.SZ",
+      "symbol": "300502",
+      "name": "新易盛",
+      "asset_type": "STOCK",
+      "market": "SZ",
+      "list_status": "L",
+      "match_source": "alias"
+    }
+  ]
+}
+```
+
+安全要求：
+
+1. 仅内网或本机 Agent 可调用。
+2. 复用 Nacos `agent.auth` 或新增内部调用 token 时必须同步配置文档。
+3. 接口只读，不写数据库。
+4. 只返回业务字段，不暴露数据库内部字段和第三方原始 JSON。
+
+#### 18.8.7 Python Agent 改造
+
+新增建议目录：
+
+```text
+agent/app/tools/
+  __init__.py
+  registry.py
+  local_security.py
+  tushare_tool.py
+  eastmoney_assist.py
+agent/skills/instrument_resolution/tools.json
+```
+
+`tools.json` 示例：
+
+```json
+[
+  {
+    "tool_name": "tushare_stock_basic_tool",
+    "source_type": "official_api",
+    "source_url": "https://tushare.pro/document/2?doc_id=25",
+    "source_evidence": "Tushare official stock_basic API; PyPI tushare monthly downloads around 749,698",
+    "allowed_use": "recall A-share stock candidates",
+    "blocked_use": "directly write candidate_plan_inputs without local verification"
+  }
+]
+```
+
+图节点变化：
+
+```text
+load_skill
+-> extract_raw_intents
+-> resolve_with_local_security
+-> resolve_with_external_tools
+-> verify_external_candidates
+-> classify_untrackable_targets
+-> assemble_output
+```
+
+#### 18.8.8 安全规则
+
+1. Tushare token 只能来自 Nacos 或进程环境，不允许写入 `SKILL.md`、`tools.json`、日志、测试快照。
+2. 外部工具必须设置超时，建议单工具 3 秒，总工具预算 8 秒。
+3. 每个原始标的最多调用一次外部工具；批量文档要限制总调用次数。
+4. 外部工具失败时降级为 `raw_intents` + `warnings`，不能拖垮 Go 主链路。
+5. 外部工具返回板块、概念、指数时，只能进入 `untrackable_targets` 或 `warnings`。
+6. 工具输出字段必须经过白名单映射。
+7. 所有工具默认只读。
+
+#### 18.8.9 测试方案
+
+Python 单元测试：
+
+```text
+agent/tests/test_tools_registry.py
+agent/tests/test_local_security_tool.py
+agent/tests/test_tushare_tool.py
+agent/tests/test_m6_graph_resolution.py
+```
+
+覆盖：
+
+1. `tools.json` 每个工具都有来源登记。
+2. 来源缺失、许可证缺失、用途缺失时失败。
+3. 本地唯一命中时直接输出 `candidate_plan_inputs`。
+4. 本地无命中时调用 Tushare 工具召回。
+5. Tushare 候选未通过本地校验时不进入 `candidate_plan_inputs`。
+6. Tushare 多候选时不强行选择。
+7. Tushare 超时返回 warning。
+8. 东方财富/AKShare 返回板块时只进入不可追踪目标。
+
+Go 单元测试：
+
+```text
+internal/httpapi/security_internal_test.go
+internal/agentclient/validate_test.go
+```
+
+覆盖：
+
+1. 内部 `resolve` 接口只返回 active 股票或 ETF。
+2. 内部 `verify` 接口拒绝退市、暂停、非股票/ETF。
+3. Agent 返回 `candidate_plan_inputs` 时仍经过 M3 装配器复核。
+4. Agent 返回未校验外部候选时失败。
+
+真实链路测试：
+
+```text
+cmd/api/m6_agent_tool_resolution_integration_test.go
+TestHTTPM6AnalyzeDocumentAgentResolvesStandardCodeWithNacosBootstrap
+```
+
+测试要求：
+
+1. 从 Nacos 初始化 Go 主系统。
+2. 通过 HTTP 上传文档并调用分析接口。
+3. 使用 `httptest.Server` 模拟 Agent 工具调用 Go 内部证券接口。
+4. 合格用例：`新易盛`、`旭创` 输出标准代码 `300502.SZ`、`300308.SZ`。
+5. 不合格用例：Tushare 返回 `CPO板块` 或多候选时不进入候选计划。
+6. 超时用例：外部工具超时，文档分析仍能根据本地结果继续。
+7. 测试 DML 只写现有文档、解析、候选计划表；M6 不新增 DDL。
+
+#### 18.8.10 验收标准
+
+M6 完成时必须满足：
+
+1. Agent 能优先用本地工具解析标准证券代码。
+2. Agent 本地查不到时能调用 Tushare 召回候选。
+3. Agent 输出 `candidate_plan_inputs` 时，证券代码必须已通过本地校验。
+4. 每个 skill/tool 都有来源登记，明确“官方、社区高使用量、用户已有、自研生成”。
+5. 外部工具不可用时不影响本地可解析标的。
+6. 多候选不强行选择。
+7. 板块、行业、主题、指数、泛称不进入候选计划。
+8. Nacos + HTTP 真实链路集成测试通过。
+9. `go test ./...`、`go build ./...`、Python 测试通过。
+10. 不新增 DDL，不要求用户手动执行数据库迁移。
 
 ### 18.9 M7：观测、回归和灰度切换阶段
 
@@ -3565,9 +3845,12 @@ M5 测试：
 
 M6 测试：
 
+- 每个 skill/tool 都有来源登记，标明官方、社区高使用量、用户已有或自研生成。
+- Agent 优先用本地证券工具输出标准证券代码。
+- Tushare 工具返回候选后必须回本地校验，校验通过才进入 `candidate_plan_inputs`。
 - 模型上下文协议工具超时返回告警，不直接污染计划。
-- 模型上下文协议工具返回候选后必须本地校验。
 - 外部工具不可用时，本地标的解析仍可工作。
+- 东方财富或 AKShare 辅助工具返回板块/概念时，只进入不可追踪目标或告警，不进入候选计划。
 
 M7 测试：
 
