@@ -2955,12 +2955,103 @@ $env:GOTOOLCHAIN='local'; go test -count=1 ./cmd/api -run TestHTTPM4AnalyzeDocum
 
 目标：把标的解析规则从“写在 prompt 里的散文”变成项目内可版本化文件。
 
-新增：
+M5 的核心结论：**把 Agent 解析规则从代码和提示词里抽出来，变成项目内可审计、可哈希、可回归的规则文件。** M5 不改变 M3 的最终安全门，不接 MCP（Model Context Protocol，模型上下文协议），不新增数据库表，不让规则文件直接决定候选计划入库。
+
+#### 18.7.1 M5 边界
+
+M5 做：
+
+1. 新增项目内 `SKILL.md` 规则文件。
+2. 新增规则文件加载器（Skill Loader，规则文件加载器）。
+3. 为规则文件计算稳定哈希值（Hash，哈希值）。
+4. 把规则文件内容注入 Python Agent 的大语言模型提示词。
+5. 在 Python Agent 响应里带回规则文件名称、版本和哈希值。
+6. 增加规则样例回归集。
+7. 增加 Python 单元测试和 Go 契约测试，确认规则哈希随响应返回。
+
+M5 不做：
+
+1. 不接 Tushare MCP 或东方财富 MCP，这部分留到 M6。
+2. 不新增 `instrument_resolution_runs`、`untrackable_targets` 等数据库表，这部分留到 M7。
+3. 不把规则文件当成运行时配置写入 Nacos；M5 固定读取项目内文件。
+4. 不允许 `SKILL.md` 直接配置入场价、止损价、止盈价、仓位。
+5. 不允许 `SKILL.md` 绕过 Go 侧 M3 候选计划装配器。
+6. 不支持在线编辑规则文件；规则变更通过代码提交和测试验收。
+
+#### 18.7.2 关键名词
+
+| 英文词汇 | 中文翻译 | 本方案里的含义 |
+|-|-|-|
+| SKILL.md | 规则文件 | 项目内 Markdown 规则文件，描述标的解析边界、禁止行为、输出要求和示例。 |
+| Skill Loader | 规则文件加载器 | Python Agent 内读取 `SKILL.md`、校验内容、计算哈希值的模块。 |
+| Skill Hash | 规则文件哈希值 | 对规则文件规范化内容计算出的 `sha256`，用于追踪本次解析使用的规则版本。 |
+| Skill Version | 规则文件版本 | 写在规则文件头部的人工版本号，例如 `instrument-resolution-m5-v1`。 |
+| Prompt Injection | 提示词注入 | 这里指把可信项目内规则文件内容拼入系统提示词，不是外部攻击输入。 |
+| Golden Case | 金标样例 | 固定输入和期望输出的回归样例，用于防止规则变更导致解析行为漂移。 |
+| Stable Contract | 稳定契约 | Go 与 Python 之间不能随意变化的 JSON 字段和含义。 |
+
+#### 18.7.3 目录结构
+
+新增或调整：
 
 ```text
+agent/app/skills.py
 agent/skills/instrument_resolution/SKILL.md
 agent/skills/instrument_resolution/examples.jsonl
 ```
+
+职责说明：
+
+| 路径 | 职责 |
+|-|-|
+| `agent/app/skills.py` | 规则文件加载器，负责读取、校验、规范化和计算哈希值。 |
+| `agent/skills/instrument_resolution/SKILL.md` | 标的解析规则文件，承载业务边界和提示词规则。 |
+| `agent/skills/instrument_resolution/examples.jsonl` | 金标样例集，每行一个输入和期望输出。 |
+| `agent/tests/test_skills.py` | 测规则文件加载、哈希稳定性、缺失文件失败。 |
+| `agent/tests/test_prompt_injection.py` | 测大语言模型请求里包含规则内容和规则哈希。 |
+
+M5 不新增 `agent/app/tools/` 外部工具目录；外部工具在 M6 处理。
+
+#### 18.7.4 SKILL.md 格式
+
+`SKILL.md` 使用 Markdown，头部允许一个很小的 YAML 风格 front matter（元信息头）。M5 不引入完整 YAML 解析器，只解析简单的 `key: value`。
+
+示例：
+
+```markdown
+---
+name: instrument_resolution
+version: instrument-resolution-m5-v1
+description: Rules for Chinese A-share instrument resolution.
+---
+
+# Instrument Resolution Rules 标的解析规则
+
+## Hard Constraints 强约束
+
+1. 不允许编造 `ts_code`。
+2. 板块、主题、行业、指数、泛称不能进入 `candidate_plan_inputs`。
+3. 只有真实可追踪证券才能进入 `candidate_plan_inputs`。
+4. 交易价格和仓位只能由 Go `internal/rules` 生成。
+```
+
+必填 front matter 字段：
+
+| 字段 | 含义 | 示例 |
+|-|-|-|
+| `name` | 规则文件名称 | `instrument_resolution` |
+| `version` | 人工版本号 | `instrument-resolution-m5-v1` |
+| `description` | 简短说明 | `Rules for Chinese A-share instrument resolution.` |
+
+规则正文必须包含：
+
+1. 强约束。
+2. 可追踪目标定义。
+3. 不可追踪目标定义。
+4. 多候选和歧义处理。
+5. 证据要求。
+6. 禁止输出字段。
+7. 输出 JSON 要求。
 
 `SKILL.md` 应明确写入：
 
@@ -2969,15 +3060,276 @@ agent/skills/instrument_resolution/examples.jsonl
 - MCP 返回候选必须回本地 `security_master` 校验。
 - 多候选不确定时返回 `AMBIGUOUS`。
 - 只有 `asset_type in (STOCK, ETF)` 且 `list_status = L` 才能进入 `candidate_plan_inputs`。
+- 原文没有价格时，`reference_price=0` 且 `reference_price_note="price_missing_in_text"`。
+- 证据必须来自原文块，不允许凭空生成。
+- 不允许输出 `entry_price`、`stop_loss`、`take_profit`、`position_pct`。
 
-loader 行为：
+#### 18.7.5 examples.jsonl 格式
+
+`examples.jsonl` 每行一个 JSON 对象，用于规则回归测试。
+
+示例：
+
+```jsonl
+{"id":"valid_stock_alias","input":{"text":"推荐新易盛和旭创，关注CPO板块。"},"expected":{"raw_intents":["新易盛","旭创","CPO板块"],"trackable":["新易盛","旭创"],"untrackable":[{"raw_symbol":"CPO板块","target_kind":"SECTOR"}]}}
+{"id":"broad_phrase","input":{"text":"建议关注A股贵金属个股。"},"expected":{"raw_intents":["A股贵金属个股"],"trackable":[],"untrackable":[{"raw_symbol":"A股贵金属个股","target_kind":"BROAD_PHRASE"}]}}
+```
+
+字段说明：
+
+| 字段 | 含义 |
+|-|-|
+| `id` | 样例唯一标识。 |
+| `input.text` | 输入文本。 |
+| `expected.raw_intents` | 期望抽取出的原始标的文本。 |
+| `expected.trackable` | 期望后续可解析成真实证券的原始文本。 |
+| `expected.untrackable` | 期望识别为不可追踪目标的对象。 |
+
+M5 的 `examples.jsonl` 不直接跑 Go 规则引擎，只校验 Agent 抽取与分类边界。是否最终生成候选计划仍由 M3 集成测试覆盖。
+
+#### 18.7.6 Loader 行为
+
+规则文件加载器行为：
 
 1. Agent 启动时读取 `SKILL.md`。
-2. 计算 `skill_hash`。
-3. 每次 Agent 响应带上 `skill_hash`。
-4. `instrument_resolution_runs` 记录本次使用的 `skill_hash`。
+2. 文件必须位于 `agent/skills/` 目录内，禁止路径穿越。
+3. 文件必须是 UTF-8。
+4. 文件不能为空，最大建议 64 KB，防止提示词过大。
+5. 规范化换行符为 `\n`，去掉 UTF-8 BOM。
+6. 解析 front matter 中的 `name`、`version`、`description`。
+7. 对规范化后的完整内容计算 `sha256`，格式为 `sha256:<hex>`。
+8. 将 `SkillSpec` 缓存在进程内。
+9. M5 默认不做热加载；进程重启后读取新规则。
+10. 缺失、为空、哈希计算失败或 front matter 不合法时，Agent 健康检查失败，解析接口返回失败，不允许静默退回无规则提示词。
 
-这样后续如果规则变了，可以追溯某一次解析使用的是哪版规则。
+建议结构：
+
+```python
+class SkillSpec(BaseModel):
+    name: str
+    version: str
+    description: str
+    content: str
+    skill_hash: str
+    loaded_at: datetime
+```
+
+#### 18.7.7 提示词注入方式
+
+`LLMClient` 构造请求时，系统提示词从固定文本升级为：
+
+```text
+基础安全约束
++ 当前 SKILL.md 规则内容
++ 输出 JSON schema 要求
+```
+
+拼接格式建议：
+
+```text
+<instrument_resolution_skill
+name="instrument_resolution"
+version="instrument-resolution-m5-v1"
+hash="sha256:..."
+>
+...SKILL.md normalized content...
+</instrument_resolution_skill>
+```
+
+要求：
+
+1. 规则内容只来自项目内文件，不接受用户上传文档覆盖。
+2. 用户文档文本只能放在 user message（用户消息）里，不能混入 system message（系统消息）的规则区域。
+3. 大语言模型输出必须继续经过 Pydantic 和 Go 二次校验。
+4. `SKILL.md` 只能约束抽取和解析，不允许直接生成交易参数。
+
+#### 18.7.8 Agent 响应契约调整
+
+M5 是对 `agent.resolve_document.response.v1` 的兼容增强，不需要立即升级到 v2。
+
+在 `debug` 中新增可选字段：
+
+```json
+{
+  "debug": {
+    "graph_run_id": "m4-agent-run-id",
+    "nodes": ["load_skill", "extract_raw_intents", "resolve_candidates"],
+    "tools_used": [],
+    "duration_ms": 12,
+    "skill_name": "instrument_resolution",
+    "skill_version": "instrument-resolution-m5-v1",
+    "skill_hash": "sha256:..."
+  }
+}
+```
+
+字段中文解释：
+
+| 字段 | 中文含义 |
+|-|-|
+| `skill_name` | 规则文件名称。 |
+| `skill_version` | 规则文件人工版本号。 |
+| `skill_hash` | 规则文件内容哈希值。 |
+
+Go 侧 `internal/agentclient.AgentDebug` 增加同名字段。Go 主链路暂不持久化这些字段，只用于日志、测试断言和后续 M7 落库设计。
+
+#### 18.7.9 Python Agent 流程变化
+
+M5 后 Python Agent 内部流程：
+
+```text
+/v1/resolve-document
+-> load_skill
+-> extract_raw_intents
+-> resolve_candidates
+-> classify_untrackable_targets
+-> assemble_output
+-> response.debug.skill_hash
+```
+
+节点说明：
+
+| 节点 | 中文名 | 输入 | 输出 |
+|-|-|-|-|
+| `load_skill` | 加载规则文件 | 项目内 `SKILL.md` 路径 | `SkillSpec` |
+| `extract_raw_intents` | 抽取原始意图 | 文本块、`SkillSpec` | 原始意图 |
+| `resolve_candidates` | 解析候选 | 原始意图 | 候选计划输入或原始意图回落 |
+| `classify_untrackable_targets` | 分类不可追踪目标 | 原始意图 | 不可追踪目标 |
+| `assemble_output` | 装配输出 | 所有中间结果、`SkillSpec` | 稳定响应 |
+
+#### 18.7.10 Go 主系统改造
+
+Go 侧只做契约跟进，不解释 `SKILL.md` 内容：
+
+1. `internal/agentclient/types.go`：`AgentDebug` 增加 `SkillName`、`SkillVersion`、`SkillHash`。
+2. `internal/agentclient/validate.go`：如果响应里出现 `skill_hash`，必须满足 `sha256:<64位十六进制>`。
+3. `internal/agentclient/analyzer.go`：日志增加 `skill_hash`，方便排查。
+4. `cmd/api/m4_agent_analyzer_integration_test.go` 或新增 M5 集成测试：模拟 Agent 返回 `skill_hash`，确认 Go 能反序列化和通过校验。
+
+不改：
+
+1. 不改 `DocumentService` 事务编排。
+2. 不改 `internal/rules`。
+3. 不改 `trade_candidate_plans` 表。
+4. 不生成新的 `db_model`。
+
+#### 18.7.11 安全规则
+
+1. `SKILL.md` 只能从项目仓库读取，不能从用户上传文件、远程 URL 或 Nacos 动态文本读取。
+2. `SKILL.md` 不能包含 API Key、Nacos 密码、数据库 DSN。
+3. 加载器必须限制路径在 `agent/skills/` 下。
+4. 加载器必须限制文件大小。
+5. 规则文件加载失败时必须失败，而不是继续用空规则。
+6. 规则文件只能约束解析，不影响 Go 确定性交易参数生成。
+
+#### 18.7.12 测试方案
+
+Python 单元测试：
+
+```text
+agent/tests/test_skills.py
+agent/tests/test_prompt_injection.py
+agent/tests/test_skill_examples.py
+```
+
+覆盖：
+
+1. 正常加载 `SKILL.md`。
+2. 缺失 `SKILL.md` 失败。
+3. 空 `SKILL.md` 失败。
+4. front matter 缺少 `name` 或 `version` 失败。
+5. 同一内容哈希稳定。
+6. 修改内容后哈希变化。
+7. 不同换行符规范化后哈希一致。
+8. 提示词中包含 `skill_hash`、`skill_version` 和规则内容。
+9. `examples.jsonl` 每行 JSON 格式合法。
+10. 金标样例覆盖 `新易盛`、`旭创`、`CPO板块`、`A股贵金属个股`。
+
+Go 单元测试：
+
+```text
+internal/agentclient/validate_test.go
+internal/agentclient/analyzer_test.go
+```
+
+覆盖：
+
+1. `debug.skill_hash` 格式合法时通过。
+2. `debug.skill_hash` 格式不合法时失败。
+3. `AgentAnalyzer` 日志和响应转换不受新增 debug 字段影响。
+
+真实链路测试：
+
+```text
+cmd/api/m5_skill_loader_integration_test.go
+TestHTTPM5AnalyzeDocumentCarriesSkillHashWithNacosBootstrap
+```
+
+测试要求：
+
+1. 从 Nacos 初始化 Go 主系统。
+2. 使用 `httptest.Server` 模拟 Python Agent 返回带 `debug.skill_hash` 的响应。
+3. 通过 HTTP 上传文档并调用分析接口。
+4. 最终候选计划仍只包含标准证券代码。
+5. 断言 Agent mock 收到请求，Go 侧接受 `skill_hash` 并完成分析。
+6. 不写新表，只复用 M1 主数据夹具和文档/计划现有表。
+
+执行门禁建议：
+
+```powershell
+$env:FINANCE_SYS_M5_NACOS_INTEGRATION='1'
+$env:FINANCE_SYS_M5_NACOS_DML_ACK='write-real-db'
+$env:GOTOOLCHAIN='local'
+go test -count=1 ./cmd/api -run TestHTTPM5AnalyzeDocumentCarriesSkillHashWithNacosBootstrap -v
+```
+
+#### 18.7.13 数据定义语言边界
+
+M5 不新增 DDL（Data Definition Language，数据定义语言）。
+
+不落库：
+
+1. `skill_hash`。
+2. `skill_version`。
+3. 规则文件内容。
+4. 规则样例执行结果。
+
+原因：
+
+1. M5 的目标是先把规则文件版本固定住。
+2. M7 会统一设计解析过程表和不可追踪目标表。
+3. 现在提前落库会让 M5 混入观测系统设计，扩大范围。
+
+#### 18.7.14 实施顺序
+
+1. 新增 `agent/skills/instrument_resolution/SKILL.md`。
+2. 新增 `agent/skills/instrument_resolution/examples.jsonl`。
+3. 新增 `agent/app/skills.py`。
+4. 在 Python graph 中增加 `load_skill` 节点。
+5. 调整 `LLMClient` 的 system message 生成逻辑，注入规则内容和哈希。
+6. 扩展 Python response schema 的 `debug` 字段。
+7. 扩展 Go `AgentDebug`。
+8. 增加 Python 单元测试。
+9. 增加 Go 单元测试。
+10. 增加 M5 Nacos + HTTP 真实链路集成测试。
+11. 更新项目文档和飞书文档。
+
+#### 18.7.15 验收标准
+
+M5 完成时必须满足：
+
+1. Agent 启动或首次请求能加载项目内 `SKILL.md`。
+2. `SKILL.md` 缺失或非法时，Agent 明确失败。
+3. 同一份规则文件得到稳定 `skill_hash`。
+4. 修改规则文件后 `skill_hash` 变化。
+5. 大语言模型请求包含规则内容和 `skill_hash`。
+6. Agent 响应包含 `debug.skill_hash`。
+7. Go 侧能解析并校验 `debug.skill_hash`。
+8. Nacos + HTTP 真实链路测试通过。
+9. `go test ./...`、`go build ./...`、Python 测试通过。
+10. 不新增 DDL，不要求用户手动执行数据库迁移。
+
+这样后续如果规则变了，可以先通过响应和日志追溯某一次解析使用的是哪版规则；等 M7 增加解析过程表后，再把 `skill_hash` 正式持久化。
 
 ### 18.8 M6：模型上下文协议兜底阶段
 
