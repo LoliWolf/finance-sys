@@ -88,6 +88,15 @@
     "mode": "primary",
     "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
     "health_endpoint": "http://127.0.0.1:8108/healthz",
+    // Python Agent 调 Go 主系统内部只读工具接口的基础地址；M6 证券解析工具使用。
+    "internal_api_base_url": "http://127.0.0.1:8080",
+    "tushare": {
+      // M6 Tushare 官方 stock_basic 只读召回工具。token 应放在 Nacos 私密配置，不提交真实值。
+      "enabled": false,
+      "token": "",
+      "endpoint": "https://api.tushare.pro",
+      "timeout_ms": 3000
+    },
     "timeout_ms": 15000,
     "max_retries": 1,
     "schema_version": "agent.resolve_document.response.v1",

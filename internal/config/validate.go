@@ -55,6 +55,14 @@ func Validate(cfg *Config) error {
 	if cfg.Agent.Enabled {
 		require(cfg.Agent.Mode == AgentModePrimary || cfg.Agent.Mode == AgentModeShadow, "agent.mode must be primary or shadow when agent.enabled is true")
 		require(strings.TrimSpace(cfg.Agent.Endpoint) != "", "agent.endpoint is required when agent.enabled is true")
+		if strings.TrimSpace(cfg.Agent.InternalAPIBaseURL) != "" {
+			require(strings.HasPrefix(cfg.Agent.InternalAPIBaseURL, "http://") || strings.HasPrefix(cfg.Agent.InternalAPIBaseURL, "https://"), "agent.internal_api_base_url must start with http:// or https:// when set")
+		}
+		if cfg.Agent.Tushare.Enabled {
+			require(strings.TrimSpace(cfg.Agent.Tushare.Token) != "", "agent.tushare.token is required when agent.tushare.enabled is true")
+			require(strings.HasPrefix(cfg.Agent.Tushare.Endpoint, "http://") || strings.HasPrefix(cfg.Agent.Tushare.Endpoint, "https://"), "agent.tushare.endpoint must start with http:// or https:// when agent.tushare.enabled is true")
+			require(cfg.Agent.Tushare.TimeoutMS > 0 && cfg.Agent.Tushare.TimeoutMS <= 60000, "agent.tushare.timeout_ms must be in (0,60000] when agent.tushare.enabled is true")
+		}
 		require(cfg.Agent.TimeoutMS > 0 && cfg.Agent.TimeoutMS <= 60000, "agent.timeout_ms must be in (0,60000] when agent.enabled is true")
 		require(cfg.Agent.MaxRetries >= 0, "agent.max_retries must be zero or positive")
 		require(strings.TrimSpace(cfg.Agent.SchemaVersion) != "", "agent.schema_version is required when agent.enabled is true")

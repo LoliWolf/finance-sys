@@ -77,6 +77,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
 		r.Get("/plans", s.handleListPlans)
 		r.Get("/admin/security/lookup", s.handleLookupSecurity)
+		r.Post("/internal/security/resolve", s.handleResolveSecurity)
+		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
 	})
 	return router

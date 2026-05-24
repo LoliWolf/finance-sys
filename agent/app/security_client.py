@@ -1,23 +1,8 @@
-from dataclasses import dataclass
-from typing import Optional
+from app.tools.local_security import LocalSecurityClient, SecurityClientError, SecurityMatch
 
 
-@dataclass(frozen=True)
-class SecurityMatch:
-    ts_code: str
-    symbol: str
-    name: str
-    asset_type: str
-    market: str
+class SecurityClient(LocalSecurityClient):
+    """Backward-compatible name used by the M4 graph."""
 
 
-class SecurityClient:
-    """Placeholder for a future Go internal security lookup API.
-
-    M4 keeps Python away from MySQL. Until Go exposes a dedicated internal
-    lookup endpoint, this client deliberately returns no match and lets Go M3
-    resolve raw symbols after the Agent response comes back.
-    """
-
-    def lookup(self, raw_symbol: str) -> Optional[SecurityMatch]:
-        return None
+__all__ = ["SecurityClient", "SecurityClientError", "SecurityMatch"]

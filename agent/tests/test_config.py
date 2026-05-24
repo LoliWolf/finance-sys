@@ -22,10 +22,25 @@ def test_settings_from_nacos_config_reuses_llm_and_agent_auth():
                 "max_retries": 2,
             },
             "agent": {
+                "internal_api_base_url": "http://go.test",
+                "tushare": {
+                    "enabled": True,
+                    "token": "tushare-token",
+                    "endpoint": "https://api.tushare.pro",
+                    "timeout_ms": 4000,
+                },
                 "auth": {
                     "enabled": True,
                     "header_name": "X-Agent-Token",
                     "static_token": "agent-token",
+                }
+            },
+            "security": {
+                "auth": {
+                    "enabled": True,
+                    "header_name": "X-Internal-Token",
+                    "token_prefix": "Bearer ",
+                    "static_tokens": ["go-token"],
                 }
             },
         }
@@ -35,6 +50,13 @@ def test_settings_from_nacos_config_reuses_llm_and_agent_auth():
     assert settings.auth_enabled is True
     assert settings.auth_header == "X-Agent-Token"
     assert settings.auth_token == "agent-token"
+    assert settings.internal_api.base_url == "http://go.test"
+    assert settings.internal_api.auth_header == "X-Internal-Token"
+    assert settings.internal_api.auth_token == "Bearer go-token"
+    assert settings.tushare.enabled is True
+    assert settings.tushare.token == "tushare-token"
+    assert settings.tushare.endpoint == "https://api.tushare.pro"
+    assert settings.tushare.timeout_ms == 4000
     assert settings.llm.enabled is True
     assert settings.llm.endpoint == "https://llm.test/v1/chat/completions"
     assert settings.llm.api_key == "nacos-key"

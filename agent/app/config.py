@@ -19,12 +19,29 @@ class LLMSettings(BaseModel):
     max_retries: int = Field(default=1, ge=0)
 
 
+class InternalAPISettings(BaseModel):
+    base_url: str = Field(default="")
+    auth_header: str = Field(default="")
+    auth_token: str = Field(default="")
+    timeout_ms: int = Field(default=3000, gt=0)
+    max_candidates: int = Field(default=5, ge=1, le=20)
+
+
+class TushareSettings(BaseModel):
+    enabled: bool = Field(default=False)
+    token: str = Field(default="")
+    endpoint: str = Field(default="https://api.tushare.pro")
+    timeout_ms: int = Field(default=3000, gt=0)
+
+
 class AgentSettings(BaseModel):
     agent_version: str = Field(default="m4-agent-0.1.0")
     config_source: str = Field(default="env")
     auth_enabled: bool = Field(default=False)
     auth_header: str = Field(default="X-Agent-Token")
     auth_token: str = Field(default="")
+    internal_api: InternalAPISettings = Field(default_factory=InternalAPISettings)
+    tushare: TushareSettings = Field(default_factory=TushareSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
 
 
@@ -131,12 +148,22 @@ def get_settings() -> AgentSettings:
 def _settings_from_nacos_config(config: Dict[str, Any]) -> AgentSettings:
     agent = config.get("agent") or {}
     auth = agent.get("auth") or {}
+    security_auth = (config.get("security") or {}).get("auth") or {}
+    internal_api_auth_header, internal_api_auth_token = _go_security_auth_from_nacos(security_auth)
     return AgentSettings(
         agent_version=os.getenv("AGENT_VERSION", "m4-agent-0.1.0"),
         config_source="nacos",
         auth_enabled=bool(auth.get("enabled", False)),
         auth_header=str(auth.get("header_name") or "X-Agent-Token"),
         auth_token=str(auth.get("static_token") or ""),
+        internal_api=InternalAPISettings(
+            base_url=str(agent.get("internal_api_base_url") or ""),
+            auth_header=internal_api_auth_header,
+            auth_token=internal_api_auth_token,
+            timeout_ms=_env_int("AGENT_INTERNAL_API_TIMEOUT_MS", 3000),
+            max_candidates=_env_int("AGENT_INTERNAL_API_MAX_CANDIDATES", 5),
+        ),
+        tushare=TushareSettings(**(agent.get("tushare") or {})),
         llm=LLMSettings(**(config.get("llm") or {})),
     )
 
@@ -148,6 +175,19 @@ def _settings_from_env() -> AgentSettings:
         auth_enabled=_env_bool("AGENT_AUTH_ENABLED", bool(os.getenv("AGENT_AUTH_TOKEN", ""))),
         auth_header=os.getenv("AGENT_AUTH_HEADER", "X-Agent-Token"),
         auth_token=os.getenv("AGENT_AUTH_TOKEN", ""),
+        internal_api=InternalAPISettings(
+            base_url=os.getenv("AGENT_INTERNAL_API_BASE_URL", ""),
+            auth_header=os.getenv("AGENT_INTERNAL_API_AUTH_HEADER", ""),
+            auth_token=os.getenv("AGENT_INTERNAL_API_AUTH_TOKEN", ""),
+            timeout_ms=_env_int("AGENT_INTERNAL_API_TIMEOUT_MS", 3000),
+            max_candidates=_env_int("AGENT_INTERNAL_API_MAX_CANDIDATES", 5),
+        ),
+        tushare=TushareSettings(
+            enabled=_env_bool("TUSHARE_ENABLED", bool(os.getenv("TUSHARE_TOKEN", ""))),
+            token=os.getenv("TUSHARE_TOKEN", ""),
+            endpoint=os.getenv("TUSHARE_ENDPOINT", "https://api.tushare.pro"),
+            timeout_ms=_env_int("TUSHARE_TIMEOUT_MS", 3000),
+        ),
         llm=LLMSettings(
             enabled=_env_bool("AGENT_LLM_ENABLED", False),
             provider=os.getenv("AGENT_LLM_PROVIDER", "openai_compatible"),
@@ -158,6 +198,21 @@ def _settings_from_env() -> AgentSettings:
             max_retries=_env_int("AGENT_LLM_MAX_RETRIES", 1),
         ),
     )
+
+
+def _go_security_auth_from_nacos(auth: Dict[str, Any]) -> tuple[str, str]:
+    if not bool(auth.get("enabled", False)):
+        return "", ""
+    header = str(auth.get("header_name") or "Authorization")
+    token_prefix = str(auth.get("token_prefix") or "")
+    static_tokens = auth.get("static_tokens") or []
+    if isinstance(static_tokens, str):
+        static_tokens = [static_tokens]
+    for token in static_tokens:
+        token = str(token).strip()
+        if token:
+            return header, token_prefix + token
+    return header, ""
 
 
 def _nacos_bootstrap_available() -> bool:

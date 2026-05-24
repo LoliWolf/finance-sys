@@ -3451,8 +3451,8 @@ M6 要求每个拉入的 skill/tool 都写入来源登记。登记字段：
 |-|-|-|-|-|-|
 | P0 | `local_security_lookup_tool` | 自研生成 | 项目内生成，调用 Go 主系统本地证券查询接口；路径建议 `agent/app/tools/local_security.py`。 | 查询本地 `security_master` / `security_alias`。 | 必选。 |
 | P0 | `local_security_verify_tool` | 自研生成 | 项目内生成，调用 Go 主系统本地校验接口；路径建议 `agent/app/tools/local_security.py`。 | 外部候选回本地复核。 | 必选。 |
-| P1 | `tushare_stock_basic_tool` | 官方优先 | Tushare 官方 `stock_basic` 文档：<https://tushare.pro/document/2?doc_id=25>；字段包含 `ts_code`、`symbol`、`name`、`exchange`、`list_status`。PyPI `tushare` 包月下载量约 749,698，来源：<https://pypistats.org/packages/tushare>。 | 按名称、代码、别名召回 A 股候选。 | 推荐优先。 |
-| P1 | 用户已有 `tushare skill` | 用户已有，待核验 | 来源为用户提供。引入前必须补仓库链接、版本、许可证、工具列表、安装方式、维护者信息。 | 如果功能覆盖 `stock_basic` 且能只读调用，可复用。 | 可用但必须登记。 |
+| P1 | `tushare_stock_basic_tool` | 官方 skill 优先 | 用户已在飞书文档补充官方 `tushare skill` 来源：<https://tushare.pro/files/pro/tushare-data.zip>；同时使用 Tushare 官方 `stock_basic` 文档：<https://tushare.pro/document/2?doc_id=25> 作为字段契约依据。 | 按名称、代码、别名召回 A 股候选。 | 推荐优先。 |
+| P1 | Tushare 官方 Python 包 | 官方 API 参考 | PyPI `tushare` 包月下载量约 749,698，来源：<https://pypistats.org/packages/tushare>。 | 作为 `stock_basic` 只读调用的官方 API 参考。 | 可用但不能绕过本地校验。 |
 | P2 | `zhewenzhang/tushare_MCP` | 社区 MCP | GitHub：<https://github.com/zhewenzhang/tushare_MCP>；当前页面显示约 46 stars，README 声称 52 个金融工具，支持 stdio 和 HTTP 模式。 | 可作为 Tushare MCP 候选实现参考。 | 候选，不直接信任。 |
 | P2 | `smallfat-tushare` / PulseMCP 镜像 | 社区 MCP | PulseMCP：<https://www.pulsemcp.com/servers/smallfat-tushare>；页面声称 173 个数据接口和 17 个工具。 | 可作为 MCP 候选来源比较。 | 候选，不直接信任。 |
 | P3 | `akshare_eastmoney_assist_tool` | 社区高使用量 | AKShare GitHub：<https://github.com/akfamily/akshare>，约 19k stars；PyPI 月下载量约 2,818,515，来源：<https://pypistats.org/packages/akshare>；项目文档声明感谢东方财富等数据源。 | 辅助识别简称、概念、板块，不做最终证券身份。 | 可选辅助。 |
@@ -3582,9 +3582,10 @@ agent/skills/instrument_resolution/tools.json
 [
   {
     "tool_name": "tushare_stock_basic_tool",
-    "source_type": "official_api",
-    "source_url": "https://tushare.pro/document/2?doc_id=25",
-    "source_evidence": "Tushare official stock_basic API; PyPI tushare monthly downloads around 749,698",
+    "source_type": "official_skill",
+    "source_url": "https://tushare.pro/files/pro/tushare-data.zip",
+    "source_evidence": "Official Tushare skill provided in Feishu; stock_basic contract documented at https://tushare.pro/document/2?doc_id=25",
+    "license": "Tushare official distribution and API terms; token required",
     "allowed_use": "recall A-share stock candidates",
     "blocked_use": "directly write candidate_plan_inputs without local verification"
   }
@@ -3680,6 +3681,68 @@ M6 完成时必须满足：
 8. Nacos + HTTP 真实链路集成测试通过。
 9. `go test ./...`、`go build ./...`、Python 测试通过。
 10. 不新增 DDL，不要求用户手动执行数据库迁移。
+
+#### 18.8.11 M6 实施状态与验收结果
+
+实施结果：
+
+| 模块 | 状态 |
+|-|-|
+| Go 内部证券工具接口 | 已新增 `POST /api/v1/internal/security/resolve` 和 `POST /api/v1/internal/security/verify`，只读复用现有 `SecurityService`、`security_master` 和 `security_aliases`。 |
+| Nacos 配置 | 已新增 `agent.internal_api_base_url` 和 `agent.tushare` 示例配置，供 Python Agent 从同一份 Nacos JSON 获取 Go 内部工具基础地址和 Tushare 工具配置。 |
+| Python 工具来源登记 | 已新增 `agent/skills/instrument_resolution/tools.json`，每个 skill/tool 均标明官方、社区高使用量或自研生成来源。 |
+| Tushare 官方工具 | 已按用户补充的官方 skill 来源 `https://tushare.pro/files/pro/tushare-data.zip` 登记；代码封装 `stock_basic` 只读召回，token 来自 Nacos `agent.tushare.token` 或本地环境兜底，不写入仓库。 |
+| Agent 图节点 | 已从 `resolve_candidates` 拆成 `resolve_with_local_security`、`resolve_with_external_tools`、`verify_external_candidates`，优先本地唯一命中，外部候选必须回本地校验。 |
+| 输出契约 | 仍使用 `agent.resolve_document.response.v1`，合格证券进入 `candidate_plan_inputs`，板块/未校验候选不进入候选计划。 |
+| DDL | M6 不新增 DDL，不需要人工执行迁移。 |
+
+新增和修改文件：
+
+```text
+internal/httpapi/security_internal.go
+internal/httpapi/server.go
+internal/service/security.go
+internal/config/types.go
+internal/config/validate.go
+configs/example_nacos_config.json
+configs/example_nacos_config.annotated.jsonc
+agent/app/config.py
+agent/app/graph.py
+agent/app/security_client.py
+agent/app/tools/local_security.py
+agent/app/tools/registry.py
+agent/app/tools/tushare_tool.py
+agent/skills/instrument_resolution/tools.json
+agent/tests/test_local_security_tool.py
+agent/tests/test_tushare_tool.py
+agent/tests/test_tools_registry.py
+agent/tests/test_m6_graph_resolution.py
+cmd/api/m6_agent_tool_resolution_integration_test.go
+```
+
+测试结果：
+
+```text
+agent/.venv/Scripts/python.exe -m pytest tests -q
+结果：32 passed, 1 warning
+
+env GOTOOLCHAIN=local go test ./...
+结果：通过
+
+env GOTOOLCHAIN=local go build ./...
+结果：通过
+
+FINANCE_SYS_M6_NACOS_INTEGRATION=1 FINANCE_SYS_M6_NACOS_DML_ACK=write-real-db go test -count=1 ./cmd/api -run TestHTTPM6AnalyzeDocumentAgentResolvesStandardCodeWithNacosBootstrap -v
+结果：通过
+```
+
+真实链路验证结论：
+
+1. 从 Nacos 初始化 Go 主系统，日志确认 `config_source:"nacos"`。
+2. 合格用例通过 HTTP 上传文档并分析；mock Agent 真实调用 Go 内部 `resolve/verify` 接口，将 `新易盛` 解析为 `300502.SZ`，将 `旭创` 解析为 `300308.SZ`。
+3. Go 侧仍经过 M3 候选计划装配器复核，最终只生成两条候选计划。
+4. 不合格用例中 `CPO板块` 本地无候选；模拟 Tushare 外部候选 `399999.SZ` 未通过本地校验，未进入 `candidate_plan_inputs`。
+5. 不合格文档分析失败，状态为 `FAILED`，候选计划为空。
 
 ### 18.9 M7：观测、回归和灰度切换阶段
 

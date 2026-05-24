@@ -118,11 +118,20 @@ type AgentConfig struct {
 	Mode                   AgentMode       `json:"mode"`
 	Endpoint               string          `json:"endpoint"`
 	HealthEndpoint         string          `json:"health_endpoint"`
+	InternalAPIBaseURL     string          `json:"internal_api_base_url"`
+	Tushare                TushareConfig   `json:"tushare"`
 	TimeoutMS              int             `json:"timeout_ms"`
 	MaxRetries             int             `json:"max_retries"`
 	SchemaVersion          string          `json:"schema_version"`
 	Auth                   AgentAuthConfig `json:"auth"`
 	AllowLegacyLLMFallback bool            `json:"allow_legacy_llm_fallback"`
+}
+
+type TushareConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Token     string `json:"token"`
+	Endpoint  string `json:"endpoint"`
+	TimeoutMS int    `json:"timeout_ms"`
 }
 
 type AgentAuthConfig struct {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -37,7 +38,7 @@ func NormalizeSecurityAlias(value string) string {
 func (s *SecurityService) Lookup(ctx context.Context, query string) (domain.SecurityLookupResult, error) {
 	query = strings.TrimSpace(query)
 	result := domain.SecurityLookupResult{
-		Query:       query,
+		Query:      query,
 		Normalized: NormalizeSecurityAlias(query),
 	}
 	if query == "" {
@@ -110,8 +111,47 @@ func (s *SecurityService) Lookup(ctx context.Context, query string) (domain.Secu
 	return result, nil
 }
 
+func (s *SecurityService) ResolveTradableCandidates(ctx context.Context, query string, maxCandidates int) ([]domain.InstrumentResolutionCandidate, error) {
+	lookup, err := s.Lookup(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	candidates := filterTradableResolutionCandidates(uniqueResolutionCandidates(lookup))
+	if maxCandidates > 0 && len(candidates) > maxCandidates {
+		candidates = candidates[:maxCandidates]
+	}
+	return candidates, nil
+}
+
+func (s *SecurityService) VerifyTradableCandidate(ctx context.Context, tsCode string) (*domain.InstrumentResolutionCandidate, error) {
+	tsCode = strings.ToUpper(strings.TrimSpace(tsCode))
+	if !securityTSCodeRe.MatchString(tsCode) {
+		return nil, fmt.Errorf("invalid ts_code %q", tsCode)
+	}
+	candidates, err := s.ResolveTradableCandidates(ctx, tsCode, 2)
+	if err != nil {
+		return nil, err
+	}
+	for i := range candidates {
+		if candidates[i].TSCode == tsCode {
+			return &candidates[i], nil
+		}
+	}
+	return nil, dal.ErrNotFound
+}
+
 func isActiveSecurity(row db_model.SecurityMaster) bool {
 	return row.IsActive && row.ListStatus == "L"
+}
+
+func filterTradableResolutionCandidates(candidates []domain.InstrumentResolutionCandidate) []domain.InstrumentResolutionCandidate {
+	tradable := candidates[:0]
+	for _, candidate := range candidates {
+		if candidate.AssetType == domain.AssetTypeAShare || candidate.AssetType == domain.AssetTypeETF {
+			tradable = append(tradable, candidate)
+		}
+	}
+	return tradable
 }
 
 func mapSecurityMaster(row *db_model.SecurityMaster) domain.SecurityMaster {

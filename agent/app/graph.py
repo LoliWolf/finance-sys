@@ -1,5 +1,5 @@
 from time import monotonic
-from typing import Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, StateGraph
@@ -14,8 +14,14 @@ from app.schemas import (
     AgentResolveDocumentResponse,
     AgentStatus,
 )
-from app.security_client import SecurityClient
+from app.security_client import SecurityClient, SecurityClientError, SecurityMatch
 from app.skills import SkillSpec, load_instrument_resolution_skill
+from app.tools.registry import load_instrument_resolution_tool_registry
+from app.tools.tushare_tool import (
+    OfficialTushareStockBasicTool,
+    TushareSecurityCandidate,
+    TushareToolError,
+)
 
 
 class AgentGraphState(TypedDict, total=False):
@@ -24,7 +30,11 @@ class AgentGraphState(TypedDict, total=False):
     untrackable_targets: List
     candidate_plan_inputs: List
     warnings: List[str]
+    unresolved_raw_intents: List
+    external_candidates: List[Dict[str, Any]]
+    tools_used: List[str]
     skill: SkillSpec
+    tool_registry_count: int
     nodes: List[str]
     started_at: float
     graph_run_id: str
@@ -34,12 +44,16 @@ def build_graph():
     graph = StateGraph(AgentGraphState)
     graph.add_node("load_skill", _load_skill_node)
     graph.add_node("extract_raw_intents", _extract_raw_intents_node)
-    graph.add_node("resolve_candidates", _resolve_candidates_node)
+    graph.add_node("resolve_with_local_security", _resolve_with_local_security_node)
+    graph.add_node("resolve_with_external_tools", _resolve_with_external_tools_node)
+    graph.add_node("verify_external_candidates", _verify_external_candidates_node)
     graph.add_node("classify_untrackable_targets", _classify_untrackable_targets_node)
     graph.set_entry_point("load_skill")
     graph.add_edge("load_skill", "extract_raw_intents")
-    graph.add_edge("extract_raw_intents", "resolve_candidates")
-    graph.add_edge("resolve_candidates", "classify_untrackable_targets")
+    graph.add_edge("extract_raw_intents", "resolve_with_local_security")
+    graph.add_edge("resolve_with_local_security", "resolve_with_external_tools")
+    graph.add_edge("resolve_with_external_tools", "verify_external_candidates")
+    graph.add_edge("verify_external_candidates", "classify_untrackable_targets")
     graph.add_edge("classify_untrackable_targets", END)
     return graph.compile()
 
@@ -58,6 +72,9 @@ def resolve_document(request: AgentResolveDocumentRequest) -> AgentResolveDocume
                 "untrackable_targets": [],
                 "candidate_plan_inputs": [],
                 "warnings": [],
+                "unresolved_raw_intents": [],
+                "external_candidates": [],
+                "tools_used": [],
                 "nodes": [],
                 "started_at": started_at,
                 "graph_run_id": str(uuid4()),
@@ -93,7 +110,7 @@ def resolve_document(request: AgentResolveDocumentRequest) -> AgentResolveDocume
         debug=AgentDebug(
             graph_run_id=state.get("graph_run_id", ""),
             nodes=state.get("nodes", []),
-            tools_used=[],
+            tools_used=state.get("tools_used", []),
             duration_ms=_duration_ms(started_at),
             skill_name=state["skill"].name,
             skill_version=state["skill"].version,
@@ -110,8 +127,10 @@ def _compiled_graph():
 
 def _load_skill_node(state: AgentGraphState) -> Dict:
     skill = load_instrument_resolution_skill()
+    tool_registry = load_instrument_resolution_tool_registry()
     return {
         "skill": skill,
+        "tool_registry_count": len(tool_registry),
         "nodes": state.get("nodes", []) + ["load_skill"],
     }
 
@@ -134,32 +153,131 @@ def _extract_raw_intents_node(state: AgentGraphState) -> Dict:
     }
 
 
-def _resolve_candidates_node(state: AgentGraphState) -> Dict:
+def _resolve_with_local_security_node(state: AgentGraphState) -> Dict:
     client = SecurityClient()
-    candidate_inputs = []
+    candidate_inputs = list(state.get("candidate_plan_inputs", []))
+    unresolved = []
     warnings = list(state.get("warnings", []))
+    tools_used = list(state.get("tools_used", []))
+    if not client.enabled():
+        warnings.append("local security endpoint is not enabled; returning raw intents for Go M3 resolution")
+        return {
+            "candidate_plan_inputs": candidate_inputs,
+            "unresolved_raw_intents": list(state.get("raw_intents", [])),
+            "warnings": warnings,
+            "tools_used": tools_used,
+            "nodes": state.get("nodes", []) + ["resolve_with_local_security"],
+        }
     for intent in state.get("raw_intents", []):
-        match = client.lookup(intent.raw_symbol)
-        if match is None:
+        tools_used = _append_tool(tools_used, "local_security_lookup_tool")
+        try:
+            matches = client.lookup(intent.raw_symbol)
+        except SecurityClientError as exc:
+            warnings.append(str(exc))
+            unresolved.append(intent)
             continue
-        candidate_inputs.append(
-            {
-                **intent.model_dump(),
-                "security": {
-                    "ts_code": match.ts_code,
-                    "symbol": match.symbol,
-                    "name": match.name,
-                    "asset_type": match.asset_type,
-                    "market": match.market,
-                },
-            }
-        )
-    if not candidate_inputs:
-        warnings.append("security lookup endpoint is not enabled; returning raw intents for Go M3 resolution")
+        if len(matches) == 1:
+            candidate_inputs.append(_candidate_input_from_match(intent, matches[0]))
+            continue
+        if len(matches) > 1:
+            warnings.append(f"local security lookup for {intent.raw_symbol} returned multiple candidates")
+        unresolved.append(intent)
+    return {
+        "candidate_plan_inputs": candidate_inputs,
+        "unresolved_raw_intents": unresolved,
+        "warnings": warnings,
+        "tools_used": tools_used,
+        "nodes": state.get("nodes", []) + ["resolve_with_local_security"],
+    }
+
+
+def _resolve_with_external_tools_node(state: AgentGraphState) -> Dict:
+    warnings = list(state.get("warnings", []))
+    external_candidates = []
+    tools_used = list(state.get("tools_used", []))
+    unresolved = state.get("unresolved_raw_intents", [])
+    if not unresolved:
+        return {
+            "external_candidates": external_candidates,
+            "warnings": warnings,
+            "tools_used": tools_used,
+            "nodes": state.get("nodes", []) + ["resolve_with_external_tools"],
+        }
+
+    tushare_tool = OfficialTushareStockBasicTool()
+    if not tushare_tool.enabled():
+        warnings.append("tushare_stock_basic_tool is not enabled; external candidate recall skipped")
+        return {
+            "external_candidates": external_candidates,
+            "warnings": warnings,
+            "tools_used": tools_used,
+            "nodes": state.get("nodes", []) + ["resolve_with_external_tools"],
+        }
+
+    for intent in unresolved:
+        tools_used = _append_tool(tools_used, "tushare_stock_basic_tool")
+        try:
+            candidates = tushare_tool.search(intent.raw_symbol)
+        except TushareToolError as exc:
+            warnings.append(str(exc))
+            continue
+        if not candidates:
+            continue
+        external_candidates.append({"intent": intent, "candidates": candidates})
+
+    return {
+        "external_candidates": external_candidates,
+        "warnings": warnings,
+        "tools_used": tools_used,
+        "nodes": state.get("nodes", []) + ["resolve_with_external_tools"],
+    }
+
+
+def _verify_external_candidates_node(state: AgentGraphState) -> Dict:
+    candidate_inputs = list(state.get("candidate_plan_inputs", []))
+    warnings = list(state.get("warnings", []))
+    tools_used = list(state.get("tools_used", []))
+    external_candidates = state.get("external_candidates", [])
+    if not external_candidates:
+        return {
+            "candidate_plan_inputs": candidate_inputs,
+            "warnings": warnings,
+            "tools_used": tools_used,
+            "nodes": state.get("nodes", []) + ["verify_external_candidates"],
+        }
+
+    client = SecurityClient()
+    if not client.enabled():
+        warnings.append("local security verify endpoint is not enabled; external candidates ignored")
+        return {
+            "candidate_plan_inputs": candidate_inputs,
+            "warnings": warnings,
+            "tools_used": tools_used,
+            "nodes": state.get("nodes", []) + ["verify_external_candidates"],
+        }
+
+    for item in external_candidates:
+        intent = item["intent"]
+        candidates: List[TushareSecurityCandidate] = item["candidates"]
+        if len(candidates) != 1:
+            warnings.append(f"tushare_stock_basic_tool for {intent.raw_symbol} returned multiple candidates")
+            continue
+        tools_used = _append_tool(tools_used, "local_security_verify_tool")
+        try:
+            verified = client.verify(candidates[0].ts_code, intent.raw_symbol)
+        except SecurityClientError as exc:
+            warnings.append(str(exc))
+            continue
+        if verified is None:
+            warnings.append(f"external candidate {candidates[0].ts_code} for {intent.raw_symbol} was not verified locally")
+            continue
+        candidate_inputs.append(_candidate_input_from_match(intent, verified))
+
     return {
         "candidate_plan_inputs": candidate_inputs,
         "warnings": warnings,
-        "nodes": state.get("nodes", []) + ["resolve_candidates"],
+        "tools_used": tools_used,
+        "nodes": state.get("nodes", []) + ["verify_external_candidates"],
     }
 
 
@@ -209,3 +327,22 @@ def _load_skill_for_failed_response() -> Optional[SkillSpec]:
         return load_instrument_resolution_skill()
     except Exception:
         return None
+
+
+def _candidate_input_from_match(intent, match: SecurityMatch) -> Dict:
+    return {
+        **intent.model_dump(),
+        "security": {
+            "ts_code": match.ts_code,
+            "symbol": match.symbol,
+            "name": match.name,
+            "asset_type": match.asset_type,
+            "market": match.market,
+        },
+    }
+
+
+def _append_tool(tools_used: List[str], tool_name: str) -> List[str]:
+    if tool_name not in tools_used:
+        tools_used.append(tool_name)
+    return tools_used
