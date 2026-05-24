@@ -105,6 +105,16 @@
       "endpoint": "https://api.tushare.pro",
       "timeout_ms": 3000
     },
+    "observation": {
+      "enabled": true,
+      "persist_success": true,
+      "persist_failure": true,
+      "persist_tool_traces": true,
+      "shadow_sample_rate": 1.0,
+      "max_targets_per_run": 100,
+      "max_json_bytes": 65535,
+      "retention_days": 90
+    },
     "timeout_ms": 15000,
     "max_retries": 1,
     "schema_version": "agent.resolve_document.response.v1",

@@ -85,6 +85,23 @@ func TestAnalysisRouterUsesLegacyInShadowMode(t *testing.T) {
 	require.Equal(t, 1, agent.calls)
 }
 
+func TestAnalysisRouterSkipsShadowAgentWhenSampleRateIsZero(t *testing.T) {
+	legacy := &fakePlanAnalyzer{intents: []domain.PlanIntent{testRouterIntent("legacy")}}
+	agent := &fakePlanAnalyzer{intents: []domain.PlanIntent{testRouterIntent("agent")}}
+	runtime := testRouterRuntime(true, config.AgentModeShadow, false)
+	runtime.Config().Agent.Observation = config.ObservationConfig{
+		Enabled:          true,
+		ShadowSampleRate: 0,
+	}
+	router := service.NewAnalysisRouter(runtime, legacy, agent, nil)
+
+	intents, err := router.Analyze(context.Background(), domain.Document{ID: 11}, domain.ParseRun{ID: 22})
+	require.NoError(t, err)
+	require.Equal(t, "legacy", intents[0].Symbol)
+	require.Equal(t, 1, legacy.calls)
+	require.Zero(t, agent.calls)
+}
+
 func testRouterRuntime(agentEnabled bool, mode config.AgentMode, fallback bool) *config.Runtime {
 	return config.NewRuntime(&config.Snapshot{
 		Config: &config.Config{

@@ -34,12 +34,17 @@ func NewAnalyzerWithClient(runtime *config.Runtime, client *Client, logger *slog
 }
 
 func (a *Analyzer) Analyze(ctx context.Context, document domain.Document, parsed domain.ParseRun) ([]domain.PlanIntent, error) {
+	intents, _, err := a.AnalyzeWithResponse(ctx, document, parsed)
+	return intents, err
+}
+
+func (a *Analyzer) AnalyzeWithResponse(ctx context.Context, document domain.Document, parsed domain.ParseRun) ([]domain.PlanIntent, *ResolveDocumentResponse, error) {
 	cfg := a.runtime.Config()
 	if cfg == nil {
-		return nil, fmt.Errorf("config runtime unavailable")
+		return nil, nil, fmt.Errorf("config runtime unavailable")
 	}
 	if !cfg.Agent.Enabled {
-		return nil, fmt.Errorf("agent analyzer disabled")
+		return nil, nil, fmt.Errorf("agent analyzer disabled")
 	}
 	request := buildResolveDocumentRequest(document, parsed, cfg)
 	if a.logger != nil {
@@ -48,19 +53,19 @@ func (a *Analyzer) Analyze(ctx context.Context, document domain.Document, parsed
 
 	response, err := a.client.ResolveDocument(ctx, cfg.Agent, request)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := ValidateResponse(response, cfg.Agent.SchemaVersion); err != nil {
-		return nil, err
+		return nil, response, err
 	}
 	intents, err := responseToPlanIntents(document, response)
 	if err != nil {
-		return nil, err
+		return nil, response, err
 	}
 	if a.logger != nil {
 		a.logger.InfoContext(ctx, "agent analyze completed", "document_id", document.ID, "parse_run_id", parsed.ID, "agent_status", response.Status, "agent_version", response.AgentVersion, "skill_name", response.Debug.SkillName, "skill_version", response.Debug.SkillVersion, "skill_hash", response.Debug.SkillHash, "raw_intent_count", len(response.RawIntents), "candidate_plan_input_count", len(response.CandidatePlanInput), "untrackable_count", len(response.UntrackableTargets), "intent_count", len(intents))
 	}
-	return intents, nil
+	return intents, response, nil
 }
 
 func buildResolveDocumentRequest(document domain.Document, parsed domain.ParseRun, cfg *config.Config) ResolveDocumentRequest {

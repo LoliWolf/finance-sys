@@ -114,17 +114,18 @@ type LLMConfig struct {
 }
 
 type AgentConfig struct {
-	Enabled                bool            `json:"enabled"`
-	Mode                   AgentMode       `json:"mode"`
-	Endpoint               string          `json:"endpoint"`
-	HealthEndpoint         string          `json:"health_endpoint"`
-	InternalAPIBaseURL     string          `json:"internal_api_base_url"`
-	Tushare                TushareConfig   `json:"tushare"`
-	TimeoutMS              int             `json:"timeout_ms"`
-	MaxRetries             int             `json:"max_retries"`
-	SchemaVersion          string          `json:"schema_version"`
-	Auth                   AgentAuthConfig `json:"auth"`
-	AllowLegacyLLMFallback bool            `json:"allow_legacy_llm_fallback"`
+	Enabled                bool              `json:"enabled"`
+	Mode                   AgentMode         `json:"mode"`
+	Endpoint               string            `json:"endpoint"`
+	HealthEndpoint         string            `json:"health_endpoint"`
+	InternalAPIBaseURL     string            `json:"internal_api_base_url"`
+	Tushare                TushareConfig     `json:"tushare"`
+	Observation            ObservationConfig `json:"observation"`
+	TimeoutMS              int               `json:"timeout_ms"`
+	MaxRetries             int               `json:"max_retries"`
+	SchemaVersion          string            `json:"schema_version"`
+	Auth                   AgentAuthConfig   `json:"auth"`
+	AllowLegacyLLMFallback bool              `json:"allow_legacy_llm_fallback"`
 }
 
 type TushareConfig struct {
@@ -132,6 +133,17 @@ type TushareConfig struct {
 	Token     string `json:"token"`
 	Endpoint  string `json:"endpoint"`
 	TimeoutMS int    `json:"timeout_ms"`
+}
+
+type ObservationConfig struct {
+	Enabled           bool    `json:"enabled"`
+	PersistSuccess    bool    `json:"persist_success"`
+	PersistFailure    bool    `json:"persist_failure"`
+	PersistToolTraces bool    `json:"persist_tool_traces"`
+	ShadowSampleRate  float64 `json:"shadow_sample_rate"`
+	MaxTargetsPerRun  int     `json:"max_targets_per_run"`
+	MaxJSONBytes      int     `json:"max_json_bytes"`
+	RetentionDays     int     `json:"retention_days"`
 }
 
 type AgentAuthConfig struct {

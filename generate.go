@@ -67,6 +67,10 @@ func main() {
 			return "security_alias"
 		case "trade_candidate_plans":
 			return "trade_candidate_plan"
+		case "instrument_resolution_runs":
+			return "instrument_resolution_run"
+		case "untrackable_targets":
+			return "untrackable_target"
 		default:
 			return tableName
 		}
@@ -102,6 +106,25 @@ func main() {
 			gen.FieldRename("evidence_json", "EvidenceJSON"),
 			gen.FieldType("risks_json", "[]byte"),
 			gen.FieldType("evidence_json", "[]byte"),
+		),
+		g.GenerateModelAs("instrument_resolution_runs", "InstrumentResolutionRun",
+			gen.FieldType("parse_run_id", "*int64"),
+			gen.FieldType("finished_at", "*time.Time"),
+			gen.FieldRename("targets_json", "TargetsJSON"),
+			gen.FieldRename("tool_traces_json", "ToolTracesJSON"),
+			gen.FieldRename("shadow_compare_json", "ShadowCompareJSON"),
+			gen.FieldRename("raw_metadata_json", "RawMetadataJSON"),
+			gen.FieldType("targets_json", "[]byte"),
+			gen.FieldType("tool_traces_json", "[]byte"),
+			gen.FieldType("shadow_compare_json", "[]byte"),
+			gen.FieldType("raw_metadata_json", "[]byte"),
+		),
+		g.GenerateModelAs("untrackable_targets", "UntrackableTarget",
+			gen.FieldType("parse_run_id", "*int64"),
+			gen.FieldRename("evidence_json", "EvidenceJSON"),
+			gen.FieldRename("candidates_json", "CandidatesJSON"),
+			gen.FieldType("evidence_json", "[]byte"),
+			gen.FieldType("candidates_json", "[]byte"),
 		),
 	)
 	g.Execute()

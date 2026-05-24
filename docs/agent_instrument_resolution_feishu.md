@@ -3746,26 +3746,276 @@ FINANCE_SYS_M6_NACOS_INTEGRATION=1 FINANCE_SYS_M6_NACOS_DML_ACK=write-real-db go
 
 ### 18.9 M7：观测、回归和灰度切换阶段
 
-目标：让这条新链路可排查、可回归、可切换。
+M7 的核心结论：**M7 不继续提高召回能力，而是把 M3 到 M6 的每一次标的解析过程变成可查询、可回放、可对比、可灰度切换的工程事实。** 到 M6 为止，系统已经能让 Python 智能体（Agent）主动召回标准证券代码，并由 Go 主系统复核。M7 要解决的是上线前后的三个问题：
 
-新增表：
+1. 出错时能知道错在大语言模型抽取、技能规则、外部工具、Go 本地校验，还是规则层之前的候选计划装配。
+2. 规则文件、证券主数据、工具返回或模型版本变化后，能用固定样例集做回归测试。
+3. 新链路可以先跑影子模式，再切主模式，必要时能快速回退，不污染 `trade_candidate_plans`。
+
+#### 18.9.1 关键概念
+
+| 词汇 | 中文解释 | 在 M7 中的含义 |
+|-|-|-|
+| Observability | 观测能力 | 把解析链路的输入、路由、工具调用、候选结果、拒绝原因和耗时记录下来。 |
+| Regression | 回归测试 | 用固定样例反复验证“同样输入得到同样解析结论”，防止改规则或换模型后退化。 |
+| Gray Release | 灰度发布 | 先让新链路在部分或全部请求上旁路运行，只观察不写最终计划，再切为正式链路。 |
+| Shadow Mode | 影子模式 | 旧链路继续产出候选计划，新链路只记录解析结果和差异。 |
+| Primary Mode | 主模式 | 新链路作为正式结果来源，仍由 Go 候选计划装配器和规则层最终放行。 |
+| Resolution Run | 解析运行 | 一次文档分析过程中的标的解析记录，绑定 `document_id` 和 `parse_run_id`。 |
+| Untrackable Target | 不可追踪目标 | 文中出现但阶段内不能生成交易候选计划的对象，例如板块、主题、指数、商品、宏观资产、歧义标的。 |
+| Sanitization | 脱敏 | 记录观测数据前去掉令牌、密钥、完整原文、大模型原始供应商字段等敏感内容。 |
+
+#### 18.9.2 阶段边界
+
+M7 做：
+
+1. 新增解析过程持久化，记录每次解析运行的状态、路由、耗时、工具轨迹、技能哈希、候选数量和失败原因。
+2. 新增不可追踪目标持久化，支持按文档查询“为什么没有生成候选计划”。
+3. 增加解析过程查询应用程序接口（API，Application Programming Interface），只读返回观测数据。
+4. 增加影子模式对比记录，能对比旧链路和 Agent 链路的候选数量、标准代码集合和失败原因。
+5. 增加回归样例集和回归执行入口，覆盖股票、交易型开放式指数基金（ETF）、别名、板块、主题、歧义、退市、外部工具超时等情况。
+6. 增加灰度切换配置校验，明确 `disabled`、`shadow`、`primary` 三种运行状态的写入行为。
+7. 增加结构化日志字段，让不查数据库时也能从日志定位关键问题。
+
+M7 不做：
+
+1. 不修改大语言模型抽取字段，不让模型直接生成入场价、止损价、止盈价、仓位。
+2. 不新增外部召回工具；外部工具仍属于 M6，M7 只记录它们的脱敏轨迹。
+3. 不改变 M3 最终安全门，所有可追踪候选仍必须命中本地 `security_master`。
+4. 不做前端页面，只提供只读查询应用程序接口和测试入口。
+5. 不做自动定时任务、消息告警、指标看板；阶段内先用数据库记录和结构化日志。
+
+#### 18.9.3 M7 后的链路位置
+
+M7 的记录器放在 Go 主系统的业务编排层，不下沉到数据访问层（DAL，Data Access Layer），也不放到 Python Agent 里。原因是只有 Go 主系统同时知道文档、解析、Agent 响应、本地校验、候选计划装配和规则层结果。
+
+```text
+DocumentService.Analyze
+-> 创建 instrument_resolution_runs，状态 RUNNING
+-> parser 输出 ParseRun
+-> AnalysisRouter 调用 LLM 或 Agent
+-> CandidateAssembler 执行本地证券复核
+-> rules.Generate 生成候选计划
+-> 写入 targets_json、tool_traces_json、untrackable_targets
+-> 更新 instrument_resolution_runs 为 SUCCEEDED 或 FAILED
+```
+
+影子模式链路：
+
+```text
+旧 LLM 链路生成正式候选计划
+Agent 链路旁路运行
+M3 候选计划装配器对 Agent 结果做复核
+M7 只记录两条链路的差异
+最终 trade_candidate_plans 仍以旧链路为准
+```
+
+主模式链路：
+
+```text
+Agent 链路生成 candidate_plan_inputs
+M3 候选计划装配器复核
+rules.Generate 生成候选计划
+M7 记录解析过程和不可追踪目标
+最终 trade_candidate_plans 以 Agent + M3 + rules 为准
+```
+
+#### 18.9.4 数据库设计
+
+M7 第一版新增两张表：
 
 ```text
 instrument_resolution_runs
 untrackable_targets
 ```
 
-记录内容：
+设计取舍：
 
-- 输入文档 ID、parse run ID、chunk 范围。
-- Agent schema version、agent version、skill hash。
-- 使用了哪些工具。
-- 每个 raw target 的解析结果。
-- 失败原因。
-- 进入 CPA 的候选数量。
-- 进入不可追踪目标的数量。
+1. `instrument_resolution_runs` 是一次解析运行的总账，保存完整脱敏过程，适合排障和回放。
+2. `untrackable_targets` 是面向查询的明细表，专门回答“文档里哪些对象被识别了但没有进入候选计划”。
+3. 每个原始目标的完整解析明细先放入 `instrument_resolution_runs.targets_json`。暂不新增 `instrument_resolution_run_targets`，避免第一版表过多。后续如果需要跨文档统计每个目标的命中率，再拆出独立明细表。
 
-新增 API 建议：
+`instrument_resolution_runs` 建议字段：
+
+| 字段 | 类型 | 说明 |
+|-|-|-|
+| `id` | bigint | 主键。 |
+| `document_id` | bigint | 关联 `documents.id`。 |
+| `parse_run_id` | bigint | 关联 `parse_runs.id`。 |
+| `config_version` | bigint | 本次分析使用的 Nacos 配置版本。 |
+| `agent_mode` | varchar(32) | `disabled`、`shadow`、`primary`。 |
+| `route` | varchar(32) | `legacy_llm`、`agent_shadow`、`agent_primary`、`local_only`。 |
+| `status` | varchar(32) | `RUNNING`、`SUCCEEDED`、`FAILED`、`PARTIAL`。 |
+| `schema_version` | varchar(64) | Agent 响应结构版本。 |
+| `agent_version` | varchar(64) | Python Agent 版本。 |
+| `skill_name` | varchar(128) | 使用的技能名称，例如 `instrument_resolution`。 |
+| `skill_version` | varchar(64) | 技能版本。 |
+| `skill_hash` | varchar(128) | M5 规则文件哈希。 |
+| `raw_target_count` | int | 原始标的数量。 |
+| `candidate_plan_input_count` | int | Agent 输出的候选计划输入数量。 |
+| `candidate_plan_count` | int | 最终写入候选计划数量。 |
+| `untrackable_count` | int | 不可追踪目标数量。 |
+| `tool_call_count` | int | 外部或本地工具调用次数。 |
+| `error_code` | varchar(64) | 失败码。成功时为空。 |
+| `error_message` | text | 脱敏后的失败信息。 |
+| `started_at` | timestamp(3) | 开始时间。 |
+| `finished_at` | timestamp(3) | 结束时间。 |
+| `duration_ms` | int | 总耗时，单位毫秒。 |
+| `targets_json` | json | 每个原始目标的解析结论。 |
+| `tool_traces_json` | json | 工具调用轨迹，必须脱敏。 |
+| `shadow_compare_json` | json | 影子模式差异。非影子模式为空对象。 |
+| `raw_metadata_json` | json | 其他调试元信息，不存完整原文。 |
+| `created_at` | timestamp | 创建时间。 |
+| `updated_at` | timestamp | 更新时间。 |
+
+建议索引：
+
+```sql
+KEY idx_resolution_runs_document (document_id, created_at),
+KEY idx_resolution_runs_parse_run (parse_run_id),
+KEY idx_resolution_runs_status (status, created_at),
+KEY idx_resolution_runs_skill_hash (skill_hash),
+KEY idx_resolution_runs_config_version (config_version)
+```
+
+`untrackable_targets` 建议字段：
+
+| 字段 | 类型 | 说明 |
+|-|-|-|
+| `id` | bigint | 主键。 |
+| `resolution_run_id` | bigint | 关联 `instrument_resolution_runs.id`。 |
+| `document_id` | bigint | 关联 `documents.id`，方便按文档查询。 |
+| `parse_run_id` | bigint | 关联 `parse_runs.id`。 |
+| `raw_target` | varchar(255) | 原文中出现的目标。 |
+| `normalized_target` | varchar(255) | 归一化后的目标。 |
+| `target_kind` | varchar(32) | `SECTOR`、`THEME`、`INDEX`、`INDUSTRY`、`COMMODITY`、`MACRO`、`AMBIGUOUS_SECURITY`、`UNKNOWN`。 |
+| `reason_code` | varchar(64) | 不进入候选计划的原因码。 |
+| `reason_message` | text | 脱敏后的解释。 |
+| `source` | varchar(32) | `llm`、`agent`、`local_security`、`tushare_tool`、`manual_test`。 |
+| `evidence_json` | json | 证据片段，只存短文本和 chunk 下标，不存完整原文。 |
+| `candidates_json` | json | 如果是歧义标的，记录候选证券摘要。 |
+| `config_version` | bigint | 配置版本。 |
+| `is_active` | tinyint(1) | 同一文档重复分析时，最新解析结果置为 1，旧结果置为 0。 |
+| `created_at` | timestamp | 创建时间。 |
+| `updated_at` | timestamp | 更新时间。 |
+
+建议索引：
+
+```sql
+KEY idx_untrackable_document_active (document_id, is_active, created_at),
+KEY idx_untrackable_run (resolution_run_id),
+KEY idx_untrackable_kind_reason (target_kind, reason_code),
+KEY idx_untrackable_normalized (normalized_target)
+```
+
+原因码建议：
+
+| 原因码 | 说明 |
+|-|-|
+| `SECTOR_NOT_TRADABLE` | 板块不是阶段内可直接追踪证券。 |
+| `THEME_NOT_TRADABLE` | 主题或概念不是阶段内可直接追踪证券。 |
+| `INDEX_NOT_SUPPORTED` | 指数暂不进入候选交易计划。 |
+| `COMMODITY_NOT_SUPPORTED` | 商品或宏观资产暂不支持。 |
+| `SECURITY_NOT_FOUND` | 本地证券主数据未命中。 |
+| `SECURITY_NOT_ACTIVE` | 命中证券但非上市中或不可交易。 |
+| `AMBIGUOUS_SECURITY` | 多个证券候选，不能自动选择。 |
+| `EXTERNAL_CANDIDATE_UNVERIFIED` | 外部工具返回候选，但未通过本地校验。 |
+| `TOOL_TIMEOUT` | 工具超时。 |
+| `SCHEMA_INVALID` | Agent 响应结构非法。 |
+| `UNKNOWN` | 未分类失败。 |
+
+实施注意：M7 是需要数据定义语言（DDL，Data Definition Language）的阶段。真正进入代码实现时，应先更新 `migrations/DDL.sql`，然后停下来等待用户手动执行数据库迁移；用户确认后再运行 `go run generate.go` 生成或同步 `internal/domain/db_model`。
+
+#### 18.9.5 JSON 数据契约
+
+`targets_json` 示例：
+
+```json
+[
+  {
+    "raw_target": "旭创",
+    "normalized_target": "旭创",
+    "decision": "ACCEPTED",
+    "reason_code": "",
+    "security": {
+      "ts_code": "300308.SZ",
+      "symbol": "300308",
+      "name": "中际旭创",
+      "asset_type": "STOCK",
+      "market": "SZ"
+    },
+    "match_source": "alias",
+    "tool_name": "local_security_lookup_tool"
+  },
+  {
+    "raw_target": "CPO板块",
+    "normalized_target": "cpo板块",
+    "decision": "UNTRACKABLE",
+    "reason_code": "SECTOR_NOT_TRADABLE",
+    "target_kind": "SECTOR"
+  }
+]
+```
+
+`tool_traces_json` 示例：
+
+```json
+[
+  {
+    "tool_name": "tushare_stock_basic_tool",
+    "tool_source": "official",
+    "input": {"query": "新易盛"},
+    "status": "SUCCEEDED",
+    "candidate_count": 1,
+    "duration_ms": 230,
+    "error_code": ""
+  }
+]
+```
+
+脱敏规则：
+
+1. 不落 Tushare token、模型 API key、Agent 静态鉴权 token、Nacos 密码。
+2. 不落第三方模型供应商原始响应，只落业务白名单字段。
+3. 不落完整 `cleaned_text`，证据只允许短文本片段、chunk 下标和来源字段。
+4. `error_message` 最长建议 2000 字符，超过截断。
+5. JSON 字段超过配置上限时，保留摘要并设置 `truncated=true`。
+
+#### 18.9.6 Go 分层设计
+
+新增或调整目录：
+
+```text
+internal/domain/resolution_observation.go
+internal/domain/db_model/instrument_resolution_run.gen.go
+internal/domain/db_model/untrackable_target.gen.go
+internal/dal/instrument_resolution_run.go
+internal/dal/untrackable_target.go
+internal/service/resolution_observer.go
+internal/httpapi/resolution_observation.go
+```
+
+职责划分：
+
+| 层 | 职责 |
+|-|-|
+| `domain` | 定义解析运行、目标结论、工具轨迹、原因码等领域结构。 |
+| `db_model` | 由 `gorm.io/gen` 生成数据库模型。 |
+| `dal` | 只提供创建、按文档查询、按运行查询、更新状态等数据操作。 |
+| `service` | 负责事务编排、脱敏、JSON 组装、旧结果置 inactive、运行状态流转。 |
+| `httpapi` | 提供只读查询接口，不做业务推理。 |
+
+事务策略：
+
+1. 文档分析开始时创建 `instrument_resolution_runs`，状态为 `RUNNING`。
+2. 如果分析成功，在同一个业务事务中写候选计划、更新解析运行、写不可追踪目标。
+3. 如果分析失败，也要尽力把解析运行更新为 `FAILED`；失败记录不应因为候选计划事务回滚而完全丢失。
+4. 同一文档重新分析时，将旧的 `untrackable_targets.is_active` 置为 0，再插入本次 active 结果。
+5. 观测写入失败不应静默吞掉。主链路成功但观测写入失败时，建议整次分析失败，避免上线初期出现“计划已写入但无法审计”的状态。
+
+#### 18.9.7 查询应用程序接口
+
+新增只读接口：
 
 ```text
 GET /api/v1/documents/{id}/resolution-runs
@@ -3773,23 +4023,258 @@ GET /api/v1/resolution-runs/{id}
 GET /api/v1/documents/{id}/untrackable-targets
 ```
 
-灰度开关：
+`GET /api/v1/documents/{id}/resolution-runs` 返回字段：
+
+```json
+{
+  "document_id": 1,
+  "items": [
+    {
+      "id": 10,
+      "parse_run_id": 20,
+      "agent_mode": "primary",
+      "route": "agent_primary",
+      "status": "SUCCEEDED",
+      "skill_hash": "sha256:...",
+      "raw_target_count": 3,
+      "candidate_plan_count": 2,
+      "untrackable_count": 1,
+      "duration_ms": 1200,
+      "created_at": "2026-05-24T12:00:00Z"
+    }
+  ]
+}
+```
+
+`GET /api/v1/resolution-runs/{id}` 返回完整脱敏详情，包括 `targets`、`tool_traces`、`shadow_compare`、`error_code`、`error_message`。
+
+`GET /api/v1/documents/{id}/untrackable-targets` 返回当前 active 的不可追踪目标，用于排查为什么文章里提到的板块、指数或泛称没有生成候选计划。
+
+鉴权：复用现有 HTTP 鉴权中间件；内部 Agent 鉴权接口不开放这些查询。
+
+#### 18.9.8 Nacos 配置设计
+
+建议在 `agent` 下增加观测配置，仍来自单个 Nacos JSON：
 
 ```json
 {
   "agent": {
-    "enabled": true,
-    "mode": "primary",
-    "allow_legacy_llm_fallback": false
+    "observation": {
+      "enabled": true,
+      "persist_success": true,
+      "persist_failure": true,
+      "persist_tool_traces": true,
+      "shadow_sample_rate": 1.0,
+      "max_targets_per_run": 100,
+      "max_json_bytes": 65535,
+      "retention_days": 90
+    }
   }
 }
 ```
 
-切换策略：
+字段说明：
 
-1. `agent.mode="shadow"`：旧链路仍生成计划，新链路只记录解析结果，用于对比。
-2. `agent.enabled=true` 且 `agent.mode="primary"`：正式由 Agent + CPA 链路生成计划。
-3. `allow_legacy_llm_fallback=false`：Agent 失败时不回退旧链路，避免脏数据重新进入。
+| 字段 | 说明 |
+|-|-|
+| `enabled` | 是否启用解析过程持久化。生产建议开启。 |
+| `persist_success` | 是否记录成功运行。 |
+| `persist_failure` | 是否记录失败运行。生产必须开启。 |
+| `persist_tool_traces` | 是否记录工具轨迹。记录前必须脱敏。 |
+| `shadow_sample_rate` | 影子模式采样比例，范围 `[0,1]`。第一版可固定为 1。 |
+| `max_targets_per_run` | 单次运行最多记录多少个目标，防止异常文档撑爆 JSON。 |
+| `max_json_bytes` | 单个 JSON 字段最大字节数，超过则摘要化。 |
+| `retention_days` | 观测数据保留天数。M7 只配置，不做自动清理任务。 |
+
+新增配置项时必须同步更新：
+
+```text
+internal/config/types.go
+internal/config/validate.go
+configs/example_nacos_config.json
+configs/example_nacos_config.annotated.jsonc
+agent/app/config.py（如果 Python 侧需要读取）
+```
+
+#### 18.9.9 灰度切换策略
+
+运行模式：
+
+| 配置 | 行为 | 适用场景 |
+|-|-|-|
+| `agent.enabled=false` | 只走旧 LLM 结构化抽取链路；M7 可记录 `legacy_llm` 路由。 | 紧急回退。 |
+| `agent.enabled=true` + `agent.mode="shadow"` | 旧链路写候选计划，Agent 链路只记录观测和差异。 | 上线前对比。 |
+| `agent.enabled=true` + `agent.mode="primary"` | Agent 链路作为正式输入来源，仍经 M3 和 rules 放行。 | 正式使用。 |
+| `allow_legacy_llm_fallback=false` | Agent 失败时不回退旧链路。 | 防止旧链路重新污染候选计划。 |
+| `allow_legacy_llm_fallback=true` | Agent 失败时允许回退旧链路，但必须记录 `fallback_used=true`。 | 临时保守灰度，默认不推荐。 |
+
+切换顺序：
+
+1. 先部署 M7 DDL 和只读查询接口，保持 `agent.mode="shadow"`。
+2. 运行一批真实文档，观察标准代码命中率、不可追踪目标数量、失败原因分布。
+3. 回归样例集稳定后，将 `agent.mode` 切为 `primary`。
+4. 如果主模式失败率升高，先切回 `shadow`；如果 Agent 服务不可用，再切 `agent.enabled=false`。
+5. 每次切换都要通过 Nacos `meta.config_version` 记录在 `instrument_resolution_runs.config_version`。
+
+#### 18.9.10 回归测试设计
+
+回归样例来源：
+
+```text
+agent/skills/instrument_resolution/examples.jsonl
+testdata/instrument_resolution/regression/*.jsonl
+```
+
+样例字段建议：
+
+```json
+{
+  "case_id": "alias_xuchuang",
+  "text": "继续看好旭创和新易盛，CPO板块景气度提升。",
+  "expected_candidate_plan_inputs": [
+    {"ts_code": "300308.SZ", "name": "中际旭创"},
+    {"ts_code": "300502.SZ", "name": "新易盛"}
+  ],
+  "expected_untrackable_targets": [
+    {"raw_target": "CPO板块", "reason_code": "SECTOR_NOT_TRADABLE"}
+  ],
+  "expected_candidate_plan_count": 2
+}
+```
+
+执行入口建议：
+
+```text
+go test ./internal/service -run TestInstrumentResolutionRegression
+go test ./cmd/api -run TestHTTPM7ResolutionObservationWithNacosBootstrap
+agent/.venv/Scripts/python.exe -m pytest tests/test_m7_regression.py -q
+```
+
+回归覆盖：
+
+1. 标准证券代码直出。
+2. 股票简称命中。
+3. 别名命中。
+4. 官方全称命中。
+5. 交易型开放式指数基金命中。
+6. 退市或非 `L` 状态被拒绝。
+7. 板块、主题、行业、指数、商品进入不可追踪目标。
+8. 多候选歧义不自动选择。
+9. Tushare 工具超时或频次限制时不污染候选计划。
+10. `skill_hash` 变化时回归报告能显示使用的规则版本。
+
+#### 18.9.11 结构化日志
+
+M7 至少记录以下 `slog` 字段：
+
+```text
+document_id
+parse_run_id
+resolution_run_id
+agent_mode
+route
+status
+skill_hash
+raw_target_count
+candidate_plan_input_count
+candidate_plan_count
+untrackable_count
+tool_call_count
+duration_ms
+error_code
+config_version
+```
+
+日志不替代数据库，但用于服务启动失败、数据库不可用或接口排障时快速定位。
+
+#### 18.9.12 测试和验收标准
+
+M7 完成时必须满足：
+
+1. 新增 DDL 已进入 `migrations/DDL.sql`，用户已手动执行。
+2. `gorm.io/gen` 已同步生成 `instrument_resolution_runs` 和 `untrackable_targets` 模型。
+3. DAL 提供按文档查询、按运行查询、创建运行、更新运行状态、写入不可追踪目标等方法。
+4. 文档分析成功时能写入 `SUCCEEDED` 解析运行记录。
+5. 文档分析失败时能写入 `FAILED` 解析运行记录和脱敏失败原因。
+6. 板块、主题、指数、商品、歧义目标能写入 `untrackable_targets`。
+7. 影子模式不改变旧链路候选计划写入结果，但能记录 Agent 链路差异。
+8. 主模式只允许 Agent + M3 + rules 写入候选计划。
+9. 查询应用程序接口能返回解析运行、工具轨迹、不可追踪目标。
+10. 所有敏感字段脱敏，测试中不得出现 token、API key、Nacos 密码。
+11. 回归样例集通过。
+12. `go test ./...`、`go build ./...`、Python 测试通过。
+
+#### 18.9.13 M7 本轮落地实现记录
+
+本轮已按上述方案完成 M7 代码落地，未新增超出前述两张表之外的增量 DDL。已将 `instrument_resolution_runs` 和 `untrackable_targets` 写入 `migrations/DDL.sql`，并通过 `go run generate.go` 从 Nacos 配置连接真实 MySQL 后生成数据库模型。
+
+本轮新增或调整的核心代码：
+
+```text
+internal/domain/resolution_observation.go
+internal/domain/db_model/instrument_resolution_run.gen.go
+internal/domain/db_model/untrackable_target.gen.go
+internal/dal/instrument_resolution_run.go
+internal/dal/untrackable_target.go
+internal/service/resolution_observer.go
+internal/service/analysis_router.go
+internal/service/document.go
+internal/httpapi/server.go
+internal/agentclient/analyzer.go
+internal/config/types.go
+internal/config/validate.go
+configs/example_nacos_config.json
+configs/example_nacos_config.annotated.jsonc
+generate.go
+migrations/DDL.sql
+cmd/api/m7_resolution_observation_integration_test.go
+```
+
+已实现行为：
+
+1. 文档分析创建 `instrument_resolution_runs` 运行记录，初始状态为 `RUNNING`。
+2. 分析成功时写入 `SUCCEEDED`，记录 `agent_mode`、`route`、`skill_hash`、目标数量、候选计划输入数量、最终候选计划数量、不可追踪目标数量、工具数量和整次观测耗时。
+3. 分析失败时写入 `FAILED`，记录脱敏后的 `error_code` 和 `error_message`。
+4. Agent 返回的 `candidate_plan_inputs`、`untrackable_targets`、`debug.tools_used` 会被转换为 `targets_json`、`tool_traces_json` 和 `untrackable_targets`。
+5. Go 候选计划装配器的本地复核结果会补充到观测记录；若 Agent 已给出原始接受目标，则不重复写入同一证券的 Go 复核接受目标。
+6. 同一文档再次分析时，旧的 `untrackable_targets.is_active` 会置为 0，本次结果置为 1。
+7. 新增只读查询应用程序接口：
+
+```text
+GET /api/v1/documents/{id}/resolution-runs
+GET /api/v1/resolution-runs/{id}
+GET /api/v1/documents/{id}/untrackable-targets
+```
+
+8. 新增 Nacos 配置 `agent.observation`，控制观测记录开关、成功/失败持久化、工具轨迹、影子采样比例、JSON 大小上限和保留天数。
+9. 结构化日志会输出 `resolution_run_id`、`agent_mode`、`route`、`status`、`skill_hash`、数量统计、耗时和失败码。
+10. `persist_success=false` 时成功运行不保留解析运行记录，并会清理该文档旧的 active 不可追踪目标；`persist_failure=false` 时失败运行不保留解析运行记录。
+11. `shadow_sample_rate` 在影子模式下按 `document_id` 和 `parse_run_id` 做确定性采样，避免随机采样导致同一输入多次运行行为不一致。
+
+本轮 M7 真实链路测试覆盖：
+
+1. 合格用例：HTTP 上传文档，经 Nacos 初始化后的 Go 主系统调用 mock Agent；mock Agent 再回调 Go 内部 `resolve/verify` 接口，解析 `新易盛` 和 `旭创` 为标准证券代码，同时把 `CPO板块` 写入不可追踪目标；最终候选计划为两条。
+2. 不合格用例：HTTP 上传只包含 `CPO板块` 的文档；mock Agent 返回不可追踪目标且没有候选计划输入；Go 候选计划装配器失败，文档状态为 `FAILED`，候选计划为空，解析运行和不可追踪目标仍被持久化。
+3. 查询校验：通过新增三个只读接口确认解析运行详情、工具轨迹、不可追踪目标、失败原因和脱敏要求。
+
+已执行验证命令：
+
+```text
+加载 `bootstrap_go122.env.example` 后执行 `go run generate.go`
+结果：从 Nacos 配置连接 MySQL 并生成模型，通过
+
+FINANCE_SYS_M7_NACOS_INTEGRATION=1 FINANCE_SYS_M7_NACOS_DML_ACK=write-real-db go test -count=1 ./cmd/api -run TestHTTPM7ResolutionObservationWithNacosBootstrap -v
+结果：通过
+
+env GOTOOLCHAIN=local go test ./...
+结果：通过
+
+env GOTOOLCHAIN=local go build ./...
+结果：通过
+
+agent/.venv/Scripts/python.exe -m pytest agent/tests -q
+结果：32 passed, 1 warning
+```
 
 ### 18.10 推荐开发顺序
 
@@ -3917,9 +4402,17 @@ M6 测试：
 
 M7 测试：
 
-- 影子模式不影响旧链路写计划。
-- 正式模式只用智能体和候选计划装配器写计划。
-- 查询应用程序接口能看到解析过程和失败原因。
+- 新增 DDL 执行后，`instrument_resolution_runs` 和 `untrackable_targets` 的唯一键、索引、外键行为符合预期。
+- 成功文档会写入 `SUCCEEDED` 解析运行记录，失败文档会写入 `FAILED` 解析运行记录。
+- 解析运行记录包含 `agent_mode`、`route`、`skill_hash`、目标数量、工具数量、候选计划数量、不可追踪目标数量和耗时。
+- `targets_json` 能看到每个原始目标的 `ACCEPTED`、`UNTRACKABLE`、`REJECTED` 或 `AMBIGUOUS` 结论。
+- `tool_traces_json` 不包含 Tushare token、模型 API key、Agent 静态鉴权 token、Nacos 密码。
+- `CPO板块`、`半导体主题`、`沪深300指数`、`黄金` 等对象写入 `untrackable_targets`，不写入 `trade_candidate_plans`。
+- 影子模式不影响旧链路写计划，但会记录 Agent 链路对比结果。
+- 主模式只用智能体、候选计划装配器和规则层写计划。
+- `allow_legacy_llm_fallback=true` 时必须记录 `fallback_used=true`；默认关闭时 Agent 失败不回退旧链路。
+- 查询应用程序接口能看到解析过程、工具轨迹、不可追踪目标和失败原因。
+- 回归样例集能覆盖标准代码、简称、别名、全称、交易型开放式指数基金、退市、歧义和工具超时。
 
 ### 18.12 最终目标状态
 

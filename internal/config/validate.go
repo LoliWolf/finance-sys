@@ -71,6 +71,12 @@ func Validate(cfg *Config) error {
 			require(strings.TrimSpace(cfg.Agent.Auth.StaticToken) != "", "agent.auth.static_token is required when agent.auth.enabled is true")
 		}
 	}
+	if cfg.Agent.Observation.Enabled {
+		require(cfg.Agent.Observation.ShadowSampleRate >= 0 && cfg.Agent.Observation.ShadowSampleRate <= 1, "agent.observation.shadow_sample_rate must be in [0,1]")
+		require(cfg.Agent.Observation.MaxTargetsPerRun > 0, "agent.observation.max_targets_per_run must be positive when agent.observation.enabled is true")
+		require(cfg.Agent.Observation.MaxJSONBytes > 0, "agent.observation.max_json_bytes must be positive when agent.observation.enabled is true")
+		require(cfg.Agent.Observation.RetentionDays > 0, "agent.observation.retention_days must be positive when agent.observation.enabled is true")
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},
