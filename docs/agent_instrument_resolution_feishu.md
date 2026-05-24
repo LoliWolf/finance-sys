@@ -4434,3 +4434,482 @@ M7 测试：
 ```
 
 这条路径完成后，系统就从“AI 说什么就落什么”升级为“AI 找线索，本地证券主数据验身份，CPA 放行，rules 算交易参数”。这既保留了 Agent 的灵活性，也保留了 Go 主系统的确定性和可审计性。
+
+### 18.13 当前项目全链路复盘和后续发展思路
+
+本节基于当前仓库代码、配置、迁移脚本、Python 智能体工程和测试用例做一次完整复盘。这里的“当前”指 2026-05-24 代码状态；代码标识符保留原文，首次出现的重要英文缩写均给出中文解释。
+
+#### 18.13.1 当前结论
+
+当前系统已经完成一条可运行、可验证、可观测的窄链路：
+
+```text
+文档上传
+-> 去重和落库
+-> 纯文本解析和分片
+-> 大语言模型或 Python 智能体抽取交易意图
+-> 本地证券主数据校验身份
+-> 候选计划装配器放行可交易标的
+-> 规则层生成交易参数
+-> 候选计划和解析观测数据落库
+-> 应用程序接口查询结果
+```
+
+已经落地的核心价值是“安全门”：
+
+- 大语言模型（LLM，Large Language Model，大语言模型）和智能体（Agent）只负责找线索、抽取结构化意图，不允许直接决定入场价、止损价、止盈价和仓位。
+- 候选计划装配器（CPA，Candidate Plan Assembler）会把模型输出再次交给本地证券主数据校验，只有唯一、活跃、可交易的股票或交易型开放式指数基金才能进入规则层。
+- 规则层（rules）用确定性算法生成交易参数，同样输入会得到同样输出。
+- 板块、主题、行业、指数、商品、泛称和歧义名称不会污染 `trade_candidate_plans`，会进入 `untrackable_targets` 或解析观测记录。
+- M7 已经让解析过程可查询：能看到路线、模式、规则文件哈希、工具调用、不可追踪目标、失败原因和数量统计。
+
+但当前还不是完整生产闭环。缺口主要在推荐事件、T+1 后评估、行情采集、后台调度、报表看板和人工审核链路。也就是说，当前系统已经能稳定地产生“候选交易计划”，但还没有把候选计划发展成完整的“推荐事件 -> 执行观察 -> T+1 评价 -> 策略复盘”闭环。
+
+#### 18.13.2 术语对照
+
+| 代码或缩写 | 中文解释 | 当前职责 |
+|-|-|-|
+| Go 主系统 | Go 语言后端主应用 | 提供应用程序接口、事务编排、数据库读写、配置加载、规则生成和观测落库。 |
+| Python Agent | Python 智能体旁路服务 | 负责更灵活的标的识别、工具调用和结构化输出。 |
+| LLM | 大语言模型 | 只做结构化抽取，不直接生成交易参数。 |
+| CPA | 候选计划装配器 | 把模型意图转换成可交易标的输入，并拒绝非法、歧义、不可追踪目标。 |
+| rules | 规则层 | 用确定性规则生成入场价、止损价、止盈价、仓位等交易参数。 |
+| Nacos | 配置中心 | 提供单个业务 JSON 配置文档，Go 和 Python 都从这里读取关键配置。 |
+| DDL | 数据定义语句 | 创建或修改数据库表结构的 SQL。 |
+| DAL | 数据访问层 | 封装数据库增删改查，不承载业务推理。 |
+| GORM | Go 对象关系映射库 | Go 主系统的数据库访问基础。 |
+| chi | Go HTTP 路由库 | Go 主系统的 HTTP 路由。 |
+| slog | Go 标准结构化日志库 | 输出结构化运行日志。 |
+| FastAPI | Python 快速应用程序接口框架 | Python 智能体 HTTP 服务框架。 |
+| LangGraph | 语言图编排库 | Python 智能体节点编排。 |
+| Pydantic | Python 数据校验库 | Python 智能体请求、响应和中间结构校验。 |
+| Tushare | 财经数据接口 | 初始化证券主数据，并作为智能体外部候选召回工具。 |
+
+#### 18.13.3 当前系统边界图
+
+```mermaid
+flowchart LR
+  U[用户或前端页面] --> API[Go HTTP 应用程序接口]
+  API --> DS[DocumentService 文档服务]
+  DS --> P[parser 纯文本解析]
+  DS --> AR[AnalysisRouter 分析路由]
+  AR --> LLM[legacy LLM 旧大语言模型链路]
+  AR --> AC[agentclient 智能体客户端]
+  AC --> AG[Python Agent 智能体服务]
+  AG --> GSEC[Go 内部证券接口]
+  GSEC --> SEC[(security_master / security_aliases)]
+  AG --> TS[Tushare 外部候选召回]
+  DS --> CPA[CPA 候选计划装配器]
+  CPA --> SEC
+  CPA --> RULES[rules 确定性规则层]
+  RULES --> PLAN[(trade_candidate_plans)]
+  DS --> OBS[M7 ResolutionObserver 解析观测器]
+  OBS --> RUN[(instrument_resolution_runs)]
+  OBS --> UT[(untrackable_targets)]
+  API --> CFG[Nacos 单 JSON 配置]
+  AG --> CFG
+  API --> DOC[(documents / parse_runs)]
+```
+
+边界说明：
+
+- `internal/parser` 只负责文件到纯文本，不做业务判断。
+- `internal/llm` 和 `agent/` 只负责结构化抽取、标的解析辅助和工具调用，不直接写最终交易计划。
+- `internal/service` 负责事务编排、领域模型转换和跨模块组合。
+- `internal/dal` 只收发 `internal/domain/db_model` 数据库模型，不调用模型、不做推理、不控制事务。
+- `internal/rules` 是唯一生成入场价、止损价、止盈价和仓位的地方。
+
+#### 18.13.4 当前请求处理主链路
+
+```mermaid
+sequenceDiagram
+  participant User as 用户
+  participant API as Go HTTP 接口
+  participant DocSvc as DocumentService
+  participant Parser as parser
+  participant Router as AnalysisRouter
+  participant Agent as Python Agent
+  participant Security as SecurityService
+  participant CPA as CandidateAssembler
+  participant Rules as rules.Engine
+  participant DB as MySQL
+
+  User->>API: 上传文档或触发分析
+  API->>DocSvc: IngestDocument / AnalyzeDocument
+  DocSvc->>DB: 写入 documents 或读取原始文件字节
+  DocSvc->>Parser: Parse 文件内容
+  Parser-->>DocSvc: ParseRun + chunks
+  DocSvc->>DB: 写入 parse_runs
+  DocSvc->>Router: AnalyzeWithObservation
+  alt 智能体主模式
+    Router->>Agent: /v1/resolve-document
+    Agent->>Security: 内部证券 resolve / verify
+    Security-->>Agent: 本地标准候选
+    Agent-->>Router: raw_intents + candidate_plan_inputs + untrackable_targets
+  else 旧大语言模型模式
+    Router->>Router: 调用 LLM 抽取 PlanIntent
+  end
+  Router-->>DocSvc: PlanIntent + 观测数据
+  DocSvc->>CPA: Assemble
+  CPA->>Security: 本地证券主数据复核
+  CPA-->>DocSvc: TrackablePlanIntent
+  DocSvc->>Rules: Generate
+  Rules-->>DocSvc: CandidatePlan
+  DocSvc->>DB: 替换 trade_candidate_plans
+  DocSvc->>DB: 写入 instrument_resolution_runs / untrackable_targets
+  API-->>User: 返回候选计划或查询结果
+```
+
+这条链路里最关键的是两次收敛：
+
+1. 模型输出先收敛成 `PlanIntent` 或智能体协议里的 `candidate_plan_inputs`，不能直接变成最终计划。
+2. 所有候选计划输入再通过 CPA 收敛成 `TrackablePlanIntent`，只有本地证券主数据确认过的可交易标的才能进入规则层。
+
+#### 18.13.5 数据流和落库关系
+
+```mermaid
+flowchart TD
+  FILE[原始文件字节] --> DOC[(documents)]
+  DOC --> PARSE[parser 解析]
+  PARSE --> PR[(parse_runs)]
+  PR --> CHUNK[文本分片 chunks]
+  CHUNK --> INTENT[PlanIntent 交易意图]
+  INTENT --> RESOLVE[InstrumentResolution 标的解析结果]
+  RESOLVE --> TRACK[TrackablePlanIntent 可追踪计划输入]
+  TRACK --> PLAN[CandidatePlan 候选计划]
+  PLAN --> TCP[(trade_candidate_plans)]
+  RESOLVE --> RUN[(instrument_resolution_runs)]
+  RESOLVE --> UT[(untrackable_targets)]
+  CHUNK --> RUN
+  PLAN --> RUN
+```
+
+当前数据库表的职责如下：
+
+| 表 | 当前状态 | 主要职责 |
+|-|-|-|
+| `config_snapshots` | 已落地 | 可选记录 Nacos 配置快照，方便追溯配置版本。 |
+| `documents` | 已落地 | 存原始文档元数据、SHA256、状态和原始文件字节。 |
+| `parse_runs` | 已落地 | 存解析结果、清洗文本、分片、解析器版本和失败信息。 |
+| `security_master` | 已落地 | 证券主数据，当前覆盖股票和交易型开放式指数基金。 |
+| `security_aliases` | 已落地 | 证券别名、历史名称、简称等匹配入口。 |
+| `trade_candidate_plans` | 已落地 | 最终候选交易计划，只允许标准可追踪标的进入。 |
+| `instrument_resolution_runs` | 已落地 | M7 解析运行观测主表，记录路线、模式、数量、耗时、哈希、错误等。 |
+| `untrackable_targets` | 已落地 | 不可追踪目标明细，例如板块、主题、指数、商品、歧义名称。 |
+| `recommendation_events` | 未落地 | 建议后续补充，用于记录“文章提到的推荐事件”而不是直接交易计划。 |
+| `market_snapshots` / `price_observations` | 未落地 | 建议后续补充，用于 T+1 价格观察和行情评估。 |
+| `candidate_plan_evaluations` | 未落地 | 建议后续补充，用于评价候选计划后续表现。 |
+
+#### 18.13.6 标的解析安全门
+
+```mermaid
+flowchart TD
+  RAW[原始目标: 股票名/简称/板块/主题/泛称] --> LOCAL[查询本地 security_master 和 security_aliases]
+  LOCAL --> UNIQUE{是否唯一命中活跃股票或 ETF}
+  UNIQUE -- 是 --> CPA[CPA 放行为 TrackablePlanIntent]
+  CPA --> RULES[rules 生成交易参数]
+  RULES --> PLAN[(trade_candidate_plans)]
+  UNIQUE -- 否 --> AGENT{智能体或 Tushare 是否召回候选}
+  AGENT -- 单一候选 --> VERIFY[回到本地 verify 复核]
+  VERIFY --> OK{复核通过}
+  OK -- 是 --> CPA
+  OK -- 否 --> UT[(untrackable_targets)]
+  AGENT -- 无候选或多候选 --> UT
+  RAW --> KIND{是否板块/主题/行业/指数/商品/泛称}
+  KIND -- 是 --> UT
+```
+
+安全门的判断原则：
+
+- `STOCK` 和 `ETF` 只有在本地唯一、活跃、可交易时才能进入候选计划。
+- `SECTOR`、`THEME`、`INDUSTRY`、`INDEX`、`BROAD_PHRASE` 等目标不进入候选计划。
+- 外部工具召回的候选只是线索，必须回到 Go 主系统本地接口校验。
+- 多候选歧义不自动选择，宁可进入不可追踪目标，也不让错误标的污染交易计划。
+
+#### 18.13.7 Go 主系统已完成链路
+
+```mermaid
+flowchart LR
+  BOOT[bootstrap 启动装配] --> CFG[加载 Nacos 配置]
+  CFG --> DB[打开 MySQL]
+  DB --> GEN[可通过 generate.go 生成模型]
+  BOOT --> HTTP[chi HTTP 路由]
+  HTTP --> INGEST[文档上传和去重]
+  INGEST --> PARSE[纯文本解析]
+  PARSE --> ANALYZE[分析路由]
+  ANALYZE --> CPA[候选计划装配]
+  CPA --> RULES[规则生成计划]
+  RULES --> QUERY[查询应用程序接口]
+  ANALYZE --> OBS[解析观测]
+```
+
+已完成能力：
+
+| 模块 | 代码位置 | 当前能力 |
+|-|-|-|
+| 启动装配 | `internal/bootstrap` | 加载 Nacos 或本地示例配置，初始化日志、数据库、服务、路由和配置重载器。 |
+| 配置运行时 | `internal/config`、`internal/nacoscfg` | 单个 JSON 配置、校验、快照、轮询热更新、手动重载。 |
+| HTTP 接口 | `internal/httpapi` | 上传、分析、查询文档、查询计划、查询解析运行、查询不可追踪目标、内部证券解析接口。 |
+| 文档服务 | `internal/service/document.go` | 上传去重、解析、分析、规则生成、候选计划替换、状态更新和观测落库。 |
+| 文档解析 | `internal/parser` | 支持可稳定转纯文本的文件，输出 `ParseRun` 和 `Chunk`。 |
+| 旧模型分析 | `internal/llm` | OpenAI 兼容接口风格，要求 JSON 输出，解析到 `PlanIntent` 后校验。 |
+| 智能体路由 | `internal/service/analysis_router.go` | 支持关闭、影子模式、主模式和可配置旧链路回退。 |
+| 智能体客户端 | `internal/agentclient` | 调用 Python 智能体，校验响应版本、处理超时和重试。 |
+| 证券服务 | `internal/service/security.go` | 本地证券查询、别名解析、标准代码校验、内部 resolve/verify。 |
+| 候选计划装配器 | `internal/service/candidate_assembler.go` | 把 `PlanIntent` 收敛为 `TrackablePlanIntent`，拒绝非法目标。 |
+| 规则引擎 | `internal/rules` | 确定性生成入场价、止损价、止盈价、仓位和规则版本。 |
+| 数据访问层 | `internal/dal` | 按表封装 DML，服务层控制事务。 |
+| 解析观测器 | `internal/service/resolution_observer.go` | 写入 M7 解析运行、不追踪目标、工具轨迹和结构化日志。 |
+
+当前对外和内部应用程序接口：
+
+| 接口 | 类型 | 用途 |
+|-|-|-|
+| `GET /healthz` | 对外 | 健康检查。 |
+| `GET /api/v1/documents` | 对外 | 查询最近文档。 |
+| `POST /api/v1/documents/upload` | 对外 | 上传文档，可按配置自动分析。 |
+| `POST /api/v1/documents/{id}/analyze` | 对外 | 触发文档分析。 |
+| `GET /api/v1/documents/{id}/plans` | 对外 | 查询某文档候选计划。 |
+| `GET /api/v1/plans` | 对外 | 查询最近候选计划。 |
+| `GET /api/v1/documents/{id}/resolution-runs` | 对外 | 查询某文档解析运行历史。 |
+| `GET /api/v1/resolution-runs/{id}` | 对外 | 查询单次解析运行详情。 |
+| `GET /api/v1/documents/{id}/untrackable-targets` | 对外 | 查询某文档当前不可追踪目标。 |
+| `GET /api/v1/admin/security/lookup` | 管理 | 查询证券主数据命中情况。 |
+| `POST /api/v1/admin/config/reload` | 管理 | 手动重载 Nacos 配置。 |
+| `POST /api/v1/internal/security/resolve` | 内部 | Python 智能体调用，按原始目标查本地候选。 |
+| `POST /api/v1/internal/security/verify` | 内部 | Python 智能体调用，复核外部候选是否可信。 |
+
+#### 18.13.8 Python 智能体已完成链路
+
+```mermaid
+flowchart TD
+  REQ[/resolve-document 请求/] --> SKILL[load_skill 加载规则文件]
+  SKILL --> EXTRACT[extract_raw_intents 抽取原始意图]
+  EXTRACT --> LOCAL[resolve_with_local_security 本地证券解析]
+  LOCAL --> EXT[resolve_with_external_tools 外部工具召回]
+  EXT --> VERIFY[verify_external_candidates 本地复核外部候选]
+  VERIFY --> CLASSIFY[classify_untrackable_targets 分类不可追踪目标]
+  CLASSIFY --> RESP[稳定响应: candidate_plan_inputs / untrackable_targets / debug]
+```
+
+已完成能力：
+
+- Python 服务提供 `/v1/resolve-document` 和 `/healthz`。
+- 当存在 Nacos 启动环境变量时，Python 会读取同一个 Nacos JSON 配置。
+- Python 智能体复用 Go 主系统的 `llm` 配置，不再单独维护一套模型端点、密钥和模型名称。
+- Python 调 Go 主系统内部接口使用 `agent.internal_api_base_url`，鉴权信息从 Go 主系统 `security.auth` 中复用。
+- 规则文件 `agent/skills/instrument_resolution/SKILL.md` 会被加载并计算哈希，智能体响应携带 `debug.skill_hash`。
+- 工具登记文件 `agent/skills/instrument_resolution/tools.json` 标明工具来源：本地生成、官方 Tushare、内部安全校验等。
+- 本地证券工具优先，Tushare 只作为外部候选召回，不直接放行计划。
+- 智能体输出仍会被 Go 主系统 M3 候选计划装配器复核。
+
+当前智能体的现实边界：
+
+- 如果 `llm.enabled=false`，智能体只有有限的确定性样例抽取能力，适合冒烟测试，不适合真实生产文档全量识别。
+- Tushare 工具能补充证券候选，但不能替代本地 `security_master` 和 `security_aliases` 的最终裁决。
+- 东方财富、AKShare 等辅助来源目前没有进入核心可用链路；后续即使接入，也只能做线索召回或板块识别，不能直接写候选计划。
+
+#### 18.13.9 配置和运行模式矩阵
+
+```mermaid
+flowchart TD
+  C[Nacos 单 JSON 配置] --> GO[Go 主系统]
+  C --> PY[Python 智能体]
+  GO --> LLM[llm 配置: 旧链路和智能体共用模型]
+  GO --> ACFG[agent 配置: 端点/模式/超时/观测/Tushare]
+  PY --> LLM
+  PY --> ACFG
+  ACFG --> MODE{agent.mode}
+  MODE -- shadow --> SHADOW[旧链路写计划, 智能体只观测]
+  MODE -- primary --> PRIMARY[智能体作为正式输入]
+  MODE -- disabled --> LEGACY[只走旧 LLM 链路]
+```
+
+关键配置含义：
+
+| 配置 | 当前作用 | 建议生产取值 |
+|-|-|-|
+| `llm.enabled` | 是否启用大语言模型抽取。Go 旧链路和 Python 智能体都读取同一组 `llm` 配置。 | 真实文档生产应开启。 |
+| `llm.endpoint` / `llm.api_key` / `llm.model` | 模型端点、密钥和模型名称。 | 只放 Nacos，不写死在代码或仓库。 |
+| `agent.enabled=false` | 关闭智能体，只走旧 LLM 链路。 | 仅作为紧急回退。 |
+| `agent.enabled=true` + `agent.mode=shadow` | 旧链路写计划，智能体并行观测。 | 上线前灰度推荐。 |
+| `agent.enabled=true` + `agent.mode=primary` | 智能体作为正式输入，但仍经过 CPA 和 rules。 | 观测稳定后切换。 |
+| `agent.endpoint` | Go 调 Python 智能体的地址。 | 必须指向可访问的 Python 服务。 |
+| `agent.internal_api_base_url` | Python 回调 Go 内部证券接口的地址。 | 必须指向 Go 主系统内部可达地址。 |
+| `agent.allow_legacy_llm_fallback` | 智能体失败时是否回退旧链路。 | 默认建议 `false`，避免旧链路重新污染计划。 |
+| `agent.tushare.enabled` | 是否启用 Tushare 候选召回。 | 主数据初始化后可开启；缺 token 时关闭。 |
+| `agent.observation.enabled` | 是否启用 M7 观测持久化。 | 生产建议开启。 |
+| `agent.observation.persist_tool_traces` | 是否记录工具轨迹。 | 开启前必须确认脱敏。 |
+| `security.auth.enabled` | Go 接口鉴权开关。 | 生产建议开启，并配置静态令牌或后续更强鉴权。 |
+| `nacos_client.write_config_snapshot_to_db` | 是否把配置快照写入数据库。 | 需要审计时开启。 |
+
+#### 18.13.10 当前测试覆盖
+
+```mermaid
+flowchart LR
+  UNIT[单元测试] --> LLMTEST[LLM 输出校验]
+  UNIT --> CPATEST[CPA 标的放行/拒绝]
+  UNIT --> ROUTERTEST[分析路由模式]
+  UNIT --> AGENTTEST[智能体客户端和 Python schema]
+  INTEG[集成测试] --> M0[M0 Nacos + 上传分析]
+  INTEG --> M1[M1 证券主数据查询]
+  INTEG --> M3[M3 候选计划装配]
+  INTEG --> M4[M4 Agent + Go 链路]
+  INTEG --> M5[M5 skill_hash 校验]
+  INTEG --> M6[M6 工具解析]
+  INTEG --> M7[M7 观测落库查询]
+```
+
+已经执行过的验证命令记录在 M7 小节中：
+
+```text
+go run generate.go
+env GOTOOLCHAIN=local go test ./...
+env GOTOOLCHAIN=local go build ./...
+agent/.venv/Scripts/python.exe -m pytest agent/tests -q
+FINANCE_SYS_M7_NACOS_INTEGRATION=1 FINANCE_SYS_M7_NACOS_DML_ACK=write-real-db go test -count=1 ./cmd/api -run TestHTTPM7ResolutionObservationWithNacosBootstrap -v
+```
+
+测试重点覆盖：
+
+- 非法证券代码和伪代码不能进入计划。
+- 简称、别名、全称能命中本地证券主数据。
+- 退市或非活跃状态证券不能进入候选计划。
+- 板块、主题、指数、商品、泛称进入不可追踪目标。
+- 智能体主模式、影子模式、旧链路回退都有路由测试。
+- Agent 响应结构版本、哈希、超时、失败状态都有校验。
+- M7 成功和失败链路都会写入解析运行记录。
+- 工具轨迹不能泄漏 Tushare token、模型密钥、Agent 静态令牌、Nacos 密码。
+
+#### 18.13.11 当前缺口和风险
+
+```mermaid
+flowchart TD
+  CURRENT[当前已完成: 候选计划生成和解析观测] --> GAP1[缺推荐事件表]
+  CURRENT --> GAP2[缺 T+1 行情观察]
+  CURRENT --> GAP3[缺后台调度]
+  CURRENT --> GAP4[缺报表和看板]
+  CURRENT --> GAP5[缺人工审核]
+  CURRENT --> GAP6[缺观测数据清理任务]
+  GAP1 --> LOOP[完整策略闭环未完成]
+  GAP2 --> LOOP
+  GAP3 --> LOOP
+  GAP4 --> LOOP
+  GAP5 --> LOOP
+```
+
+具体缺口：
+
+| 缺口 | 当前影响 | 后续建议 |
+|-|-|-|
+| 推荐事件表未落地 | 板块、主题、泛称现在只能作为不可追踪目标记录，不能表达“文章确实给了一个方向性推荐”。 | 新增 `recommendation_events`，承接非交易计划类推荐。 |
+| T+1 评价未落地 | 候选计划生成后，无法自动评估第二天表现。 | 新增行情观察表和计划评价表。 |
+| 行情来源未接入运行链路 | 当前 Tushare 主要用于主数据初始化和候选召回，不承担交易日价格评估。 | 建设 market provider，但保持不进入规则输入的随机依赖。 |
+| worker / scheduler 未落地 | 没有后台定时任务刷新主数据、拉行情、生成评价。 | 后续增加独立 worker，避免塞进 HTTP 请求链路。 |
+| 报表和看板未落地 | 只能通过接口查询局部结果，缺少汇总分析。 | 基于解析运行、不可追踪目标、候选计划评价建设看板。 |
+| 人工审核未落地 | 计划生成后缺少人工确认、驳回、备注和责任人。 | 后续可加审核流，但不改变当前规则生成边界。 |
+| M7 保留期只有配置 | `retention_days` 已配置，但没有自动清理任务。 | 在 worker 阶段补清理任务。 |
+| 真实文档抽取依赖模型质量 | 关闭大语言模型时，Python 智能体确定性抽取覆盖很窄。 | 生产必须开启 LLM，并持续维护回归样例集。 |
+
+#### 18.13.12 后续发展路线图
+
+```mermaid
+flowchart LR
+  A[当前 M0-M7: 安全候选计划链路] --> B[阶段一: 生产配置和影子观测]
+  B --> C[阶段二: 智能体主模式稳定运行]
+  C --> D[阶段三: 推荐事件表]
+  D --> E[阶段四: 行情观察和 T+1 评价]
+  E --> F[阶段五: 后台 worker 和 scheduler]
+  F --> G[阶段六: 看板/告警/报告]
+  G --> H[阶段七: 人工审核和策略复盘闭环]
+```
+
+推荐推进顺序：
+
+1. 生产配置和影子观测  
+   先保持 `agent.mode=shadow`，跑真实文档集合，观察标准代码命中率、不可追踪目标比例、工具失败率、歧义率、最终计划数量差异。
+
+2. 智能体主模式切换  
+   当样例集和真实文档观测稳定后，切到 `agent.mode=primary`，并保持 `allow_legacy_llm_fallback=false`。这样失败会显式暴露，不会悄悄回到旧链路。
+
+3. 推荐事件建设  
+   新增 `recommendation_events`，表达“文章提到了板块、主题、方向、原因和证据”，但不直接进入 `trade_candidate_plans`。这能解决“板块有研究价值但不可直接交易”的表达缺口。
+
+4. T+1 评价建设  
+   新增行情观察和计划评价，把候选计划与后续交易日价格表现关联起来。评价层只能读计划和行情，不能反向改写原始计划。
+
+5. 后台任务建设  
+   新增 worker / scheduler，负责主数据增量更新、行情拉取、T+1 评价、观测清理和报表生成。HTTP 链路继续保持轻量。
+
+6. 看板和告警建设  
+   基于 `instrument_resolution_runs`、`untrackable_targets`、候选计划和评价表，输出命中率、不可追踪原因分布、工具错误、模型失败、策略表现等指标。
+
+7. 审核和策略复盘  
+   在候选计划之后加人工审核、备注、归因和策略复盘，不改变“模型不直接生成交易参数”的底线。
+
+#### 18.13.13 未来目标状态图
+
+```mermaid
+flowchart TD
+  DOC[研究文档] --> EXTRACT[模型/智能体抽取线索]
+  EXTRACT --> GATE[本地证券主数据安全门]
+  GATE -->|真实可交易股票/ETF| PLAN[候选交易计划]
+  GATE -->|板块/主题/泛称| EVENT[推荐事件]
+  GATE -->|歧义/不可验证| UT[不可追踪目标]
+  PLAN --> EVAL[T+1 评价]
+  EVENT --> WATCH[主题观察池]
+  UT --> REVIEW[样例回归和规则修正]
+  EVAL --> REPORT[报告/看板]
+  WATCH --> REPORT
+  REVIEW --> SKILL[规则文件和工具改进]
+  SKILL --> EXTRACT
+```
+
+最终应形成三类清晰产物：
+
+- 候选交易计划：只面向真实、唯一、可交易的股票或交易型开放式指数基金。
+- 推荐事件：面向板块、主题、方向性观点和研究线索，不直接交易。
+- 不可追踪目标：面向歧义、错误、缺主数据、非活跃、工具超时等需要复盘或补数据的对象。
+
+#### 18.13.14 下一批 DDL 候选
+
+18.13 本身只是文档复盘，不需要新增 DDL。下一轮如果继续向完整闭环推进，优先考虑以下表：
+
+| 表 | 优先级 | 目的 |
+|-|-|-|
+| `recommendation_events` | 高 | 记录板块、主题、泛称、方向性推荐和证据，避免把非交易标的塞进候选计划。 |
+| `market_snapshots` 或 `price_observations` | 高 | 记录候选计划相关标的在指定交易日的行情观察值。 |
+| `candidate_plan_evaluations` | 高 | 记录 T+1 是否触发入场、止损、止盈、收益区间、评价状态。 |
+| `worker_jobs` | 中 | 记录后台任务执行状态、重试、失败原因和幂等键。 |
+| `review_tasks` | 中 | 支持人工审核、备注、驳回和确认。 |
+| `resolution_run_targets` | 低 | 如果 `instrument_resolution_runs.targets_json` 后续难以统计，可把目标明细拆成结构化表。 |
+
+DDL 推进原则：
+
+- 先补表达业务事实的表，再补统计加速表。
+- 不为了报表提前拆太多明细表，先用 M7 JSON 观测数据验证查询需求。
+- 所有新增持久化字段都必须同步 `migrations/`、`internal/domain/db_model/`、`internal/dal/` 和服务层转换。
+- 涉及模型输出结构变化时，必须同步 `internal/domain/signal.go`、`internal/llm/`、`internal/rules/` 和相关测试。
+
+#### 18.13.15 当前可交付状态
+
+当前项目已经可以作为“安全候选计划生成服务”的基础版本交付：
+
+- 可以接收可解析文档。
+- 可以把文档转成纯文本和分片。
+- 可以通过旧大语言模型链路或 Python 智能体链路抽取交易意图。
+- 可以用本地证券主数据阻断板块、主题、泛称、歧义和非法代码。
+- 可以用确定性规则生成候选交易计划。
+- 可以记录解析过程、工具轨迹和不可追踪目标。
+- 可以通过应用程序接口查询文档、计划、解析运行和不可追踪目标。
+
+还不能宣称已经完成“投研推荐闭环”：
+
+- 没有推荐事件表。
+- 没有 T+1 行情跟踪和评价。
+- 没有后台调度。
+- 没有报表看板。
+- 没有人工审核。
+- 没有生产级主数据自动更新任务。
+
+因此，18.12 的最终目标已经完成了最关键的“安全候选计划链路”部分，但“推荐事件、T+1 可追踪、评估反馈、运营看板”还需要后续里程碑继续补齐。
