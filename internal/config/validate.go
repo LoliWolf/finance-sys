@@ -63,7 +63,7 @@ func Validate(cfg *Config) error {
 			require(strings.HasPrefix(cfg.Agent.Tushare.Endpoint, "http://") || strings.HasPrefix(cfg.Agent.Tushare.Endpoint, "https://"), "agent.tushare.endpoint must start with http:// or https:// when agent.tushare.enabled is true")
 			require(cfg.Agent.Tushare.TimeoutMS > 0 && cfg.Agent.Tushare.TimeoutMS <= 60000, "agent.tushare.timeout_ms must be in (0,60000] when agent.tushare.enabled is true")
 		}
-		require(cfg.Agent.TimeoutMS > 0 && cfg.Agent.TimeoutMS <= 12000000, "agent.timeout_ms must be in (0,12000000] when agent.enabled is true")
+		require(cfg.Agent.TimeoutMS > 0, "agent.timeout_ms must be positive when agent.enabled is true")
 		require(cfg.Agent.MaxRetries >= 0, "agent.max_retries must be zero or positive")
 		require(strings.TrimSpace(cfg.Agent.SchemaVersion) != "", "agent.schema_version is required when agent.enabled is true")
 		if cfg.Agent.Auth.Enabled {
