@@ -13,9 +13,14 @@ import (
 
 func TestGeneratePlan(t *testing.T) {
 	engine := rules.New(nil)
-	plan := engine.Generate(domain.PlanIntent{
+	plan := engine.Generate(domain.TrackablePlanIntent{
 		Analyst:        "Alice",
-		Symbol:         "600519.SH",
+		RawSymbol:      "贵州茅台",
+		TSCode:         "600519.SH",
+		Symbol:         "600519",
+		SecurityName:   "贵州茅台",
+		AssetType:      domain.AssetTypeAShare,
+		Market:         domain.MarketSH,
 		Direction:      domain.TradeDirectionLong,
 		ReferencePrice: 100,
 		Confidence:     0.8,
@@ -39,9 +44,14 @@ func TestGeneratePlan(t *testing.T) {
 
 func TestGenerateShortPlan(t *testing.T) {
 	engine := rules.New(nil)
-	plan := engine.Generate(domain.PlanIntent{
+	plan := engine.Generate(domain.TrackablePlanIntent{
 		Analyst:        "Alice",
-		Symbol:         "000001.SZ",
+		RawSymbol:      "平安银行",
+		TSCode:         "000001.SZ",
+		Symbol:         "000001",
+		SecurityName:   "平安银行",
+		AssetType:      domain.AssetTypeAShare,
+		Market:         domain.MarketSZ,
 		Direction:      domain.TradeDirectionShort,
 		ReferencePrice: 10,
 		Confidence:     0.9,
@@ -64,9 +74,14 @@ func TestGenerateShortPlan(t *testing.T) {
 
 func TestGeneratePlanNeedsReviewWithoutReferencePrice(t *testing.T) {
 	engine := rules.New(nil)
-	plan := engine.Generate(domain.PlanIntent{
+	plan := engine.Generate(domain.TrackablePlanIntent{
 		Analyst:        "Alice",
-		Symbol:         "600519.SH",
+		RawSymbol:      "贵州茅台",
+		TSCode:         "600519.SH",
+		Symbol:         "600519",
+		SecurityName:   "贵州茅台",
+		AssetType:      domain.AssetTypeAShare,
+		Market:         domain.MarketSH,
 		Direction:      domain.TradeDirectionLong,
 		ReferencePrice: 0,
 		Confidence:     0.8,

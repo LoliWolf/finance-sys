@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"finance-sys/internal/config"
@@ -29,6 +30,7 @@ type Server struct {
 	db        *gorm.DB
 	runtime   *config.Runtime
 	documents *service.DocumentService
+	security  *service.SecurityService
 	reloader  ConfigReloader
 	logger    *slog.Logger
 }
@@ -37,6 +39,7 @@ func NewServer(
 	db *gorm.DB,
 	runtime *config.Runtime,
 	documents *service.DocumentService,
+	security *service.SecurityService,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
@@ -44,6 +47,7 @@ func NewServer(
 		db:        db,
 		runtime:   runtime,
 		documents: documents,
+		security:  security,
 		reloader:  reloader,
 		logger:    logger,
 	}
@@ -71,7 +75,13 @@ func (s *Server) Router() http.Handler {
 		r.Post("/documents/upload", s.handleUploadDocument)
 		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
+		r.Get("/documents/{id}/resolution-runs", s.handleListDocumentResolutionRuns)
+		r.Get("/documents/{id}/untrackable-targets", s.handleListDocumentUntrackableTargets)
+		r.Get("/resolution-runs/{id}", s.handleGetResolutionRun)
 		r.Get("/plans", s.handleListPlans)
+		r.Get("/admin/security/lookup", s.handleLookupSecurity)
+		r.Post("/internal/security/resolve", s.handleResolveSecurity)
+		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
 	})
 	return router
@@ -158,7 +168,7 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		"duplicate": duplicate,
 		"document":  document,
 	}
-	shouldAutoAnalyze := (!duplicate && cfg.Document.AutoAnalyzeUpload) || (duplicate && document.Status == domain.DocumentStatusFailed)
+	shouldAutoAnalyze := cfg.Document.AutoAnalyzeUpload && (!duplicate || document.Status == domain.DocumentStatusFailed)
 	if shouldAutoAnalyze {
 		reason := "new_document"
 		if duplicate {
@@ -231,6 +241,70 @@ func (s *Server) handleListDocumentPlans(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (s *Server) handleListDocumentResolutionRuns(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(chi.URLParam(r, "id"))
+	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle list document resolution runs invalid id", "error", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle list document resolution runs start", "document_id", id)
+	items, err := s.documents.ListResolutionRunsByDocumentID(r.Context(), id)
+	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle list document resolution runs failed", "document_id", id, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle list document resolution runs success", "document_id", id, "count", len(items))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"document_id": id,
+		"items":       items,
+	})
+}
+
+func (s *Server) handleGetResolutionRun(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(chi.URLParam(r, "id"))
+	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle get resolution run invalid id", "error", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle get resolution run start", "resolution_run_id", id)
+	item, err := s.documents.GetResolutionRunByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, dal.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		s.logRequest(r, slog.LevelError, "handle get resolution run failed", "resolution_run_id", id, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle get resolution run success", "resolution_run_id", id)
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handleListDocumentUntrackableTargets(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(chi.URLParam(r, "id"))
+	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle list document untrackable targets invalid id", "error", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle list document untrackable targets start", "document_id", id)
+	items, err := s.documents.ListActiveUntrackableTargetsByDocumentID(r.Context(), id)
+	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle list document untrackable targets failed", "document_id", id, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle list document untrackable targets success", "document_id", id, "count", len(items))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"document_id": id,
+		"items":       items,
+	})
+}
+
 func (s *Server) handleListPlans(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, slog.LevelInfo, "handle list plans start")
 	items, err := s.documents.ListPlans(r.Context(), 100)
@@ -257,6 +331,34 @@ func (s *Server) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logRequest(r, slog.LevelInfo, "handle reload config success")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
+}
+
+func (s *Server) handleLookupSecurity(w http.ResponseWriter, r *http.Request) {
+	if s.security == nil {
+		s.logRequest(r, slog.LevelWarn, "handle lookup security not enabled")
+		writeError(w, http.StatusNotImplemented, errors.New("security service not enabled"))
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		s.logRequest(r, slog.LevelWarn, "handle lookup security missing query")
+		writeError(w, http.StatusBadRequest, errors.New("query is required"))
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle lookup security start", "query", query)
+	result, err := s.security.Lookup(r.Context(), query)
+	if err != nil {
+		s.logRequest(r, slog.LevelError, "handle lookup security failed", "query", query, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if result.Empty() {
+		s.logRequest(r, slog.LevelInfo, "handle lookup security not found", "query", query)
+		writeError(w, http.StatusNotFound, fmt.Errorf("security not found for query %q", query))
+		return
+	}
+	s.logRequest(r, slog.LevelInfo, "handle lookup security success", "query", query, "direct_count", len(result.DirectMatches), "alias_count", len(result.AliasMatches))
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {

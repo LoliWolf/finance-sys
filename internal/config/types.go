@@ -9,6 +9,7 @@ type Config struct {
 	Database    DatabaseConfig    `json:"database"`
 	Document    DocumentConfig    `json:"document"`
 	LLM         LLMConfig         `json:"llm"`
+	Agent       AgentConfig       `json:"agent"`
 	Rules       RulesConfig       `json:"rules"`
 }
 
@@ -110,6 +111,45 @@ type LLMConfig struct {
 	Model      string      `json:"model"`
 	TimeoutMS  int         `json:"timeout_ms"`
 	MaxRetries int         `json:"max_retries"`
+}
+
+type AgentConfig struct {
+	Enabled                bool              `json:"enabled"`
+	Mode                   AgentMode         `json:"mode"`
+	Endpoint               string            `json:"endpoint"`
+	HealthEndpoint         string            `json:"health_endpoint"`
+	InternalAPIBaseURL     string            `json:"internal_api_base_url"`
+	Tushare                TushareConfig     `json:"tushare"`
+	Observation            ObservationConfig `json:"observation"`
+	TimeoutMS              int               `json:"timeout_ms"`
+	MaxRetries             int               `json:"max_retries"`
+	SchemaVersion          string            `json:"schema_version"`
+	Auth                   AgentAuthConfig   `json:"auth"`
+	AllowLegacyLLMFallback bool              `json:"allow_legacy_llm_fallback"`
+}
+
+type TushareConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Token     string `json:"token"`
+	Endpoint  string `json:"endpoint"`
+	TimeoutMS int    `json:"timeout_ms"`
+}
+
+type ObservationConfig struct {
+	Enabled           bool    `json:"enabled"`
+	PersistSuccess    bool    `json:"persist_success"`
+	PersistFailure    bool    `json:"persist_failure"`
+	PersistToolTraces bool    `json:"persist_tool_traces"`
+	ShadowSampleRate  float64 `json:"shadow_sample_rate"`
+	MaxTargetsPerRun  int     `json:"max_targets_per_run"`
+	MaxJSONBytes      int     `json:"max_json_bytes"`
+	RetentionDays     int     `json:"retention_days"`
+}
+
+type AgentAuthConfig struct {
+	Enabled     bool   `json:"enabled"`
+	HeaderName  string `json:"header_name"`
+	StaticToken string `json:"static_token"`
 }
 
 type RulesConfig struct {

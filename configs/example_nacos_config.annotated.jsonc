@@ -82,6 +82,42 @@
     "timeout_ms": 20000,
     "max_retries": 2
   },
+  "agent": {
+    // M4 Python 智能体旁路服务。默认关闭；开启后仍会经过 M3 候选计划装配器复核。
+    "enabled": false,
+    "mode": "primary",
+    "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
+    "health_endpoint": "http://127.0.0.1:8108/healthz",
+    // Python Agent 调 Go 主系统内部只读工具接口的基础地址；M6 证券解析工具使用。
+    "internal_api_base_url": "http://127.0.0.1:8080",
+    "tushare": {
+      // M6 Tushare 官方 stock_basic 只读召回工具。token 应放在 Nacos 私密配置，不提交真实值。
+      "enabled": false,
+      "token": "",
+      "endpoint": "https://api.tushare.pro",
+      "timeout_ms": 3000
+    },
+    "observation": {
+      // M7 观测记录：记录标的解析运行、工具轨迹和不可追踪目标。
+      "enabled": true,
+      "persist_success": true,
+      "persist_failure": true,
+      "persist_tool_traces": true,
+      "shadow_sample_rate": 1.0,
+      "max_targets_per_run": 100,
+      "max_json_bytes": 65535,
+      "retention_days": 90
+    },
+    "timeout_ms": 120000,
+    "max_retries": 1,
+    "schema_version": "agent.resolve_document.response.v1",
+    "auth": {
+      "enabled": false,
+      "header_name": "X-Agent-Token",
+      "static_token": ""
+    },
+    "allow_legacy_llm_fallback": false
+  },
   "rules": {
     "version": "rules-v2",
     "strategy": "TEXT_REFERENCE_PRICE",

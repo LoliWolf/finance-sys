@@ -21,12 +21,15 @@ const systemPrompt = `You extract structured T+1 trade intents from Chinese rese
 Return JSON only.
 Do not generate entry price, stop loss, take profit, or position.
 Only extract facts explicitly supported by the source text.
+For symbol, keep the source instrument text or code. Do not invent a ts_code or exchange suffix.
 The confidence field is your extraction confidence for this structured record, not an investment rating from the source text. It must be a number in (0,1].
 Output shape:
 {"plans":[{"analyst":"","institution":"","symbol":"","asset_type":"","market":"","direction":"LONG or SHORT","reference_price":0,"reference_price_note":"","thesis":"","evidence":[{"chunk_index":0,"text":""}],"risks":[""],"confidence":0.0}]}`
 
 var (
 	jsonFenceRe = regexp.MustCompile("(?s)^```(?:json)?\\s*(.*?)\\s*```$")
+	tsCodeRe    = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
+	symbolRe    = regexp.MustCompile(`^\d{6}$`)
 )
 
 type Analyzer interface {
@@ -332,7 +335,7 @@ func normalizeAndMergeIntents(intents []domain.PlanIntent) ([]domain.PlanIntent,
 }
 
 func ValidateIntent(intent domain.PlanIntent) error {
-	if intent.Symbol == "" {
+	if strings.TrimSpace(intent.Symbol) == "" {
 		return fmt.Errorf("symbol is required")
 	}
 	if intent.Direction != domain.TradeDirectionLong && intent.Direction != domain.TradeDirectionShort {
@@ -348,6 +351,10 @@ func ValidateIntent(intent domain.PlanIntent) error {
 		return fmt.Errorf("confidence must be in (0,1]")
 	}
 	return nil
+}
+
+func ValidateTSCode(symbol string) bool {
+	return tsCodeRe.MatchString(strings.ToUpper(strings.TrimSpace(symbol)))
 }
 
 func normalizeIntent(intent domain.PlanIntent) domain.PlanIntent {
@@ -371,16 +378,24 @@ func normalizeIntent(intent domain.PlanIntent) domain.PlanIntent {
 }
 
 func normalizeSymbol(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
 	if value == "" {
 		return ""
 	}
-	if strings.Contains(value, ".") {
-		return strings.ToUpper(value)
+	if tsCodeRe.MatchString(value) {
+		return value
 	}
-	if strings.HasPrefix(value, "6") {
-		return value + ".SH"
+	if symbolRe.MatchString(value) {
+		switch {
+		case strings.HasPrefix(value, "6"):
+			return value + ".SH"
+		case strings.HasPrefix(value, "0"), strings.HasPrefix(value, "3"):
+			return value + ".SZ"
+		case strings.HasPrefix(value, "4"), strings.HasPrefix(value, "8"):
+			return value + ".BJ"
+		}
 	}
-	return value + ".SZ"
+	return value
 }
 
 func inferAssetType(symbol string) domain.AssetType {
@@ -393,6 +408,9 @@ func inferAssetType(symbol string) domain.AssetType {
 func inferMarket(symbol string) domain.Market {
 	if strings.HasSuffix(symbol, ".SH") {
 		return domain.MarketSH
+	}
+	if strings.HasSuffix(symbol, ".BJ") {
+		return domain.MarketBJ
 	}
 	return domain.MarketSZ
 }

@@ -52,7 +52,7 @@ func (r *Reloader) Reload(ctx context.Context) error {
 			ConfigVersion: snapshot.Config.Meta.ConfigVersion,
 			Source:        snapshot.Source,
 			Sha256:        snapshot.SHA256,
-			RawJson:       snapshot.Raw,
+			RawJSON:       snapshot.Raw,
 		})
 	}
 	if r.logger != nil {

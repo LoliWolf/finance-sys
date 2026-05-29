@@ -69,7 +69,7 @@ func (w *Watcher) poll(ctx context.Context) {
 			ConfigVersion: next.Config.Meta.ConfigVersion,
 			Source:        next.Source,
 			Sha256:        next.SHA256,
-			RawJson:       next.Raw,
+			RawJSON:       next.Raw,
 		})
 	}
 	w.logger.Info("config runtime updated", "config_version", next.Config.Meta.ConfigVersion, "sha256", next.SHA256)

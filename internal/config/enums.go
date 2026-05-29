@@ -21,6 +21,13 @@ const (
 	LLMProviderOpenAICompatible LLMProvider = "openai_compatible"
 )
 
+type AgentMode string
+
+const (
+	AgentModePrimary AgentMode = "primary"
+	AgentModeShadow  AgentMode = "shadow"
+)
+
 type RuleStrategy string
 
 const (

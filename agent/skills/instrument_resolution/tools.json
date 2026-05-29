@@ -1,0 +1,47 @@
+[
+  {
+    "tool_name": "local_security_lookup_tool",
+    "source_type": "self_generated",
+    "source_url": "agent/app/tools/local_security.py",
+    "source_evidence": "Generated in this repository for M6; calls Go POST /api/v1/internal/security/resolve and reads only local security_master/security_aliases data.",
+    "license": "Project internal code",
+    "allowed_use": "Resolve raw instrument names or codes to local tradable candidates.",
+    "blocked_use": "Do not generate prices, positions, or accept unverified external candidates."
+  },
+  {
+    "tool_name": "local_security_verify_tool",
+    "source_type": "self_generated",
+    "source_url": "agent/app/tools/local_security.py",
+    "source_evidence": "Generated in this repository for M6; calls Go POST /api/v1/internal/security/verify and verifies active local STOCK/ETF identity.",
+    "license": "Project internal code",
+    "allowed_use": "Verify a candidate ts_code against local security_master before candidate_plan_inputs.",
+    "blocked_use": "Do not trust third-party candidates without this verification step."
+  },
+  {
+    "tool_name": "tushare_stock_basic_tool",
+    "source_type": "official_skill",
+    "source_url": "https://tushare.pro/files/pro/tushare-data.zip",
+    "source_evidence": "User-provided Feishu update identifies this as the official Tushare skill; M6 uses the official stock_basic contract documented at https://tushare.pro/document/2?doc_id=25.",
+    "license": "Tushare official distribution and API terms; token required",
+    "allowed_use": "Recall A-share stock candidates when local lookup has no unique match.",
+    "blocked_use": "Do not write candidate_plan_inputs unless local_security_verify_tool confirms the ts_code."
+  },
+  {
+    "tool_name": "zhewenzhang_tushare_mcp_candidate",
+    "source_type": "community_mcp",
+    "source_url": "https://github.com/zhewenzhang/tushare_MCP",
+    "source_evidence": "Community MCP candidate recorded for comparison; GitHub page showed roughly 46 stars during M6 research.",
+    "license": "Community project license must be checked before adoption",
+    "allowed_use": "Reference implementation or optional recall candidate after review.",
+    "blocked_use": "Do not treat community MCP output as authoritative security identity."
+  },
+  {
+    "tool_name": "akshare_eastmoney_assist_tool",
+    "source_type": "community_high_usage",
+    "source_url": "https://github.com/akfamily/akshare",
+    "source_evidence": "Community high-usage package recorded for optional assist; research notes cite high GitHub stars and PyPI downloads.",
+    "license": "AKShare project license and upstream data terms must be checked before adoption",
+    "allowed_use": "Assist recognition of sectors, concepts, or aliases.",
+    "blocked_use": "Do not use as final tradable security verification."
+  }
+]

@@ -22,8 +22,6 @@ for /f "usebackq tokens=* delims=" %%A in ("%ENV_FILE%") do (
 )
 
 set "GOTOOLCHAIN=local"
-set "GOCACHE=%ROOT_DIR%.gocache_api"
-if not exist "%GOCACHE%" mkdir "%GOCACHE%"
 if defined EXTRA_PATH set "PATH=%EXTRA_PATH%;%PATH%"
 if not defined APP_BASE_URL set "APP_BASE_URL=http://127.0.0.1:30005"
 if not defined OPEN_UPLOAD_PAGE set "OPEN_UPLOAD_PAGE=1"

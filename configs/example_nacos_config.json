@@ -93,6 +93,38 @@
     "timeout_ms": 20000,
     "max_retries": 2
   },
+  "agent": {
+    "enabled": false,
+    "mode": "primary",
+    "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
+    "health_endpoint": "http://127.0.0.1:8108/healthz",
+    "internal_api_base_url": "http://127.0.0.1:8080",
+    "tushare": {
+      "enabled": false,
+      "token": "",
+      "endpoint": "https://api.tushare.pro",
+      "timeout_ms": 3000
+    },
+    "observation": {
+      "enabled": true,
+      "persist_success": true,
+      "persist_failure": true,
+      "persist_tool_traces": true,
+      "shadow_sample_rate": 1.0,
+      "max_targets_per_run": 100,
+      "max_json_bytes": 65535,
+      "retention_days": 90
+    },
+    "timeout_ms": 120000,
+    "max_retries": 1,
+    "schema_version": "agent.resolve_document.response.v1",
+    "auth": {
+      "enabled": false,
+      "header_name": "X-Agent-Token",
+      "static_token": ""
+    },
+    "allow_legacy_llm_fallback": false
+  },
   "rules": {
     "version": "rules-v2",
     "strategy": "TEXT_REFERENCE_PRICE",

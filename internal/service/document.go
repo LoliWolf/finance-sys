@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
 	"finance-sys/internal/domain/db_model"
+	"finance-sys/internal/llm"
 	"finance-sys/internal/utils"
 
 	"gorm.io/gorm"
@@ -27,16 +29,18 @@ type planAnalyzer interface {
 }
 
 type ruleEngine interface {
-	Generate(intent domain.PlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan
+	Generate(intent domain.TrackablePlanIntent, cfg config.RulesConfig, tradeDate time.Time, configVersion int64) domain.CandidatePlan
 }
 
 type DocumentService struct {
-	db       *gorm.DB
-	runtime  *config.Runtime
-	parser   documentParser
-	analyzer planAnalyzer
-	rules    ruleEngine
-	logger   *slog.Logger
+	db        *gorm.DB
+	runtime   *config.Runtime
+	parser    documentParser
+	analyzer  planAnalyzer
+	assembler *CandidateAssembler
+	rules     ruleEngine
+	observer  *ResolutionObserver
+	logger    *slog.Logger
 }
 
 func NewDocumentService(
@@ -44,16 +48,19 @@ func NewDocumentService(
 	runtime *config.Runtime,
 	parser documentParser,
 	analyzer planAnalyzer,
+	assembler *CandidateAssembler,
 	rules ruleEngine,
 	logger *slog.Logger,
 ) *DocumentService {
 	return &DocumentService{
-		db:       db,
-		runtime:  runtime,
-		parser:   parser,
-		analyzer: analyzer,
-		rules:    rules,
-		logger:   logger,
+		db:        db,
+		runtime:   runtime,
+		parser:    parser,
+		analyzer:  analyzer,
+		assembler: assembler,
+		rules:     rules,
+		observer:  NewResolutionObserver(runtime, logger),
+		logger:    logger,
 	}
 }
 
@@ -128,8 +135,20 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 		s.logger.ErrorContext(ctx, "document service analyze map parse run failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
+	resolutionRun, err := s.observer.Start(ctx, s.db, document, parseRun)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "document service analyze create resolution run failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", err.Error())
+		return nil, err
+	}
 	if parseErr != nil || parseRun.Status == domain.ParseRunStatusFailed {
+		if parseErr == nil {
+			parseErr = errors.New(parseRun.ErrorMessage)
+		}
 		s.logger.ErrorContext(ctx, "document service analyze parse failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", parseRun.ErrorMessage)
+		if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, AnalysisObservation{AgentMode: observationAgentMode(cfg), Route: string(domain.ResolutionRouteLocalOnly)}, nil, nil, parseErr, "PARSE_FAILED"); obsErr != nil {
+			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after parse failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
+			return nil, obsErr
+		}
 		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
 		return nil, parseErr
 	}
@@ -139,25 +158,56 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 	}
 	s.logger.InfoContext(ctx, "document service analyze parse success", "document_id", documentID, "parse_run_id", parseRun.ID, "chunk_count", len(parseRun.Chunks))
 
-	intents, err := s.analyzer.Analyze(ctx, *document, *parseRun)
+	analysis, err := s.analyzeWithObservation(ctx, *document, *parseRun)
+	intents := analysis.Intents
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze llm failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", err.Error())
+		if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, analysis, intents, nil, err, ""); obsErr != nil {
+			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after analyzer failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
+			return nil, obsErr
+		}
 		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze llm success", "document_id", documentID, "parse_run_id", parseRun.ID, "intent_count", len(intents))
 
-	tradeDate := s.tradeDate(cfg)
-	plans := make([]domain.CandidatePlan, 0, len(intents))
 	for _, intent := range intents {
-		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "symbol", intent.Symbol, "direction", intent.Direction, "confidence", intent.Confidence)
+		if err := llm.ValidateIntent(intent); err != nil {
+			s.logger.ErrorContext(ctx, "document service analyze invalid intent", "document_id", documentID, "parse_run_id", parseRun.ID, "symbol", intent.Symbol, "error", err.Error())
+			if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, analysis, intents, nil, err, "INVALID_PLAN_INTENT"); obsErr != nil {
+				s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after invalid intent", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
+				return nil, obsErr
+			}
+			_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+			return nil, fmt.Errorf("invalid plan intent: %w", err)
+		}
+	}
+	trackableIntents, resolutions, err := s.assembler.Assemble(ctx, intents)
+	for _, resolution := range resolutions {
+		s.logger.InfoContext(ctx, "document service analyze instrument resolved", "document_id", documentID, "parse_run_id", parseRun.ID, "raw_symbol", resolution.RawSymbol, "status", resolution.Status, "target_kind", resolution.TargetKind, "candidate_count", len(resolution.Candidates), "reason", resolution.Reason)
+	}
+	if err != nil {
+		s.logger.ErrorContext(ctx, "document service analyze candidate assembly failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", err.Error())
+		if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, analysis, intents, resolutions, err, ""); obsErr != nil {
+			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after candidate assembly failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
+			return nil, obsErr
+		}
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		return nil, err
+	}
+	s.logger.InfoContext(ctx, "document service analyze candidate assembly success", "document_id", documentID, "parse_run_id", parseRun.ID, "trackable_intent_count", len(trackableIntents), "raw_intent_count", len(intents))
+
+	tradeDate := s.tradeDate(cfg)
+	plans := make([]domain.CandidatePlan, 0, len(trackableIntents))
+	for _, intent := range trackableIntents {
+		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "direction", intent.Direction, "confidence", intent.Confidence)
 		plan := s.rules.Generate(intent, cfg.Rules, tradeDate, cfg.Meta.ConfigVersion)
 		plan.DocumentID = document.ID
 		plan.ParseRunID = parseRun.ID
 		plans = append(plans, plan)
 	}
 
-	savedPlans, err := s.replacePlansByDocumentID(ctx, document.ID, plans)
+	savedPlans, err := s.replacePlansByDocumentID(ctx, document.ID, plans, resolutionRun, analysis, intents, resolutions)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze replace plans failed", "document_id", documentID, "error", err.Error())
 		return nil, err
@@ -215,6 +265,18 @@ func (s *DocumentService) GetLatestParseRunByDocumentID(ctx context.Context, doc
 	return mapParseRun(row)
 }
 
+func (s *DocumentService) ListResolutionRunsByDocumentID(ctx context.Context, documentID int64) ([]domain.ResolutionRun, error) {
+	return s.observer.ListRunsByDocumentID(ctx, s.db, documentID)
+}
+
+func (s *DocumentService) GetResolutionRunByID(ctx context.Context, id int64) (*domain.ResolutionRun, error) {
+	return s.observer.GetRunByID(ctx, s.db, id)
+}
+
+func (s *DocumentService) ListActiveUntrackableTargetsByDocumentID(ctx context.Context, documentID int64) ([]domain.UntrackableTarget, error) {
+	return s.observer.ListActiveUntrackableTargetsByDocumentID(ctx, s.db, documentID)
+}
+
 func (s *DocumentService) currentConfig() *config.Config {
 	return s.runtime.Config()
 }
@@ -250,7 +312,21 @@ func (s *DocumentService) validateUpload(fileName string, cfg config.DocumentCon
 	return fmt.Errorf("unsupported file extension %s", ext)
 }
 
-func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, documentID int64, plans []domain.CandidatePlan) ([]domain.CandidatePlan, error) {
+func (s *DocumentService) analyzeWithObservation(ctx context.Context, document domain.Document, parseRun domain.ParseRun) (AnalysisObservation, error) {
+	if observed, ok := s.analyzer.(interface {
+		AnalyzeWithObservation(context.Context, domain.Document, domain.ParseRun) (AnalysisObservation, error)
+	}); ok {
+		return observed.AnalyzeWithObservation(ctx, document, parseRun)
+	}
+	intents, err := s.analyzer.Analyze(ctx, document, parseRun)
+	result := AnalysisObservation{Intents: intents, AgentMode: observationAgentMode(s.currentConfig()), Route: string(domain.ResolutionRouteLegacyLLM)}
+	if err != nil {
+		result.LegacyError = err.Error()
+	}
+	return result, err
+}
+
+func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, documentID int64, plans []domain.CandidatePlan, resolutionRun *db_model.InstrumentResolutionRun, analysis AnalysisObservation, intents []domain.PlanIntent, resolutions []domain.InstrumentResolution) ([]domain.CandidatePlan, error) {
 	items := make([]domain.CandidatePlan, 0, len(plans))
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := dal.TradeCandidatePlans.DeleteByDocumentID(ctx, tx, documentID); err != nil {
@@ -269,6 +345,9 @@ func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, document
 				return err
 			}
 			items = append(items, *item)
+		}
+		if err := s.observer.FinishSucceeded(ctx, tx, resolutionRun, analysis, intents, resolutions, items); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -324,18 +403,18 @@ func parseRunToModel(run domain.ParseRun) (*db_model.ParseRun, error) {
 		ParserVersion:   run.ParserVersion,
 		ErrorMessage:    run.ErrorMessage,
 		CleanedText:     run.CleanedText,
-		ChunksJson:      chunks,
-		RawMetadataJson: rawMetadata,
+		ChunksJSON:      chunks,
+		RawMetadataJSON: rawMetadata,
 	}, nil
 }
 
 func mapParseRun(row *db_model.ParseRun) (*domain.ParseRun, error) {
 	var chunks []domain.Chunk
 	rawMetadata := make(map[string]any)
-	if err := json.Unmarshal(row.ChunksJson, &chunks); err != nil {
+	if err := json.Unmarshal(row.ChunksJSON, &chunks); err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(row.RawMetadataJson, &rawMetadata); err != nil {
+	if err := json.Unmarshal(row.RawMetadataJSON, &rawMetadata); err != nil {
 		return nil, err
 	}
 	return &domain.ParseRun{
@@ -381,8 +460,8 @@ func candidatePlanToModel(plan domain.CandidatePlan) (*db_model.TradeCandidatePl
 		Confidence:     plan.Confidence,
 		Status:         string(plan.Status),
 		Thesis:         plan.Thesis,
-		RisksJson:      risks,
-		EvidenceJson:   evidence,
+		RisksJSON:      risks,
+		EvidenceJSON:   evidence,
 		PricingNote:    plan.PricingNote,
 		ConfigVersion:  plan.ConfigVersion,
 		RuleVersion:    plan.RuleVersion,
@@ -404,10 +483,10 @@ func mapPlanRows(rows []db_model.TradeCandidatePlan) ([]domain.CandidatePlan, er
 func mapPlan(row *db_model.TradeCandidatePlan) (*domain.CandidatePlan, error) {
 	var risks []string
 	var evidence []domain.EvidenceSpan
-	if err := json.Unmarshal(row.RisksJson, &risks); err != nil {
+	if err := json.Unmarshal(row.RisksJSON, &risks); err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(row.EvidenceJson, &evidence); err != nil {
+	if err := json.Unmarshal(row.EvidenceJSON, &evidence); err != nil {
 		return nil, err
 	}
 	return &domain.CandidatePlan{

@@ -52,6 +52,31 @@ func Validate(cfg *Config) error {
 		require(cfg.LLM.Endpoint != "", "llm.endpoint is required when llm.enabled is true")
 		require(cfg.LLM.Model != "", "llm.model is required when llm.enabled is true")
 	}
+	if cfg.Agent.Enabled {
+		require(cfg.Agent.Mode == AgentModePrimary || cfg.Agent.Mode == AgentModeShadow, "agent.mode must be primary or shadow when agent.enabled is true")
+		require(strings.TrimSpace(cfg.Agent.Endpoint) != "", "agent.endpoint is required when agent.enabled is true")
+		if strings.TrimSpace(cfg.Agent.InternalAPIBaseURL) != "" {
+			require(strings.HasPrefix(cfg.Agent.InternalAPIBaseURL, "http://") || strings.HasPrefix(cfg.Agent.InternalAPIBaseURL, "https://"), "agent.internal_api_base_url must start with http:// or https:// when set")
+		}
+		if cfg.Agent.Tushare.Enabled {
+			require(strings.TrimSpace(cfg.Agent.Tushare.Token) != "", "agent.tushare.token is required when agent.tushare.enabled is true")
+			require(strings.HasPrefix(cfg.Agent.Tushare.Endpoint, "http://") || strings.HasPrefix(cfg.Agent.Tushare.Endpoint, "https://"), "agent.tushare.endpoint must start with http:// or https:// when agent.tushare.enabled is true")
+			require(cfg.Agent.Tushare.TimeoutMS > 0 && cfg.Agent.Tushare.TimeoutMS <= 60000, "agent.tushare.timeout_ms must be in (0,60000] when agent.tushare.enabled is true")
+		}
+		require(cfg.Agent.TimeoutMS > 0 && cfg.Agent.TimeoutMS <= 12000000, "agent.timeout_ms must be in (0,12000000] when agent.enabled is true")
+		require(cfg.Agent.MaxRetries >= 0, "agent.max_retries must be zero or positive")
+		require(strings.TrimSpace(cfg.Agent.SchemaVersion) != "", "agent.schema_version is required when agent.enabled is true")
+		if cfg.Agent.Auth.Enabled {
+			require(strings.TrimSpace(cfg.Agent.Auth.HeaderName) != "", "agent.auth.header_name is required when agent.auth.enabled is true")
+			require(strings.TrimSpace(cfg.Agent.Auth.StaticToken) != "", "agent.auth.static_token is required when agent.auth.enabled is true")
+		}
+	}
+	if cfg.Agent.Observation.Enabled {
+		require(cfg.Agent.Observation.ShadowSampleRate >= 0 && cfg.Agent.Observation.ShadowSampleRate <= 1, "agent.observation.shadow_sample_rate must be in [0,1]")
+		require(cfg.Agent.Observation.MaxTargetsPerRun > 0, "agent.observation.max_targets_per_run must be positive when agent.observation.enabled is true")
+		require(cfg.Agent.Observation.MaxJSONBytes > 0, "agent.observation.max_json_bytes must be positive when agent.observation.enabled is true")
+		require(cfg.Agent.Observation.RetentionDays > 0, "agent.observation.retention_days must be positive when agent.observation.enabled is true")
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},
