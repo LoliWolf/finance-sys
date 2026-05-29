@@ -836,7 +836,7 @@ type TrackablePlanIntent struct {
     "mode": "primary",
     "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
     "health_endpoint": "http://127.0.0.1:8108/healthz",
-    "timeout_ms": 15000,
+    "timeout_ms": 120000,
     "max_retries": 1,
     "schema_version": "agent.resolve_document.response.v1",
     "auth": {
@@ -2678,7 +2678,7 @@ agent.enabled=true 且 agent.mode="shadow"
     "mode": "primary",
     "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
     "health_endpoint": "http://127.0.0.1:8108/healthz",
-    "timeout_ms": 15000,
+    "timeout_ms": 120000,
     "max_retries": 1,
     "schema_version": "agent.resolve_document.response.v1",
     "auth": {
@@ -2695,7 +2695,7 @@ agent.enabled=true 且 agent.mode="shadow"
 
 1. 新增配置项时必须同步更新 `internal/config/types.go`、`internal/config/validate.go`、`configs/example_nacos_config.json`、`configs/example_nacos_config.annotated.jsonc`。
 2. `allow_legacy_llm_fallback` 默认 `false`，防止 Agent 失败后脏数据从旧链路回流。
-3. `timeout_ms` 必须有上限，例如不超过 60000。
+3. `timeout_ms` 必须有上限，例如不超过 120000。
 4. `max_retries` 来自配置，不在代码里写死。
 
 #### 18.6.9 Agent 响应到 Go 领域模型的转换

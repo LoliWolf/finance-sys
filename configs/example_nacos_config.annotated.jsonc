@@ -108,7 +108,7 @@
       "max_json_bytes": 65535,
       "retention_days": 90
     },
-    "timeout_ms": 15000,
+    "timeout_ms": 120000,
     "max_retries": 1,
     "schema_version": "agent.resolve_document.response.v1",
     "auth": {
