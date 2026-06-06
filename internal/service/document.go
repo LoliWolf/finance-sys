@@ -207,7 +207,7 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 		plans = append(plans, plan)
 	}
 
-	savedPlans, err := s.replacePlansByDocumentID(ctx, document.ID, plans, resolutionRun, analysis, intents, resolutions)
+	savedPlans, err := s.replacePlansByDocumentID(ctx, *document, plans, resolutionRun, analysis, intents, resolutions)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze replace plans failed", "document_id", documentID, "error", err.Error())
 		return nil, err
@@ -326,10 +326,10 @@ func (s *DocumentService) analyzeWithObservation(ctx context.Context, document d
 	return result, err
 }
 
-func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, documentID int64, plans []domain.CandidatePlan, resolutionRun *db_model.InstrumentResolutionRun, analysis AnalysisObservation, intents []domain.PlanIntent, resolutions []domain.InstrumentResolution) ([]domain.CandidatePlan, error) {
+func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, document domain.Document, plans []domain.CandidatePlan, resolutionRun *db_model.InstrumentResolutionRun, analysis AnalysisObservation, intents []domain.PlanIntent, resolutions []domain.InstrumentResolution) ([]domain.CandidatePlan, error) {
 	items := make([]domain.CandidatePlan, 0, len(plans))
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := dal.TradeCandidatePlans.DeleteByDocumentID(ctx, tx, documentID); err != nil {
+		if err := dal.TradeCandidatePlans.DeleteByDocumentID(ctx, tx, document.ID); err != nil {
 			return err
 		}
 		for _, plan := range plans {
@@ -342,6 +342,9 @@ func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, document
 			}
 			item, err := mapPlan(model)
 			if err != nil {
+				return err
+			}
+			if _, err := s.upsertRecommendationEventForPlan(ctx, tx, document, *item); err != nil {
 				return err
 			}
 			items = append(items, *item)

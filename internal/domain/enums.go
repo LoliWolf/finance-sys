@@ -82,6 +82,18 @@ const (
 	CandidatePlanStatusNeedsReview CandidatePlanStatus = "NEEDS_REVIEW"
 )
 
+// RecommendationEventStatus 表示推荐事实是否可进入后续评估。
+type RecommendationEventStatus string
+
+const (
+	// RecommendationEventStatusActive 表示推荐事件可进入后续行情评估。
+	RecommendationEventStatusActive RecommendationEventStatus = "ACTIVE"
+	// RecommendationEventStatusNeedsReview 表示推荐事件需要人工复核后再评估。
+	RecommendationEventStatusNeedsReview RecommendationEventStatus = "NEEDS_REVIEW"
+	// RecommendationEventStatusSuperseded 表示推荐事件已被后续分析结果替代。
+	RecommendationEventStatusSuperseded RecommendationEventStatus = "SUPERSEDED"
+)
+
 // RuleStrategy 表示生成交易参数时使用的确定性规则策略。
 type RuleStrategy string
 
