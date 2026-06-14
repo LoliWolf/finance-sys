@@ -12,6 +12,8 @@ const (
 	DocumentStatusPlanned DocumentStatus = "PLANNED"
 	// DocumentStatusFailed 表示文档在解析、抽取、校验或规则生成阶段失败。
 	DocumentStatusFailed DocumentStatus = "FAILED"
+	// DocumentStatusInvalid 表示文档已完成解析/抽取，但没有可进入规则层的有效交易标的。
+	DocumentStatusInvalid DocumentStatus = "INVALID"
 )
 
 // ParseRunStatus 表示一次文档解析运行的结果状态。

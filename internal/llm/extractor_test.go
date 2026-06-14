@@ -51,6 +51,48 @@ func TestModelAnalyzerExtractsIntent(t *testing.T) {
 	require.Equal(t, 1688.0, intents[0].ReferencePrice)
 }
 
+func TestModelAnalyzerSendsConfiguredExtraHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "finance-sys-agent", r.Header.Get("X-Client-Name"))
+		require.Equal(t, "m9-real-history", r.Header.Get("X-Request-Source"))
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": `{"plans":[{"analyst":"Alice","institution":"Research","symbol":"600519","asset_type":"","market":"","direction":"LONG","reference_price":1688,"reference_price_note":"explicit_price_mention","thesis":"channel checks improved","evidence":[{"chunk_index":0,"text":"source evidence"}],"risks":["volatility"],"confidence":0.82}]}`,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	runtime := testRuntime(server.URL, 0)
+	cfg := runtime.Config()
+	cfg.LLM.ExtraHeaders = map[string]string{
+		"Authorization":    "Bearer wrong",
+		"Content-Type":     "text/plain",
+		"X-Client-Name":    "finance-sys-agent",
+		"X-Request-Source": "m9-real-history",
+	}
+	analyzer := llm.NewModelAnalyzer(runtime, telemetry.NewLogger(string(config.LogLevelError)))
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{
+		Title:       "daily",
+		Author:      "Alice",
+		Institution: "Research",
+	}, domain.ParseRun{
+		CleanedText: "recommend 600519.SH",
+		Chunks: []domain.Chunk{
+			{Index: 0, Text: "recommend 600519.SH"},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, intents, 1)
+}
+
 func TestModelAnalyzerRetriesOnInvalidStructuredResponse(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

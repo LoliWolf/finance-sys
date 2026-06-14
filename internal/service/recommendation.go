@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"strconv"
 	"strings"
 
 	"finance-sys/internal/dal"
@@ -19,11 +18,10 @@ func normalizeBloggerName(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
 }
 
-func recommendationEventDedupeKey(blogger db_model.Blogger, documentID int64, plan domain.CandidatePlan) string {
+func recommendationEventDedupeKey(blogger db_model.Blogger, plan domain.CandidatePlan) string {
 	raw := strings.Join([]string{
 		blogger.NormalizedName,
 		blogger.Institution,
-		strconv.FormatInt(documentID, 10),
 		plan.Symbol,
 		string(plan.Direction),
 		plan.TradeDate.Format("2006-01-02"),
@@ -48,12 +46,12 @@ func recommendationEventFromPlan(document domain.Document, plan domain.Candidate
 		AssetType:        string(plan.AssetType),
 		Market:           string(plan.Market),
 		Direction:        string(plan.Direction),
-		RecommendDate:    plan.TradeDate,
+		RecommendDate:    dbDateOnly(plan.TradeDate),
 		ReferencePrice:   plan.ReferencePrice,
 		Confidence:       plan.Confidence,
 		Status:           string(recommendationStatusFromPlan(plan)),
 		Thesis:           plan.Thesis,
-		DedupeKey:        recommendationEventDedupeKey(*blogger, document.ID, plan),
+		DedupeKey:        recommendationEventDedupeKey(*blogger, plan),
 		ConfigVersion:    plan.ConfigVersion,
 		RuleVersion:      plan.RuleVersion,
 	}
@@ -73,12 +71,20 @@ func (s *DocumentService) upsertRecommendationEventForPlan(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	if err := dal.RecommendationEventEvidences.DeleteByEventID(ctx, db, eventModel.ID); err != nil {
-		return nil, err
-	}
-	evidenceModels := recommendationEvidenceModels(document.ID, plan, eventModel.ID)
-	if err := dal.RecommendationEventEvidences.CreateBatch(ctx, db, evidenceModels); err != nil {
-		return nil, err
+	var evidenceModels []db_model.RecommendationEventEvidence
+	if eventModel.SourceDocumentID == document.ID && eventModel.PlanID == plan.ID {
+		if err := dal.RecommendationEventEvidences.DeleteByEventID(ctx, db, eventModel.ID); err != nil {
+			return nil, err
+		}
+		evidenceModels = recommendationEvidenceModels(document.ID, plan, eventModel.ID)
+		if err := dal.RecommendationEventEvidences.CreateBatch(ctx, db, evidenceModels); err != nil {
+			return nil, err
+		}
+	} else {
+		evidenceModels, err = dal.RecommendationEventEvidences.QueryByEventID(ctx, db, eventModel.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return mapRecommendationEvent(eventModel, blogger, evidenceModels), nil
 }

@@ -1,6 +1,7 @@
 import json
 import re
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
@@ -10,6 +11,8 @@ from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill
 
 
 JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+TS_CODE_RE = re.compile(r"\b\d{6}\.(?:SH|SZ|BJ)\b")
+PROTECTED_EXTRA_HEADER_NAMES = {"authorization", "content-type"}
 
 
 class LLMClient:
@@ -23,12 +26,14 @@ class LLMClient:
         self,
         settings: Optional[AgentSettings] = None,
         http_client: Optional[httpx.Client] = None,
+        sleep: Optional[Callable[[float], None]] = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.llm = self.settings.llm
         self.http_client = http_client or httpx.Client(
             timeout=self.llm.timeout_ms / 1000
         )
+        self._sleep = sleep or time.sleep
 
     def enabled(self) -> bool:
         return self.llm.enabled
@@ -71,9 +76,7 @@ class LLMClient:
             ],
         }
 
-        headers = {"Content-Type": "application/json"}
-        if self.llm.api_key:
-            headers["Authorization"] = f"Bearer {self.llm.api_key}"
+        headers = _request_headers(self.llm.extra_headers, self.llm.api_key)
 
         attempts = self.llm.max_retries + 1
         last_error: Optional[Exception] = None
@@ -85,27 +88,55 @@ class LLMClient:
                     headers=headers,
                     timeout=self.llm.timeout_ms / 1000,
                 )
-                if response.status_code >= 500:
-                    raise _RetryableLLMError(
-                        f"llm http {response.status_code}: {response.text.strip()}"
-                    )
+                response_text = response.text.strip()
                 if response.status_code >= 400:
-                    raise RuntimeError(
-                        f"llm http {response.status_code}: {response.text.strip()}"
-                    )
-                return _parse_chat_completion(response.json(), max_intents)
+                    message = f"llm http {response.status_code}: {response_text}"
+                    if _is_provider_moderation_block(response_text):
+                        raise _NonRetryableLLMError(message)
+                    if response.status_code >= 500:
+                        raise _RetryableLLMError(message)
+                    raise _NonRetryableLLMError(message)
+                try:
+                    return _parse_chat_completion(response.json(), max_intents)
+                except Exception as exc:
+                    raise _RetryableLLMError(f"invalid llm response: {exc}") from exc
+            except _NonRetryableLLMError as exc:
+                raise RuntimeError(str(exc)) from exc
             except (httpx.TimeoutException, httpx.TransportError, _RetryableLLMError) as exc:
                 last_error = exc
                 if attempt == attempts:
                     break
-            except Exception:
-                raise
+                self._sleep(_retry_delay_seconds(attempt))
 
         raise RuntimeError(f"llm extraction failed after {attempts} attempts: {last_error}")
 
 
 class _RetryableLLMError(Exception):
     pass
+
+
+class _NonRetryableLLMError(Exception):
+    pass
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    return min(float(2 ** max(attempt - 1, 0)), 10.0)
+
+
+def _request_headers(extra_headers: Dict[str, str], api_key: str) -> Dict[str, str]:
+    headers = {
+        name: value
+        for name, value in extra_headers.items()
+        if name.strip().lower() not in PROTECTED_EXTRA_HEADER_NAMES
+    }
+    headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _is_provider_moderation_block(response_text: str) -> bool:
+    return "smart moderation blocked by ai" in response_text.lower()
 
 
 def build_system_prompt(skill: SkillSpec) -> str:
@@ -130,7 +161,31 @@ def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> List[Ag
     raw_items = data.get("raw_intents")
     if not isinstance(raw_items, list):
         raise RuntimeError("llm response missing raw_intents")
-    return [AgentRawIntent(**item) for item in raw_items[:max_intents]]
+    return [AgentRawIntent(**_normalize_raw_intent_item(item)) for item in raw_items[:max_intents]]
+
+
+def _normalize_raw_intent_item(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    normalized = dict(item)
+    note = str(normalized.get("reference_price_note", "")).strip()
+    if note not in {"explicit_price_mention", "price_missing_in_text"}:
+        price = _float_or_zero(normalized.get("reference_price"))
+        normalized["reference_price_note"] = (
+            "explicit_price_mention" if price > 0 else "price_missing_in_text"
+        )
+    raw_symbol = str(normalized.get("raw_symbol", "")).strip()
+    ts_code = TS_CODE_RE.search(raw_symbol)
+    if ts_code:
+        normalized["raw_symbol"] = ts_code.group(0)
+    return normalized
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _message_content_to_text(content: Any) -> str:

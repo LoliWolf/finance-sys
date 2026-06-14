@@ -189,7 +189,7 @@ func TestHTTPM8RealArticlePDFUntrackableSamplesAreObservedWithNacosBootstrap(t *
 
 		document, err := app.DocumentService.GetDocumentByID(ctx, documentID)
 		require.NoError(t, err)
-		require.Equal(t, domain.DocumentStatusFailed, document.Status)
+		require.Equal(t, domain.DocumentStatusInvalid, document.Status)
 		plans, err := app.DocumentService.ListPlansByDocumentID(ctx, documentID)
 		require.NoError(t, err)
 		require.Empty(t, plans)

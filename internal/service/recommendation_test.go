@@ -22,13 +22,14 @@ func TestRecommendationEventDedupeKeyIsStableAndSensitive(t *testing.T) {
 	}
 	plan := recommendationTestPlan()
 
-	key := recommendationEventDedupeKey(blogger, 7, plan)
+	key := recommendationEventDedupeKey(blogger, plan)
 	require.Len(t, key, 64)
-	require.Equal(t, key, recommendationEventDedupeKey(blogger, 7, plan))
+	require.Equal(t, key, recommendationEventDedupeKey(blogger, plan))
 
 	changed := plan
 	changed.Direction = domain.TradeDirectionShort
-	require.NotEqual(t, key, recommendationEventDedupeKey(blogger, 7, changed))
+	require.NotEqual(t, key, recommendationEventDedupeKey(blogger, changed))
+	require.Equal(t, key, recommendationEventDedupeKey(blogger, plan))
 }
 
 func TestRecommendationStatusFromPlan(t *testing.T) {
@@ -69,6 +70,18 @@ func TestRecommendationEventFromPlanMapsFields(t *testing.T) {
 	require.Equal(t, int64(2), event.ConfigVersion)
 	require.Equal(t, "rules-v2", event.RuleVersion)
 	require.Len(t, event.DedupeKey, 64)
+}
+
+func TestRecommendationEventFromPlanNormalizesRecommendDateToDateOnlyUTC(t *testing.T) {
+	loc := time.FixedZone("Asia/Hong_Kong", 8*60*60)
+	blogger := &db_model.Blogger{ID: 3, Name: "Alice", NormalizedName: "alice", Institution: "Research"}
+	document := domain.Document{ID: 7}
+	plan := recommendationTestPlan()
+	plan.TradeDate = time.Date(2026, 2, 3, 0, 0, 0, 0, loc)
+
+	event := recommendationEventFromPlan(document, plan, blogger)
+
+	require.Equal(t, time.Date(2026, 2, 3, 0, 0, 0, 0, time.UTC), event.RecommendDate)
 }
 
 func recommendationTestPlan() domain.CandidatePlan {

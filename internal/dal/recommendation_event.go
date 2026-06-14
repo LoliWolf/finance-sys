@@ -19,18 +19,18 @@ func (*RecommendationEventDML) Create(ctx context.Context, db *gorm.DB, model *d
 }
 
 func (*RecommendationEventDML) UpsertByDedupeKey(ctx context.Context, db *gorm.DB, model *db_model.RecommendationEvent) error {
+	sameSourceDocument := "source_document_id = VALUES(source_document_id)"
 	return db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "dedupe_key"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"blogger_id":      gorm.Expr("VALUES(blogger_id)"),
-			"plan_id":         gorm.Expr("VALUES(plan_id)"),
-			"parse_run_id":    gorm.Expr("VALUES(parse_run_id)"),
-			"reference_price": gorm.Expr("VALUES(reference_price)"),
-			"confidence":      gorm.Expr("VALUES(confidence)"),
-			"status":          gorm.Expr("VALUES(status)"),
-			"thesis":          gorm.Expr("VALUES(thesis)"),
-			"config_version":  gorm.Expr("VALUES(config_version)"),
-			"rule_version":    gorm.Expr("VALUES(rule_version)"),
+			"plan_id":         gorm.Expr("IF(" + sameSourceDocument + ", VALUES(plan_id), plan_id)"),
+			"parse_run_id":    gorm.Expr("IF(" + sameSourceDocument + ", VALUES(parse_run_id), parse_run_id)"),
+			"reference_price": gorm.Expr("IF(" + sameSourceDocument + ", VALUES(reference_price), reference_price)"),
+			"confidence":      gorm.Expr("IF(" + sameSourceDocument + ", VALUES(confidence), confidence)"),
+			"status":          gorm.Expr("IF(" + sameSourceDocument + ", VALUES(status), status)"),
+			"thesis":          gorm.Expr("IF(" + sameSourceDocument + ", VALUES(thesis), thesis)"),
+			"config_version":  gorm.Expr("IF(" + sameSourceDocument + ", VALUES(config_version), config_version)"),
+			"rule_version":    gorm.Expr("IF(" + sameSourceDocument + ", VALUES(rule_version), rule_version)"),
 			"updated_at":      gorm.Expr("CURRENT_TIMESTAMP"),
 		}),
 	}).Create(model).Error
