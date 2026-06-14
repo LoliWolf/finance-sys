@@ -256,6 +256,35 @@ func TestM9DocumentStatusNeedsAnalyzeSkipsTerminalInvalidDuplicates(t *testing.T
 	require.True(t, m9DocumentStatusNeedsAnalyze(false, domain.DocumentStatusInvalid))
 }
 
+func TestM9DocumentStatusNeedsAnalyzeReprocessesMismatchedPlanDates(t *testing.T) {
+	expected := time.Date(2026, 2, 12, 0, 0, 0, 0, time.UTC)
+
+	require.False(t, m9DocumentStatusNeedsAnalyzeForPlanDates(
+		true,
+		domain.DocumentStatusPlanned,
+		[]time.Time{expected},
+		expected,
+	))
+	require.True(t, m9DocumentStatusNeedsAnalyzeForPlanDates(
+		true,
+		domain.DocumentStatusPlanned,
+		[]time.Time{expected.AddDate(0, 0, 1)},
+		expected,
+	))
+	require.True(t, m9DocumentStatusNeedsAnalyzeForPlanDates(
+		true,
+		domain.DocumentStatusPlanned,
+		nil,
+		expected,
+	))
+	require.False(t, m9DocumentStatusNeedsAnalyzeForPlanDates(
+		true,
+		domain.DocumentStatusInvalid,
+		[]time.Time{expected.AddDate(0, 0, 1)},
+		expected,
+	))
+}
+
 func TestM9AnalyzeNonOKAcceptsTerminalDocumentStatuses(t *testing.T) {
 	require.True(t, m9AnalyzeNonOKAcceptsDocumentStatus(domain.DocumentStatusPlanned))
 	require.True(t, m9AnalyzeNonOKAcceptsDocumentStatus(domain.DocumentStatusInvalid))
@@ -527,10 +556,11 @@ func m9ProcessRealHistoryArticle(ctx context.Context, app *bootstrap.App, baseUR
 	}
 
 	analyzed := false
-	needsAnalyze, err := m9DocumentNeedsAnalyze(ctx, app, upload)
+	needsAnalyze, err := m9DocumentNeedsAnalyze(ctx, app, upload, expectedTradeDate)
 	if err != nil {
 		return m9HistoryArticleResult{}, err
 	}
+	forceAnalyze := false
 	if metadataChanged && upload.Duplicate {
 		document, err := app.DocumentService.GetDocumentByID(ctx, upload.Document.ID)
 		if err != nil {
@@ -538,13 +568,14 @@ func m9ProcessRealHistoryArticle(ctx context.Context, app *bootstrap.App, baseUR
 		}
 		if document.Status == domain.DocumentStatusPlanned {
 			needsAnalyze = true
+			forceAnalyze = true
 		}
 	}
 	if needsAnalyze {
 		requestedAnalyze := false
 		analyzed, err = analyzeTracker.run(ctx, upload.Document.ID, func() error {
 			var err error
-			requestedAnalyze, err = m9AnalyzeDocumentIfStillNeeded(ctx, app, baseURL, upload.Document.ID)
+			requestedAnalyze, err = m9AnalyzeDocumentIfStillNeeded(ctx, app, baseURL, upload.Document.ID, expectedTradeDate, forceAnalyze)
 			return err
 		})
 		if err != nil {
@@ -564,12 +595,12 @@ func m9ProcessRealHistoryArticle(ctx context.Context, app *bootstrap.App, baseUR
 	return result, nil
 }
 
-func m9DocumentNeedsAnalyze(ctx context.Context, app *bootstrap.App, upload *m9UploadDocumentResponse) (bool, error) {
+func m9DocumentNeedsAnalyze(ctx context.Context, app *bootstrap.App, upload *m9UploadDocumentResponse, expectedTradeDate time.Time) (bool, error) {
 	document, err := app.DocumentService.GetDocumentByID(ctx, upload.Document.ID)
 	if err != nil {
 		return false, err
 	}
-	return m9DocumentStatusNeedsAnalyze(upload.Duplicate, document.Status), nil
+	return m9DocumentNeedsAnalyzeForDocument(ctx, app, upload.Duplicate, document, expectedTradeDate)
 }
 
 func m9EnsureHistoryDocumentMetadata(ctx context.Context, app *bootstrap.App, documentID int64, author string, institution string, title string) (bool, error) {
@@ -586,20 +617,30 @@ func m9EnsureHistoryDocumentMetadata(ctx context.Context, app *bootstrap.App, do
 	return true, nil
 }
 
-func m9AnalyzeDocumentIfStillNeeded(ctx context.Context, app *bootstrap.App, baseURL string, documentID int64) (bool, error) {
+func m9AnalyzeDocumentIfStillNeeded(ctx context.Context, app *bootstrap.App, baseURL string, documentID int64, expectedTradeDate time.Time, force bool) (bool, error) {
 	document, err := app.DocumentService.GetDocumentByID(ctx, documentID)
 	if err != nil {
 		return false, err
 	}
-	if m9IsTerminalHistoryDocumentStatus(document.Status) {
-		return false, nil
+	if !force {
+		needsAnalyze, err := m9DocumentNeedsAnalyzeForDocument(ctx, app, true, document, expectedTradeDate)
+		if err != nil {
+			return false, err
+		}
+		if !needsAnalyze {
+			return false, nil
+		}
 	}
 	status, body, err := m9AnalyzeDocumentBodyWithRetryE(ctx, baseURL, documentID, func() (bool, error) {
 		document, err := app.DocumentService.GetDocumentByID(ctx, documentID)
 		if err != nil {
 			return false, err
 		}
-		return m9IsTerminalHistoryDocumentStatus(document.Status), nil
+		needsAnalyze, err := m9DocumentNeedsAnalyzeForDocument(ctx, app, true, document, expectedTradeDate)
+		if err != nil {
+			return false, err
+		}
+		return !needsAnalyze, nil
 	})
 	if err != nil {
 		return true, err
@@ -614,8 +655,42 @@ func m9AnalyzeDocumentIfStillNeeded(ctx context.Context, app *bootstrap.App, bas
 	return true, nil
 }
 
+func m9DocumentNeedsAnalyzeForDocument(ctx context.Context, app *bootstrap.App, duplicate bool, document *domain.Document, expectedTradeDate time.Time) (bool, error) {
+	if document.Status != domain.DocumentStatusPlanned || expectedTradeDate.IsZero() {
+		return m9DocumentStatusNeedsAnalyze(duplicate, document.Status), nil
+	}
+	plans, err := app.DocumentService.ListPlansByDocumentID(ctx, document.ID)
+	if err != nil {
+		return false, err
+	}
+	planDates := make([]time.Time, 0, len(plans))
+	for _, plan := range plans {
+		planDates = append(planDates, plan.TradeDate)
+	}
+	return m9DocumentStatusNeedsAnalyzeForPlanDates(duplicate, document.Status, planDates, expectedTradeDate), nil
+}
+
 func m9DocumentStatusNeedsAnalyze(duplicate bool, status domain.DocumentStatus) bool {
 	return !duplicate || !m9IsTerminalHistoryDocumentStatus(status)
+}
+
+func m9DocumentStatusNeedsAnalyzeForPlanDates(duplicate bool, status domain.DocumentStatus, planDates []time.Time, expectedTradeDate time.Time) bool {
+	if !duplicate {
+		return true
+	}
+	if status == domain.DocumentStatusPlanned && !expectedTradeDate.IsZero() {
+		expected := expectedTradeDate.Format(time.DateOnly)
+		if len(planDates) == 0 {
+			return true
+		}
+		for _, planDate := range planDates {
+			if planDate.Format(time.DateOnly) != expected {
+				return true
+			}
+		}
+		return false
+	}
+	return !m9IsTerminalHistoryDocumentStatus(status)
 }
 
 func m9IsTerminalHistoryDocumentStatus(status domain.DocumentStatus) bool {

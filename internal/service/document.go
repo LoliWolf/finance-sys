@@ -104,6 +104,7 @@ func (s *DocumentService) IngestDocument(ctx context.Context, request domain.Doc
 
 func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
 	cfg := s.currentConfig()
+	tradeDate := s.tradeDate(cfg)
 	s.logger.InfoContext(ctx, "document service analyze start", "document_id", documentID)
 	documentModel, err := dal.Documents.QueryByID(ctx, s.db, documentID)
 	if err != nil {
@@ -154,6 +155,16 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
 		return nil, parseErr
 	}
+	if !parseRunHasAnalyzableText(*parseRun) {
+		err := errors.New("no analyzable text extracted from document")
+		s.logger.WarnContext(ctx, "document service analyze parse produced no analyzable text", "document_id", documentID, "parse_run_id", parseRun.ID)
+		if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, AnalysisObservation{AgentMode: observationAgentMode(cfg), Route: string(domain.ResolutionRouteLocalOnly)}, nil, nil, err, "NO_ANALYZABLE_TEXT"); obsErr != nil {
+			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after empty parse result", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
+			return nil, obsErr
+		}
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusInvalid))
+		return nil, err
+	}
 	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusParsed)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status parsed failed", "document_id", documentID, "error", err.Error())
 		return nil, err
@@ -199,7 +210,6 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 	}
 	s.logger.InfoContext(ctx, "document service analyze candidate assembly success", "document_id", documentID, "parse_run_id", parseRun.ID, "trackable_intent_count", len(trackableIntents), "raw_intent_count", len(intents))
 
-	tradeDate := s.tradeDate(cfg)
 	plans := make([]domain.CandidatePlan, 0, len(trackableIntents))
 	for _, intent := range trackableIntents {
 		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "direction", intent.Direction, "confidence", intent.Confidence)
@@ -292,6 +302,18 @@ func (s *DocumentService) tradeDate(cfg *config.Config) time.Time {
 	loc := utils.MustLocation(cfg.Meta.Timezone)
 	base := time.Now().In(loc)
 	return time.Date(base.Year(), base.Month(), base.Day()+cfg.Rules.TradeDateOffsetDays, 0, 0, 0, 0, loc)
+}
+
+func parseRunHasAnalyzableText(run domain.ParseRun) bool {
+	if strings.TrimSpace(run.CleanedText) != "" {
+		return true
+	}
+	for _, chunk := range run.Chunks {
+		if strings.TrimSpace(chunk.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func documentStatusAfterAnalysisFailure(resolutions []domain.InstrumentResolution, err error) domain.DocumentStatus {

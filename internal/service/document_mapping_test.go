@@ -109,3 +109,17 @@ func TestDocumentStatusAfterAnalyzerFailureKeepsFailedForTransientAgentFailures(
 
 	require.Equal(t, domain.DocumentStatusFailed, status)
 }
+
+func TestParseRunHasAnalyzableTextRequiresNonBlankText(t *testing.T) {
+	require.False(t, parseRunHasAnalyzableText(domain.ParseRun{}))
+	require.False(t, parseRunHasAnalyzableText(domain.ParseRun{
+		CleanedText: " \n\t ",
+		Chunks:      []domain.Chunk{{Index: 0, Text: " "}},
+	}))
+	require.True(t, parseRunHasAnalyzableText(domain.ParseRun{
+		CleanedText: "推荐新易盛",
+	}))
+	require.True(t, parseRunHasAnalyzableText(domain.ParseRun{
+		Chunks: []domain.Chunk{{Index: 0, Text: "推荐新易盛"}},
+	}))
+}

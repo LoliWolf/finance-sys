@@ -37,6 +37,7 @@ func (a *CandidateAssembler) Assemble(ctx context.Context, intents []domain.Plan
 	trackable := make([]domain.TrackablePlanIntent, 0, len(intents))
 	resolutions := make([]domain.InstrumentResolution, 0, len(intents))
 	var errs []error
+	var skippedAmbiguousErrs []error
 	var skippedNotFoundErrs []error
 
 	for _, intent := range intents {
@@ -47,6 +48,13 @@ func (a *CandidateAssembler) Assemble(ctx context.Context, intents []domain.Plan
 				if a.logger != nil {
 					a.logger.InfoContext(ctx, "candidate assembler skipped untrackable target", "raw_symbol", resolution.RawSymbol, "target_kind", resolution.TargetKind, "reason", resolution.Reason)
 				}
+				continue
+			}
+			if resolution.Status == domain.InstrumentResolutionStatusAmbiguous {
+				if a.logger != nil {
+					a.logger.InfoContext(ctx, "candidate assembler skipped ambiguous target", "raw_symbol", resolution.RawSymbol, "target_kind", resolution.TargetKind, "reason", resolution.Reason)
+				}
+				skippedAmbiguousErrs = append(skippedAmbiguousErrs, err)
 				continue
 			}
 			if resolution.Status == domain.InstrumentResolutionStatusNotFound && strings.TrimSpace(resolution.Reason) == "no active security matched" {
@@ -66,6 +74,10 @@ func (a *CandidateAssembler) Assemble(ctx context.Context, intents []domain.Plan
 		return nil, resolutions, errors.Join(errs...)
 	}
 	if len(trackable) == 0 {
+		if len(skippedAmbiguousErrs) > 0 {
+			allErrs := append(skippedAmbiguousErrs, skippedNotFoundErrs...)
+			return nil, resolutions, errors.Join(allErrs...)
+		}
 		if len(skippedNotFoundErrs) > 0 {
 			return nil, resolutions, errors.Join(skippedNotFoundErrs...)
 		}
