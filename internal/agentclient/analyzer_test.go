@@ -2,9 +2,11 @@ package agentclient_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"finance-sys/internal/agentclient"
 	"finance-sys/internal/config"
@@ -109,6 +111,30 @@ func TestAnalyzerRejectsFailedStatus(t *testing.T) {
 		Chunks:      []domain.Chunk{{Index: 0, Text: "推荐新易盛"}},
 	})
 	require.ErrorContains(t, err, "agent returned FAILED status")
+}
+
+func TestAnalyzerUsesTradeDateFromContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request agentclient.ResolveDocumentRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		require.Equal(t, "2026-04-13", request.TradeDate)
+		writeAgentResponse(t, w, agentclient.ResolveDocumentResponse{
+			SchemaVersion: agentclient.ResponseSchemaVersion,
+			AgentVersion:  "test-agent",
+			Status:        agentclient.AgentStatusPartial,
+			RawIntents:    []agentclient.AgentRawIntent{testRawIntent("CPO鏉垮潡")},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := agentclient.NewAnalyzer(testRuntimeWithAgent(server.URL), nil)
+	ctx := domain.ContextWithTradeDate(context.Background(), time.Date(2026, 4, 13, 15, 30, 0, 0, time.FixedZone("CST", 8*60*60)))
+	_, err := analyzer.Analyze(ctx, domain.Document{ID: 10}, domain.ParseRun{
+		ID:          20,
+		CleanedText: "鎺ㄨ崘CPO鏉垮潡",
+		Chunks:      []domain.Chunk{{Index: 0, Text: "鎺ㄨ崘CPO鏉垮潡"}},
+	})
+	require.NoError(t, err)
 }
 
 func testRuntimeWithAgent(endpoint string) *config.Runtime {

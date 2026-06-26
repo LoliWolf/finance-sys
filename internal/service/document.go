@@ -103,8 +103,22 @@ func (s *DocumentService) IngestDocument(ctx context.Context, request domain.Doc
 }
 
 func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
+	return s.analyzeDocument(ctx, documentID)
+}
+
+func (s *DocumentService) AnalyzeDocumentForTradeDate(ctx context.Context, documentID int64, tradeDate time.Time) ([]domain.CandidatePlan, error) {
+	if !tradeDate.IsZero() {
+		ctx = domain.ContextWithTradeDate(ctx, tradeDate)
+	}
+	return s.analyzeDocument(ctx, documentID)
+}
+
+func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
 	cfg := s.currentConfig()
 	tradeDate := s.tradeDate(cfg)
+	if override, ok := domain.TradeDateFromContext(ctx); ok {
+		tradeDate = override
+	}
 	s.logger.InfoContext(ctx, "document service analyze start", "document_id", documentID)
 	documentModel, err := dal.Documents.QueryByID(ctx, s.db, documentID)
 	if err != nil {
@@ -152,7 +166,7 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after parse failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterParseFailure(parseErr)))
 		return nil, parseErr
 	}
 	if !parseRunHasAnalyzableText(*parseRun) {
@@ -314,6 +328,23 @@ func parseRunHasAnalyzableText(run domain.ParseRun) bool {
 		}
 	}
 	return false
+}
+
+func documentStatusAfterParseFailure(err error) domain.DocumentStatus {
+	if isTerminalInvalidParseFailure(err) {
+		return domain.DocumentStatusInvalid
+	}
+	return domain.DocumentStatusFailed
+}
+
+func isTerminalInvalidParseFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "invalid page count 0") ||
+		strings.Contains(message, "wrong page range given") ||
+		strings.Contains(message, "first page (1) can not be after the last page (0)")
 }
 
 func documentStatusAfterAnalysisFailure(resolutions []domain.InstrumentResolution, err error) domain.DocumentStatus {

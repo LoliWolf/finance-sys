@@ -75,6 +75,18 @@ func TestDocumentStatusAfterAnalysisFailureKeepsFailedForAmbiguousOrTransientFai
 	require.Equal(t, domain.DocumentStatusFailed, noResolution)
 }
 
+func TestDocumentStatusAfterParseFailureMarksInvalidForTerminalPDFPageCount(t *testing.T) {
+	err := errors.New("pdftotext failed for article.pdf: exit status 99; ocr failed: RuntimeError: pdftoppm failed\nSyntax Error: Invalid page count 0\nWrong page range given: the first page (1) can not be after the last page (0).")
+
+	require.Equal(t, domain.DocumentStatusInvalid, documentStatusAfterParseFailure(err))
+}
+
+func TestDocumentStatusAfterParseFailureKeepsFailedForOCRResourceFailures(t *testing.T) {
+	err := errors.New("ocr failed for article.pdf: Windows OCR failed: OutOfMemoryException")
+
+	require.Equal(t, domain.DocumentStatusFailed, documentStatusAfterParseFailure(err))
+}
+
 func TestDocumentStatusAfterAnalyzerFailureMarksInvalidWhenAgentExtractedNoIntents(t *testing.T) {
 	status := documentStatusAfterAnalyzerFailure(AnalysisObservation{
 		AgentResponse: &agentclient.ResolveDocumentResponse{

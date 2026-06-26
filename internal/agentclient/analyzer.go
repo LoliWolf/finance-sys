@@ -46,7 +46,7 @@ func (a *Analyzer) AnalyzeWithResponse(ctx context.Context, document domain.Docu
 	if !cfg.Agent.Enabled {
 		return nil, nil, fmt.Errorf("agent analyzer disabled")
 	}
-	request := buildResolveDocumentRequest(document, parsed, cfg)
+	request := buildResolveDocumentRequest(ctx, document, parsed, cfg)
 	if a.logger != nil {
 		a.logger.InfoContext(ctx, "agent analyze start", "document_id", document.ID, "parse_run_id", parsed.ID, "chunk_count", len(request.Chunks), "endpoint", cfg.Agent.Endpoint)
 	}
@@ -68,7 +68,7 @@ func (a *Analyzer) AnalyzeWithResponse(ctx context.Context, document domain.Docu
 	return intents, response, nil
 }
 
-func buildResolveDocumentRequest(document domain.Document, parsed domain.ParseRun, cfg *config.Config) ResolveDocumentRequest {
+func buildResolveDocumentRequest(ctx context.Context, document domain.Document, parsed domain.ParseRun, cfg *config.Config) ResolveDocumentRequest {
 	chunks := parsed.Chunks
 	if len(chunks) == 0 && strings.TrimSpace(parsed.CleanedText) != "" {
 		chunks = []domain.Chunk{{Index: 0, Text: parsed.CleanedText}}
@@ -81,6 +81,9 @@ func buildResolveDocumentRequest(document domain.Document, parsed domain.ParseRu
 		})
 	}
 	tradeDate := agentTradeDate(cfg)
+	if override, ok := domain.TradeDateFromContext(ctx); ok {
+		tradeDate = override
+	}
 	return ResolveDocumentRequest{
 		SchemaVersion: RequestSchemaVersion,
 		RequestID:     fmt.Sprintf("doc-%d-parse-%d-%d", document.ID, parsed.ID, time.Now().UnixNano()),

@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -37,6 +39,7 @@ const (
 	m9RealHistoryIntegrationEnv     = "FINANCE_SYS_M9_REAL_HISTORY_ARTICLE_INTEGRATION"
 	m9RealHistoryDMLAckEnv          = "FINANCE_SYS_M9_REAL_HISTORY_DML_ACK"
 	m9RealHistoryConcurrencyEnv     = "FINANCE_SYS_M9_REAL_HISTORY_MAX_CONCURRENCY"
+	m9RealHistoryAnalyzeAttemptsEnv = "FINANCE_SYS_M9_REAL_HISTORY_ANALYZE_MAX_ATTEMPTS"
 	m9RealHistoryInstitution        = "\u4e2a\u4eba"
 	m9RealHistoryTitlePrefix        = "M9_REAL_HISTORY"
 	m9FakeOCRSentinel               = "M9_HISTORY_OCR_TEXT"
@@ -65,6 +68,31 @@ type m9HistoryArticleResult struct {
 	ExpectedTradeDate string
 	Path              string
 	SHA256            string
+}
+
+type m9DeferredAnalyzeError struct {
+	DocumentID int64
+	Status     int
+	Body       string
+	Err        error
+}
+
+func (err *m9DeferredAnalyzeError) Error() string {
+	detail := strings.TrimSpace(err.Body)
+	if detail == "" && err.Err != nil {
+		detail = err.Err.Error()
+	}
+	if detail == "" {
+		detail = "transient analyze failure"
+	}
+	if err.Status != 0 {
+		return fmt.Sprintf("deferred analyze retry for document %d after http %d: %s", err.DocumentID, err.Status, detail)
+	}
+	return fmt.Sprintf("deferred analyze retry for document %d: %s", err.DocumentID, detail)
+}
+
+func (err *m9DeferredAnalyzeError) Unwrap() error {
+	return err.Err
 }
 
 type m9UploadDocumentResponse struct {
@@ -110,6 +138,9 @@ func (tracker *m9AnalyzeOnceTracker) run(ctx context.Context, documentID int64, 
 		err := analyze()
 
 		tracker.mu.Lock()
+		if err != nil {
+			delete(tracker.attempted, documentID)
+		}
 		delete(tracker.inFlight, documentID)
 		close(inFlight)
 		tracker.mu.Unlock()
@@ -136,27 +167,51 @@ func TestHTTPM9RealHistoryArticlesIncrementallyUploadAndAnalyzeWithNacosAgent(t 
 	concurrency := m9RealHistoryConcurrency(t)
 	t.Logf("M9 real history corpus: files=%d unique_sha=%d duplicate_files=%d concurrency=%d", len(allArticles), len(uniqueArticles), duplicateFileCount, concurrency)
 
-	grouped := m9GroupHistoryArticlesByDate(uniqueArticles)
-	dateKeys := m9SortedHistoryDateKeys(grouped)
-	results := make([]m9HistoryArticleResult, 0, len(uniqueArticles))
+	resultsBySHA := make(map[string]m9HistoryArticleResult, len(uniqueArticles))
 	var failures []string
 	analyzeTracker := newM9AnalyzeOnceTracker()
+	m9ConfigureRealHistoryRuntime(t, app, time.Time{})
 
-	for _, dateText := range dateKeys {
-		dateArticles := grouped[dateText]
-		expectedTradeDate := m9ExpectedTradeDate(dateArticles[0].Date)
-		m9ConfigureRealHistoryRuntime(t, app, expectedTradeDate)
+	pending := uniqueArticles
+	for pass := 1; len(pending) > 0; pass++ {
+		groupResults, nextPending, groupFailures := m9RunHistoryArticleGroup(ctx, app, baseURL, analyzeTracker, pending, concurrency)
+		for _, result := range groupResults {
+			resultsBySHA[result.SHA256] = result
+		}
 
-		groupResults, groupFailures := m9RunHistoryArticleGroup(ctx, app, baseURL, analyzeTracker, dateArticles, expectedTradeDate, concurrency)
-		results = append(results, groupResults...)
+		t.Logf("M9 real history pass=%d completed=%d deferred_for_retry=%d total_completed=%d", pass, len(groupResults), len(nextPending), len(resultsBySHA))
 		if len(groupFailures) > 0 {
 			failures = append(failures, groupFailures...)
 			break
+		}
+		if len(nextPending) == 0 {
+			break
+		}
+		pending = nextPending
+		select {
+		case <-time.After(m9RetrySweepBackoff(pass)):
+		case <-ctx.Done():
+			failures = append(failures, ctx.Err().Error())
+			pending = nil
 		}
 	}
 
 	if len(failures) > 0 {
 		t.Fatalf("real history article run failed for %d unique article(s); first failures:\n%s", len(failures), strings.Join(m9FirstStrings(failures, 20), "\n"))
+	}
+
+	results := make([]m9HistoryArticleResult, 0, len(uniqueArticles))
+	var missing []string
+	for _, article := range uniqueArticles {
+		result, ok := resultsBySHA[article.SHA256]
+		if !ok {
+			missing = append(missing, article.Path)
+			continue
+		}
+		results = append(results, result)
+	}
+	if len(missing) > 0 {
+		t.Fatalf("real history article run ended with %d pending article(s); first pending:\n%s", len(missing), strings.Join(m9FirstStrings(missing, 20), "\n"))
 	}
 	require.Len(t, results, len(uniqueArticles))
 
@@ -228,6 +283,28 @@ func TestM9AnalyzeOnceTrackerRunsOnlyOneAnalyzeForTheSameDocumentID(t *testing.T
 	require.Equal(t, 1, calls)
 }
 
+func TestM9AnalyzeOnceTrackerAllowsRetryAfterAnalyzeError(t *testing.T) {
+	tracker := newM9AnalyzeOnceTracker()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var calls int
+	didAnalyze, err := tracker.run(ctx, 42, func() error {
+		calls++
+		return errors.New("transient analyze error")
+	})
+	require.Error(t, err)
+	require.True(t, didAnalyze)
+
+	didAnalyze, err = tracker.run(ctx, 42, func() error {
+		calls++
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, didAnalyze)
+	require.Equal(t, 2, calls)
+}
+
 func TestM9UniqueHistoryArticlesBySHAUsesOnlyFileBytes(t *testing.T) {
 	root := t.TempDir()
 	firstDir := filepath.Join(root, "articles-20260202")
@@ -292,6 +369,18 @@ func TestM9AnalyzeNonOKAcceptsTerminalDocumentStatuses(t *testing.T) {
 	require.False(t, m9AnalyzeNonOKAcceptsDocumentStatus(domain.DocumentStatusParsed))
 }
 
+func TestM9TransientAnalyzeFailureIncludesOCRResourceFailures(t *testing.T) {
+	body := []byte(`{"error":"ocr failed for article.pdf: Windows OCR failed: OutOfMemoryException"}`)
+
+	require.True(t, m9IsTransientAnalyzeFailure(http.StatusInternalServerError, body))
+}
+
+func TestM9TransientAnalyzeFailureExcludesTerminalInvalidPDFParseFailures(t *testing.T) {
+	body := []byte(`{"error":"pdftotext failed for article.pdf: exit status 99; ocr failed: RuntimeError: pdftoppm failed\nSyntax Error: Invalid page count 0\nWrong page range given: the first page (1) can not be after the last page (0)."}`)
+
+	require.False(t, m9IsTransientAnalyzeFailure(http.StatusInternalServerError, body))
+}
+
 func TestM9RealHistoryAgentConfigAvoidsTimeoutRetryOverlap(t *testing.T) {
 	cfg := config.AgentConfig{
 		TimeoutMS:  120000,
@@ -317,7 +406,7 @@ func TestM9AnalyzeDocumentBodyWithRetryStopsAfterDocumentBecomesTerminal(t *test
 	defer server.Close()
 
 	var statusChecks int
-	status, body, err := m9AnalyzeDocumentBodyWithRetryE(context.Background(), server.URL, 42, func() (bool, error) {
+	status, body, err := m9AnalyzeDocumentBodyWithRetryE(context.Background(), server.URL, 42, time.Time{}, func() (bool, error) {
 		statusChecks++
 		return true, nil
 	})
@@ -326,6 +415,66 @@ func TestM9AnalyzeDocumentBodyWithRetryStopsAfterDocumentBecomesTerminal(t *test
 	require.Equal(t, http.StatusInternalServerError, status)
 	require.Contains(t, string(body), "deadlock found")
 	require.Equal(t, int32(1), attempts.Load())
+	require.Equal(t, 1, statusChecks)
+}
+
+func TestM9AnalyzeDocumentBodyWithRetryRetriesAgentFailedStatusForSameDocument(t *testing.T) {
+	t.Setenv(m9RealHistoryAnalyzeAttemptsEnv, "3")
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		if attempt < 3 {
+			http.Error(w, `{"error":"agent returned FAILED status"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"plans":[]}`))
+	}))
+	defer server.Close()
+
+	var statusChecks int
+	status, body, err := m9AnalyzeDocumentBodyWithRetryE(context.Background(), server.URL, 42, time.Time{}, func() (bool, error) {
+		statusChecks++
+		return false, nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.JSONEq(t, `{"plans":[]}`, string(body))
+	require.Equal(t, int32(3), attempts.Load())
+	require.Equal(t, 2, statusChecks)
+}
+
+func TestM9AnalyzeDocumentBodyWithRetryRetriesClientEOFForSameDocument(t *testing.T) {
+	t.Setenv(m9RealHistoryAnalyzeAttemptsEnv, "2")
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		if attempt == 1 {
+			hijacker, ok := w.(http.Hijacker)
+			require.True(t, ok)
+			conn, _, err := hijacker.Hijack()
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"plans":[]}`))
+	}))
+	defer server.Close()
+
+	var statusChecks int
+	status, body, err := m9AnalyzeDocumentBodyWithRetryE(context.Background(), server.URL, 42, time.Time{}, func() (bool, error) {
+		statusChecks++
+		return false, nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.JSONEq(t, `{"plans":[]}`, string(body))
+	require.Equal(t, int32(2), attempts.Load())
 	require.Equal(t, 1, statusChecks)
 }
 
@@ -342,7 +491,7 @@ func TestM9AnalyzeDocumentBodyWithRetryDoesNotRetryContextDeadline(t *testing.T)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	status, body, err := m9AnalyzeDocumentBodyWithRetryE(ctx, server.URL, 42, nil)
+	status, body, err := m9AnalyzeDocumentBodyWithRetryE(ctx, server.URL, 42, time.Time{}, nil)
 
 	require.Error(t, err)
 	require.Zero(t, status)
@@ -353,7 +502,7 @@ func TestM9AnalyzeDocumentBodyWithRetryDoesNotRetryContextDeadline(t *testing.T)
 func TestM9AnalyzeDocumentBodyWithRetryAcceptsTerminalDocumentAfterClientError(t *testing.T) {
 	var statusChecks int
 
-	status, body, err := m9AnalyzeDocumentBodyWithRetryE(context.Background(), "http://127.0.0.1:1", 42, func() (bool, error) {
+	status, body, err := m9AnalyzeDocumentBodyWithRetryE(context.Background(), "http://127.0.0.1:1", 42, time.Time{}, func() (bool, error) {
 		statusChecks++
 		return true, nil
 	})
@@ -362,6 +511,22 @@ func TestM9AnalyzeDocumentBodyWithRetryAcceptsTerminalDocumentAfterClientError(t
 	require.Zero(t, status)
 	require.Empty(t, body)
 	require.Equal(t, 1, statusChecks)
+}
+
+func TestM9AnalyzeDocumentBodySendsTradeDateQuery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/documents/42/analyze", r.URL.Path)
+		require.Equal(t, "2026-04-13", r.URL.Query().Get("trade_date"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"plans":[]}`))
+	}))
+	defer server.Close()
+
+	status, body, err := m9AnalyzeDocumentBodyE(context.Background(), server.URL, 42, time.Date(2026, 4, 13, 18, 30, 0, 0, time.Local))
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.JSONEq(t, `{"plans":[]}`, string(body))
 }
 
 func m9RequireRealHistoryEnabled(t *testing.T) {
@@ -487,19 +652,19 @@ func m9SortedHistoryDateKeys(grouped map[string][]m9HistoryArticle) []string {
 	return keys
 }
 
-func m9RunHistoryArticleGroup(ctx context.Context, app *bootstrap.App, baseURL string, analyzeTracker *m9AnalyzeOnceTracker, articles []m9HistoryArticle, expectedTradeDate time.Time, concurrency int) ([]m9HistoryArticleResult, []string) {
+func m9RunHistoryArticleGroup(ctx context.Context, app *bootstrap.App, baseURL string, analyzeTracker *m9AnalyzeOnceTracker, articles []m9HistoryArticle, concurrency int) ([]m9HistoryArticleResult, []m9HistoryArticle, []string) {
 	dispatchCtx, stopDispatch := context.WithCancel(ctx)
 	defer stopDispatch()
 
 	sem := make(chan struct{}, concurrency)
-	results := make([]m9HistoryArticleResult, len(articles))
-	errors := make([]string, 0)
+	resultCh := make(chan m9HistoryArticleResult, len(articles))
+	deferredCh := make(chan m9HistoryArticle, len(articles))
 	errCh := make(chan string, len(articles))
 	var wg sync.WaitGroup
 
 dispatch:
-	for i, article := range articles {
-		i, article := i, article
+	for _, article := range articles {
+		article := article
 		select {
 		case sem <- struct{}{}:
 		case <-dispatchCtx.Done():
@@ -509,25 +674,50 @@ dispatch:
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			expectedTradeDate := m9ExpectedTradeDate(article.Date)
 			result, err := m9ProcessRealHistoryArticle(ctx, app, baseURL, analyzeTracker, article, expectedTradeDate)
 			if err != nil {
+				if m9IsDeferredAnalyzeError(err) {
+					deferredCh <- article
+					return
+				}
 				errCh <- fmt.Sprintf("%s: %v", article.Path, err)
 				stopDispatch()
 				return
 			}
-			results[i] = result
+			resultCh <- result
 		}()
 	}
 	wg.Wait()
+	close(resultCh)
+	close(deferredCh)
 	close(errCh)
+
+	results := make([]m9HistoryArticleResult, 0, len(articles))
+	for result := range resultCh {
+		results = append(results, result)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Path < results[j].Path
+	})
+
+	deferred := make([]m9HistoryArticle, 0)
+	for article := range deferredCh {
+		deferred = append(deferred, article)
+	}
+	sort.Slice(deferred, func(i, j int) bool {
+		return deferred[i].Path < deferred[j].Path
+	})
+
+	errors := make([]string, 0)
 	for err := range errCh {
 		errors = append(errors, err)
 	}
 	sort.Strings(errors)
 	if len(errors) > 0 {
-		return nil, errors
+		return nil, deferred, errors
 	}
-	return results, nil
+	return results, deferred, nil
 }
 
 func m9ProcessRealHistoryArticle(ctx context.Context, app *bootstrap.App, baseURL string, analyzeTracker *m9AnalyzeOnceTracker, article m9HistoryArticle, expectedTradeDate time.Time) (m9HistoryArticleResult, error) {
@@ -631,7 +821,7 @@ func m9AnalyzeDocumentIfStillNeeded(ctx context.Context, app *bootstrap.App, bas
 			return false, nil
 		}
 	}
-	status, body, err := m9AnalyzeDocumentBodyWithRetryE(ctx, baseURL, documentID, func() (bool, error) {
+	status, body, err := m9AnalyzeDocumentBodyWithRetryE(ctx, baseURL, documentID, expectedTradeDate, func() (bool, error) {
 		document, err := app.DocumentService.GetDocumentByID(ctx, documentID)
 		if err != nil {
 			return false, err
@@ -643,16 +833,34 @@ func m9AnalyzeDocumentIfStillNeeded(ctx context.Context, app *bootstrap.App, bas
 		return !needsAnalyze, nil
 	})
 	if err != nil {
-		return true, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return true, err
+		}
+		return true, &m9DeferredAnalyzeError{
+			DocumentID: documentID,
+			Err:        err,
+		}
 	}
 	if status != http.StatusOK {
 		document, loadErr := app.DocumentService.GetDocumentByID(ctx, documentID)
 		if loadErr == nil && m9AnalyzeNonOKAcceptsDocumentStatus(document.Status) {
 			return false, nil
 		}
+		if m9IsTransientAnalyzeFailure(status, body) {
+			return true, &m9DeferredAnalyzeError{
+				DocumentID: documentID,
+				Status:     status,
+				Body:       strings.TrimSpace(string(body)),
+			}
+		}
 		return true, fmt.Errorf("analyze http %d: %s", status, strings.TrimSpace(string(body)))
 	}
 	return true, nil
+}
+
+func m9IsDeferredAnalyzeError(err error) bool {
+	var deferred *m9DeferredAnalyzeError
+	return errors.As(err, &deferred)
 }
 
 func m9DocumentNeedsAnalyzeForDocument(ctx context.Context, app *bootstrap.App, duplicate bool, document *domain.Document, expectedTradeDate time.Time) (bool, error) {
@@ -739,8 +947,12 @@ func m9UploadHistoryDocumentE(baseURL, name string, content []byte, fields map[s
 	return &payload, nil
 }
 
-func m9AnalyzeDocumentBodyE(ctx context.Context, baseURL string, documentID int64) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/api/v1/documents/%d/analyze", baseURL, documentID), nil)
+func m9AnalyzeDocumentBodyE(ctx context.Context, baseURL string, documentID int64, tradeDate time.Time) (int, []byte, error) {
+	endpoint := fmt.Sprintf("%s/api/v1/documents/%d/analyze", baseURL, documentID)
+	if !tradeDate.IsZero() {
+		endpoint += "?trade_date=" + url.QueryEscape(tradeDate.Format(time.DateOnly))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -756,15 +968,15 @@ func m9AnalyzeDocumentBodyE(ctx context.Context, baseURL string, documentID int6
 	return resp.StatusCode, body, nil
 }
 
-func m9AnalyzeDocumentBodyWithRetryE(ctx context.Context, baseURL string, documentID int64, shouldStop func() (bool, error)) (int, []byte, error) {
-	const maxAttempts = 5
+func m9AnalyzeDocumentBodyWithRetryE(ctx context.Context, baseURL string, documentID int64, tradeDate time.Time, shouldStop func() (bool, error)) (int, []byte, error) {
+	maxAttempts := m9RealHistoryAnalyzeMaxAttempts()
 	var lastStatus int
 	var lastBody []byte
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		status, body, err := m9AnalyzeDocumentBodyE(ctx, baseURL, documentID)
+		status, body, err := m9AnalyzeDocumentBodyE(ctx, baseURL, documentID, tradeDate)
 		lastStatus, lastBody, lastErr = status, body, err
-		if !m9ShouldRetryAnalyzeAttempt(status, body, err) {
+		if !m9ShouldRetryAnalyzeAttempt(ctx, status, body, err) {
 			if err != nil && shouldStop != nil {
 				stop, stopErr := shouldStop()
 				if stopErr != nil {
@@ -789,7 +1001,7 @@ func m9AnalyzeDocumentBodyWithRetryE(ctx context.Context, baseURL string, docume
 			break
 		}
 		select {
-		case <-time.After(time.Duration(attempt*attempt) * 100 * time.Millisecond):
+		case <-time.After(m9AnalyzeRetryBackoff(attempt)):
 		case <-ctx.Done():
 			return status, body, ctx.Err()
 		}
@@ -797,11 +1009,46 @@ func m9AnalyzeDocumentBodyWithRetryE(ctx context.Context, baseURL string, docume
 	return lastStatus, lastBody, lastErr
 }
 
-func m9ShouldRetryAnalyzeAttempt(status int, body []byte, err error) bool {
+func m9RealHistoryAnalyzeMaxAttempts() int {
+	const defaultAttempts = 1
+	raw := strings.TrimSpace(os.Getenv(m9RealHistoryAnalyzeAttemptsEnv))
+	if raw == "" {
+		return defaultAttempts
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return defaultAttempts
+	}
+	return value
+}
+
+func m9AnalyzeRetryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	backoff := time.Duration(attempt*attempt) * 100 * time.Millisecond
+	if backoff > 5*time.Second {
+		return 5 * time.Second
+	}
+	return backoff
+}
+
+func m9ShouldRetryAnalyzeAttempt(ctx context.Context, status int, body []byte, err error) bool {
 	if err != nil {
-		return false
+		return ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 	}
 	return m9IsTransientAnalyzeFailure(status, body)
+}
+
+func m9RetrySweepBackoff(pass int) time.Duration {
+	if pass < 1 {
+		pass = 1
+	}
+	backoff := time.Duration(pass) * time.Second
+	if backoff > 30*time.Second {
+		return 30 * time.Second
+	}
+	return backoff
 }
 
 func m9IsTransientAnalyzeFailure(status int, body []byte) bool {
@@ -809,7 +1056,23 @@ func m9IsTransientAnalyzeFailure(status int, body []byte) bool {
 		return false
 	}
 	message := strings.ToLower(string(body))
-	return strings.Contains(message, "deadlock found") || strings.Contains(message, "lock wait timeout")
+	if m9IsTerminalInvalidParseFailure(message) {
+		return false
+	}
+	return strings.Contains(message, "deadlock found") ||
+		strings.Contains(message, "lock wait timeout") ||
+		strings.Contains(message, "agent returned failed status") ||
+		strings.Contains(message, "ocr failed") ||
+		strings.Contains(message, "windows ocr failed") ||
+		strings.Contains(message, "outofmemoryexception") ||
+		strings.Contains(message, "exit status 0xc000012d")
+}
+
+func m9IsTerminalInvalidParseFailure(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "invalid page count 0") ||
+		strings.Contains(message, "wrong page range given") ||
+		strings.Contains(message, "first page (1) can not be after the last page (0)")
 }
 
 func m9ConfigureRealHistoryRuntime(t *testing.T, app *bootstrap.App, expectedTradeDate time.Time) {
@@ -828,7 +1091,9 @@ func m9ConfigureRealHistoryRuntime(t *testing.T, app *bootstrap.App, expectedTra
 		cfg.Agent.SchemaVersion = agentclient.ResponseSchemaVersion
 	}
 	require.NotEmpty(t, strings.TrimSpace(cfg.Agent.Endpoint), "real Agent endpoint must come from Nacos config")
-	cfg.Rules.TradeDateOffsetDays = m9TradeDateOffsetFor(t, cfg, expectedTradeDate)
+	if !expectedTradeDate.IsZero() {
+		cfg.Rules.TradeDateOffsetDays = m9TradeDateOffsetFor(t, cfg, expectedTradeDate)
+	}
 	updateM4RuntimeConfig(t, app, cfg)
 }
 
