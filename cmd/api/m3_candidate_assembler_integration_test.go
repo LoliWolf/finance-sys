@@ -204,7 +204,11 @@ func assertM3AnalyzeFails(t *testing.T, ctx context.Context, documentService *se
 
 	document, err := documentService.GetDocumentByID(ctx, documentID)
 	require.NoError(t, err)
-	require.Equal(t, domain.DocumentStatusFailed, document.Status)
+	expectedStatus := domain.DocumentStatusFailed
+	if strings.Contains(expectedError, "security not found") || strings.Contains(expectedError, "no trackable securities resolved") {
+		expectedStatus = domain.DocumentStatusInvalid
+	}
+	require.Equal(t, expectedStatus, document.Status)
 	plans, err := documentService.ListPlansByDocumentID(ctx, documentID)
 	require.NoError(t, err)
 	require.Empty(t, plans)

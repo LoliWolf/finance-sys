@@ -80,7 +80,12 @@
     "api_key": "",
     "model": "qwen2.5:14b-instruct",
     "timeout_ms": 20000,
-    "max_retries": 2
+    "max_retries": 2,
+    // Stable, transparent client metadata for OpenAI-compatible gateways that group traffic by request headers.
+    "extra_headers": {
+      "X-Client-Name": "finance-sys-agent",
+      "X-Request-Source": "nacos-config"
+    }
   },
   "agent": {
     // M4 Python 智能体旁路服务。默认关闭；开启后仍会经过 M3 候选计划装配器复核。

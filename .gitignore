@@ -25,3 +25,5 @@ agent/.venv/
 agent/.pytest_cache/
 agent/*.egg-info/
 agent/**/__pycache__/
+api.exe
+cmd/api/.ocr_work

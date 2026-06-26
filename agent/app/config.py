@@ -17,6 +17,7 @@ class LLMSettings(BaseModel):
     model: str = Field(default="")
     timeout_ms: int = Field(default=15000, gt=0)
     max_retries: int = Field(default=1, ge=0)
+    extra_headers: Dict[str, str] = Field(default_factory=dict)
 
 
 class InternalAPISettings(BaseModel):
@@ -150,6 +151,13 @@ def _settings_from_nacos_config(config: Dict[str, Any]) -> AgentSettings:
     auth = agent.get("auth") or {}
     security_auth = (config.get("security") or {}).get("auth") or {}
     internal_api_auth_header, internal_api_auth_token = _go_security_auth_from_nacos(security_auth)
+    llm_config = dict(config.get("llm") or {})
+    llm_extra_headers = dict(llm_config.get("extra_headers") or {})
+    llm_extra_headers.update(_env_json_object("AGENT_LLM_EXTRA_HEADERS"))
+    if llm_extra_headers:
+        llm_config["extra_headers"] = llm_extra_headers
+    _apply_env_int_override(llm_config, "timeout_ms", "AGENT_LLM_TIMEOUT_MS")
+    _apply_env_int_override(llm_config, "max_retries", "AGENT_LLM_MAX_RETRIES")
     return AgentSettings(
         agent_version=os.getenv("AGENT_VERSION", "m4-agent-0.1.0"),
         config_source="nacos",
@@ -164,7 +172,7 @@ def _settings_from_nacos_config(config: Dict[str, Any]) -> AgentSettings:
             max_candidates=_env_int("AGENT_INTERNAL_API_MAX_CANDIDATES", 5),
         ),
         tushare=TushareSettings(**(agent.get("tushare") or {})),
-        llm=LLMSettings(**(config.get("llm") or {})),
+        llm=LLMSettings(**llm_config),
     )
 
 
@@ -196,6 +204,7 @@ def _settings_from_env() -> AgentSettings:
             model=os.getenv("AGENT_LLM_MODEL", ""),
             timeout_ms=_env_int("AGENT_LLM_TIMEOUT_MS", 15000),
             max_retries=_env_int("AGENT_LLM_MAX_RETRIES", 1),
+            extra_headers=_env_json_object("AGENT_LLM_EXTRA_HEADERS"),
         ),
     )
 
@@ -246,3 +255,19 @@ def _env_int(name: str, default: int) -> int:
     if value is None or value.strip() == "":
         return default
     return int(value)
+
+
+def _apply_env_int_override(config: Dict[str, Any], key: str, env_name: str) -> None:
+    value = os.getenv(env_name)
+    if value is not None and value.strip() != "":
+        config[key] = int(value)
+
+
+def _env_json_object(name: str) -> Dict[str, str]:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return {}
+    payload = json.loads(value)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{name} must be a JSON object")
+    return {str(key): str(item) for key, item in payload.items()}

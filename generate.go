@@ -71,6 +71,12 @@ func main() {
 			return "instrument_resolution_run"
 		case "untrackable_targets":
 			return "untrackable_target"
+		case "bloggers":
+			return "blogger"
+		case "recommendation_events":
+			return "recommendation_event"
+		case "recommendation_event_evidences":
+			return "recommendation_event_evidence"
 		default:
 			return tableName
 		}
@@ -126,6 +132,9 @@ func main() {
 			gen.FieldType("evidence_json", "[]byte"),
 			gen.FieldType("candidates_json", "[]byte"),
 		),
+		g.GenerateModelAs("bloggers", "Blogger"),
+		g.GenerateModelAs("recommendation_events", "RecommendationEvent"),
+		g.GenerateModelAs("recommendation_event_evidences", "RecommendationEventEvidence"),
 	)
 	g.Execute()
 	logger.Info("gorm gen completed", "source", snapshot.Source, "out_path", queryOutPath, "model_path", "internal/domain/db_model")

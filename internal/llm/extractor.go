@@ -180,6 +180,14 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 	if err != nil {
 		return nil, err
 	}
+	for name, value := range cfg.ExtraHeaders {
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "", "authorization", "content-type":
+			continue
+		default:
+			req.Header.Set(name, value)
+		}
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)

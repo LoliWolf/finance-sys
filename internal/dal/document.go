@@ -80,3 +80,15 @@ func (*DocumentDML) UpdateStatusByID(ctx context.Context, db *gorm.DB, id int64,
 		TouchUpdatedAt: true,
 	}).Error
 }
+
+func (*DocumentDML) UpdateMetadataByID(ctx context.Context, db *gorm.DB, id int64, author string, institution string, title string) error {
+	return ApplyUpdate(ctx, db.Model(&db_model.Document{}), UpdateParam{
+		Where: []Condition{Eq("id", id)},
+		Values: map[string]any{
+			"author":      author,
+			"institution": institution,
+			"title":       title,
+		},
+		TouchUpdatedAt: true,
+	}).Error
+}

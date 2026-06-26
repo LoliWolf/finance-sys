@@ -37,6 +37,16 @@ func Validate(cfg *Config) error {
 	}
 	require(cfg.LLM.TimeoutMS > 0, "llm.timeout_ms must be positive")
 	require(cfg.LLM.MaxRetries >= 0, "llm.max_retries must be zero or positive")
+	for headerName := range cfg.LLM.ExtraHeaders {
+		trimmedHeaderName := strings.TrimSpace(headerName)
+		require(trimmedHeaderName != "", "llm.extra_headers must not contain empty header names")
+		switch strings.ToLower(trimmedHeaderName) {
+		case "authorization":
+			require(false, "llm.extra_headers must not override Authorization")
+		case "content-type":
+			require(false, "llm.extra_headers must not override Content-Type")
+		}
+	}
 	require(cfg.Rules.Version != "", "rules.version is required")
 	require(cfg.Rules.Strategy != "", "rules.strategy is required")
 	require(cfg.Rules.Strategy == RuleStrategyTextReferencePrice, "rules.strategy must be TEXT_REFERENCE_PRICE")

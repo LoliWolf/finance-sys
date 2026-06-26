@@ -91,7 +91,11 @@
     "api_key": "",
     "model": "qwen2.5:14b-instruct",
     "timeout_ms": 20000,
-    "max_retries": 2
+    "max_retries": 2,
+    "extra_headers": {
+      "X-Client-Name": "finance-sys-agent",
+      "X-Request-Source": "nacos-config"
+    }
   },
   "agent": {
     "enabled": false,
