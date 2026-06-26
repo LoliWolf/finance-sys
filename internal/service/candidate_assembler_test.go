@@ -81,6 +81,89 @@ func TestCandidateAssemblerRejectsNotFound(t *testing.T) {
 	require.Equal(t, domain.InstrumentResolutionStatusNotFound, resolutions[0].Status)
 }
 
+func TestCandidateAssemblerKeepsResolvedTargetsWhenSomeTargetsAreNotFound(t *testing.T) {
+	assembler := service.NewCandidateAssembler(fakeSecurityLookup{
+		"ValidCo": {
+			Query:      "ValidCo",
+			Normalized: "validco",
+			DirectMatches: []domain.SecurityMaster{{
+				TSCode:    "600001.SH",
+				Symbol:    "600001",
+				Name:      "Valid Co",
+				Market:    "SH",
+				AssetType: "STOCK",
+				IsActive:  true,
+			}},
+		},
+	}, nil)
+
+	trackable, resolutions, err := assembler.Assemble(context.Background(), []domain.PlanIntent{
+		testIntent("ValidCo"),
+		testIntent("MissingCo"),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, trackable, 1)
+	require.Equal(t, "600001.SH", trackable[0].TSCode)
+	require.Len(t, resolutions, 2)
+	require.Equal(t, domain.InstrumentResolutionStatusResolved, resolutions[0].Status)
+	require.Equal(t, domain.InstrumentResolutionStatusNotFound, resolutions[1].Status)
+	require.Equal(t, "no active security matched", resolutions[1].Reason)
+}
+
+func TestCandidateAssemblerKeepsResolvedTargetsWhenSomeTargetsAreAmbiguous(t *testing.T) {
+	assembler := service.NewCandidateAssembler(fakeSecurityLookup{
+		"ValidCo": {
+			Query:      "ValidCo",
+			Normalized: "validco",
+			DirectMatches: []domain.SecurityMaster{{
+				TSCode:    "600001.SH",
+				Symbol:    "600001",
+				Name:      "Valid Co",
+				Market:    "SH",
+				AssetType: "STOCK",
+				IsActive:  true,
+			}},
+		},
+		"DuplicateName": {
+			Query:      "DuplicateName",
+			Normalized: "duplicatename",
+			DirectMatches: []domain.SecurityMaster{{
+				TSCode:    "600002.SH",
+				Symbol:    "600002",
+				Name:      "Duplicate A",
+				Market:    "SH",
+				AssetType: "STOCK",
+				IsActive:  true,
+			}},
+			AliasMatches: []domain.SecurityAliasMatch{{
+				Alias: domain.SecurityAlias{Alias: "DuplicateName"},
+				Security: domain.SecurityMaster{
+					TSCode:    "600003.SH",
+					Symbol:    "600003",
+					Name:      "Duplicate B",
+					Market:    "SH",
+					AssetType: "STOCK",
+					IsActive:  true,
+				},
+			}},
+		},
+	}, nil)
+
+	trackable, resolutions, err := assembler.Assemble(context.Background(), []domain.PlanIntent{
+		testIntent("ValidCo"),
+		testIntent("DuplicateName"),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, trackable, 1)
+	require.Equal(t, "600001.SH", trackable[0].TSCode)
+	require.Len(t, resolutions, 2)
+	require.Equal(t, domain.InstrumentResolutionStatusResolved, resolutions[0].Status)
+	require.Equal(t, domain.InstrumentResolutionStatusAmbiguous, resolutions[1].Status)
+	require.Equal(t, "matched 2 active securities", resolutions[1].Reason)
+}
+
 func TestCandidateAssemblerRejectsAmbiguousAlias(t *testing.T) {
 	assembler := service.NewCandidateAssembler(fakeSecurityLookup{
 		"重名标的": {

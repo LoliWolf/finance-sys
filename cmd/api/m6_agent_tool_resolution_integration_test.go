@@ -133,7 +133,7 @@ func TestHTTPM6AnalyzeDocumentAgentResolvesStandardCodeWithNacosBootstrap(t *tes
 
 	invalidDocument, err := app.DocumentService.GetDocumentByID(ctx, invalidDocumentID)
 	require.NoError(t, err)
-	require.Equal(t, domain.DocumentStatusFailed, invalidDocument.Status)
+	require.Equal(t, domain.DocumentStatusInvalid, invalidDocument.Status)
 	plans, err := app.DocumentService.ListPlansByDocumentID(ctx, invalidDocumentID)
 	require.NoError(t, err)
 	require.Empty(t, plans)

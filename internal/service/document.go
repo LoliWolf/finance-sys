@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"finance-sys/internal/agentclient"
 	"finance-sys/internal/config"
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
@@ -17,6 +18,7 @@ import (
 	"finance-sys/internal/llm"
 	"finance-sys/internal/utils"
 
+	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -101,7 +103,22 @@ func (s *DocumentService) IngestDocument(ctx context.Context, request domain.Doc
 }
 
 func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
+	return s.analyzeDocument(ctx, documentID)
+}
+
+func (s *DocumentService) AnalyzeDocumentForTradeDate(ctx context.Context, documentID int64, tradeDate time.Time) ([]domain.CandidatePlan, error) {
+	if !tradeDate.IsZero() {
+		ctx = domain.ContextWithTradeDate(ctx, tradeDate)
+	}
+	return s.analyzeDocument(ctx, documentID)
+}
+
+func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
 	cfg := s.currentConfig()
+	tradeDate := s.tradeDate(cfg)
+	if override, ok := domain.TradeDateFromContext(ctx); ok {
+		tradeDate = override
+	}
 	s.logger.InfoContext(ctx, "document service analyze start", "document_id", documentID)
 	documentModel, err := dal.Documents.QueryByID(ctx, s.db, documentID)
 	if err != nil {
@@ -149,8 +166,18 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after parse failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterParseFailure(parseErr)))
 		return nil, parseErr
+	}
+	if !parseRunHasAnalyzableText(*parseRun) {
+		err := errors.New("no analyzable text extracted from document")
+		s.logger.WarnContext(ctx, "document service analyze parse produced no analyzable text", "document_id", documentID, "parse_run_id", parseRun.ID)
+		if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, AnalysisObservation{AgentMode: observationAgentMode(cfg), Route: string(domain.ResolutionRouteLocalOnly)}, nil, nil, err, "NO_ANALYZABLE_TEXT"); obsErr != nil {
+			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after empty parse result", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
+			return nil, obsErr
+		}
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusInvalid))
+		return nil, err
 	}
 	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusParsed)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status parsed failed", "document_id", documentID, "error", err.Error())
@@ -166,7 +193,7 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after analyzer failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterAnalyzerFailure(analysis, err)))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze llm success", "document_id", documentID, "parse_run_id", parseRun.ID, "intent_count", len(intents))
@@ -192,12 +219,11 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after candidate assembly failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterAnalysisFailure(resolutions, err)))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze candidate assembly success", "document_id", documentID, "parse_run_id", parseRun.ID, "trackable_intent_count", len(trackableIntents), "raw_intent_count", len(intents))
 
-	tradeDate := s.tradeDate(cfg)
 	plans := make([]domain.CandidatePlan, 0, len(trackableIntents))
 	for _, intent := range trackableIntents {
 		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "direction", intent.Direction, "confidence", intent.Confidence)
@@ -207,9 +233,14 @@ func (s *DocumentService) AnalyzeDocument(ctx context.Context, documentID int64)
 		plans = append(plans, plan)
 	}
 
-	savedPlans, err := s.replacePlansByDocumentID(ctx, document.ID, plans, resolutionRun, analysis, intents, resolutions)
+	savedPlans, err := s.replacePlansByDocumentID(ctx, *document, plans, resolutionRun, analysis, intents, resolutions)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze replace plans failed", "document_id", documentID, "error", err.Error())
+		if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, analysis, intents, resolutions, err, "PERSIST_FAILED"); obsErr != nil {
+			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after persist failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
+			return nil, obsErr
+		}
+		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
 		return nil, err
 	}
 	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusPlanned)); err != nil {
@@ -287,6 +318,81 @@ func (s *DocumentService) tradeDate(cfg *config.Config) time.Time {
 	return time.Date(base.Year(), base.Month(), base.Day()+cfg.Rules.TradeDateOffsetDays, 0, 0, 0, 0, loc)
 }
 
+func parseRunHasAnalyzableText(run domain.ParseRun) bool {
+	if strings.TrimSpace(run.CleanedText) != "" {
+		return true
+	}
+	for _, chunk := range run.Chunks {
+		if strings.TrimSpace(chunk.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func documentStatusAfterParseFailure(err error) domain.DocumentStatus {
+	if isTerminalInvalidParseFailure(err) {
+		return domain.DocumentStatusInvalid
+	}
+	return domain.DocumentStatusFailed
+}
+
+func isTerminalInvalidParseFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "invalid page count 0") ||
+		strings.Contains(message, "wrong page range given") ||
+		strings.Contains(message, "first page (1) can not be after the last page (0)")
+}
+
+func documentStatusAfterAnalysisFailure(resolutions []domain.InstrumentResolution, err error) domain.DocumentStatus {
+	if err == nil || len(resolutions) == 0 {
+		return domain.DocumentStatusFailed
+	}
+	for _, resolution := range resolutions {
+		switch resolution.Status {
+		case domain.InstrumentResolutionStatusResolved, domain.InstrumentResolutionStatusAmbiguous:
+			return domain.DocumentStatusFailed
+		case domain.InstrumentResolutionStatusUntrackable:
+			continue
+		case domain.InstrumentResolutionStatusNotFound:
+			if strings.TrimSpace(resolution.Reason) != "no active security matched" {
+				return domain.DocumentStatusFailed
+			}
+		default:
+			return domain.DocumentStatusFailed
+		}
+	}
+	return domain.DocumentStatusInvalid
+}
+
+func documentStatusAfterAnalyzerFailure(analysis AnalysisObservation, err error) domain.DocumentStatus {
+	if err == nil || analysis.AgentResponse == nil {
+		return domain.DocumentStatusFailed
+	}
+	response := analysis.AgentResponse
+	if response.Status != agentclient.AgentStatusFailed {
+		return domain.DocumentStatusFailed
+	}
+	if len(analysis.Intents) > 0 || len(response.RawIntents) > 0 || len(response.CandidatePlanInput) > 0 || len(response.UntrackableTargets) > 0 {
+		return domain.DocumentStatusFailed
+	}
+	for _, warning := range response.Warnings {
+		if isTerminalInvalidAgentWarning(warning) {
+			return domain.DocumentStatusInvalid
+		}
+	}
+	return domain.DocumentStatusFailed
+}
+
+func isTerminalInvalidAgentWarning(warning string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(warning))
+	return normalized == "no instrument intent extracted" ||
+		strings.Contains(normalized, "smart moderation blocked by ai")
+}
+
 func (s *DocumentService) applyDefaults(request domain.DocumentIngestRequest, cfg *config.Config) domain.DocumentIngestRequest {
 	if request.Author == "" {
 		request.Author = cfg.Document.SourceDefaults.Author
@@ -326,35 +432,71 @@ func (s *DocumentService) analyzeWithObservation(ctx context.Context, document d
 	return result, err
 }
 
-func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, documentID int64, plans []domain.CandidatePlan, resolutionRun *db_model.InstrumentResolutionRun, analysis AnalysisObservation, intents []domain.PlanIntent, resolutions []domain.InstrumentResolution) ([]domain.CandidatePlan, error) {
-	items := make([]domain.CandidatePlan, 0, len(plans))
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := dal.TradeCandidatePlans.DeleteByDocumentID(ctx, tx, documentID); err != nil {
-			return err
-		}
-		for _, plan := range plans {
-			model, err := candidatePlanToModel(plan)
-			if err != nil {
+func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, document domain.Document, plans []domain.CandidatePlan, resolutionRun *db_model.InstrumentResolutionRun, analysis AnalysisObservation, intents []domain.PlanIntent, resolutions []domain.InstrumentResolution) ([]domain.CandidatePlan, error) {
+	const maxAttempts = 8
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		items := make([]domain.CandidatePlan, 0, len(plans))
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := dal.TradeCandidatePlans.DeleteByDocumentID(ctx, tx, document.ID); err != nil {
 				return err
 			}
-			if err := dal.TradeCandidatePlans.Create(ctx, tx, model); err != nil {
+			for _, plan := range plans {
+				model, err := candidatePlanToModel(plan)
+				if err != nil {
+					return err
+				}
+				if err := dal.TradeCandidatePlans.Create(ctx, tx, model); err != nil {
+					return err
+				}
+				item, err := mapPlan(model)
+				if err != nil {
+					return err
+				}
+				if _, err := s.upsertRecommendationEventForPlan(ctx, tx, document, *item); err != nil {
+					return err
+				}
+				items = append(items, *item)
+			}
+			if err := s.observer.FinishSucceeded(ctx, tx, resolutionRun, analysis, intents, resolutions, items); err != nil {
 				return err
 			}
-			item, err := mapPlan(model)
-			if err != nil {
-				return err
-			}
-			items = append(items, *item)
+			return nil
+		})
+		if err == nil {
+			return items, nil
 		}
-		if err := s.observer.FinishSucceeded(ctx, tx, resolutionRun, analysis, intents, resolutions, items); err != nil {
-			return err
+		lastErr = err
+		if !isRetryableDBTransactionError(err) || attempt == maxAttempts {
+			break
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		if s.logger != nil {
+			s.logger.WarnContext(ctx, "document service replace plans retrying after transient db error", "document_id", document.ID, "attempt", attempt, "error", err)
+		}
+		select {
+		case <-time.After(time.Duration(attempt*attempt) * 50 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	return items, nil
+	return nil, lastErr
+}
+
+func isRetryableDBTransactionError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1213 || mysqlErr.Number == 1205
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "deadlock found") || strings.Contains(message, "lock wait timeout")
+}
+
+func dbDateOnly(value time.Time) time.Time {
+	if value.IsZero() {
+		return time.Time{}
+	}
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 func documentIngestToModel(request domain.DocumentIngestRequest, sha256Value string, configVersion int64) *db_model.Document {
@@ -451,7 +593,7 @@ func candidatePlanToModel(plan domain.CandidatePlan) (*db_model.TradeCandidatePl
 		Market:         string(plan.Market),
 		Strategy:       string(plan.Strategy),
 		Direction:      string(plan.Direction),
-		TradeDate:      plan.TradeDate,
+		TradeDate:      dbDateOnly(plan.TradeDate),
 		ReferencePrice: plan.ReferencePrice,
 		EntryPrice:     plan.EntryPrice,
 		StopLoss:       plan.StopLoss,

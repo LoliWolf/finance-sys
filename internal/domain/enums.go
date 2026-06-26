@@ -12,6 +12,8 @@ const (
 	DocumentStatusPlanned DocumentStatus = "PLANNED"
 	// DocumentStatusFailed 表示文档在解析、抽取、校验或规则生成阶段失败。
 	DocumentStatusFailed DocumentStatus = "FAILED"
+	// DocumentStatusInvalid 表示文档已完成解析/抽取，但没有可进入规则层的有效交易标的。
+	DocumentStatusInvalid DocumentStatus = "INVALID"
 )
 
 // ParseRunStatus 表示一次文档解析运行的结果状态。
@@ -80,6 +82,18 @@ const (
 	CandidatePlanStatusReady CandidatePlanStatus = "READY"
 	// CandidatePlanStatusNeedsReview 表示候选计划缺少明确价格或置信度不足，需要人工复核。
 	CandidatePlanStatusNeedsReview CandidatePlanStatus = "NEEDS_REVIEW"
+)
+
+// RecommendationEventStatus 表示推荐事实是否可进入后续评估。
+type RecommendationEventStatus string
+
+const (
+	// RecommendationEventStatusActive 表示推荐事件可进入后续行情评估。
+	RecommendationEventStatusActive RecommendationEventStatus = "ACTIVE"
+	// RecommendationEventStatusNeedsReview 表示推荐事件需要人工复核后再评估。
+	RecommendationEventStatusNeedsReview RecommendationEventStatus = "NEEDS_REVIEW"
+	// RecommendationEventStatusSuperseded 表示推荐事件已被后续分析结果替代。
+	RecommendationEventStatusSuperseded RecommendationEventStatus = "SUPERSEDED"
 )
 
 // RuleStrategy 表示生成交易参数时使用的确定性规则策略。

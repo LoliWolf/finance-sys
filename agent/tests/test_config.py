@@ -20,6 +20,10 @@ def test_settings_from_nacos_config_reuses_llm_and_agent_auth():
                 "model": "nacos-model",
                 "timeout_ms": 20000,
                 "max_retries": 2,
+                "extra_headers": {
+                    "X-Client-Name": "finance-sys-agent",
+                    "X-Request-Source": "nacos-config-test",
+                },
             },
             "agent": {
                 "internal_api_base_url": "http://go.test",
@@ -63,6 +67,68 @@ def test_settings_from_nacos_config_reuses_llm_and_agent_auth():
     assert settings.llm.model == "nacos-model"
     assert settings.llm.timeout_ms == 20000
     assert settings.llm.max_retries == 2
+    assert settings.llm.extra_headers == {
+        "X-Client-Name": "finance-sys-agent",
+        "X-Request-Source": "nacos-config-test",
+    }
+
+
+def test_settings_from_nacos_config_merges_env_llm_extra_headers(monkeypatch):
+    monkeypatch.setenv(
+        "AGENT_LLM_EXTRA_HEADERS",
+        json.dumps(
+            {
+                "X-Client-Name": "finance-sys-agent",
+                "X-Request-Source": "m9-real-history",
+            }
+        ),
+    )
+
+    settings = _settings_from_nacos_config(
+        {
+            "llm": {
+                "enabled": True,
+                "provider": "openai_compatible",
+                "endpoint": "https://llm.test/v1/chat/completions",
+                "api_key": "nacos-key",
+                "model": "nacos-model",
+                "timeout_ms": 20000,
+                "max_retries": 2,
+                "extra_headers": {
+                    "X-Client-Name": "finance-sys-agent-from-nacos",
+                    "X-Nacos-Only": "kept",
+                },
+            }
+        }
+    )
+
+    assert settings.llm.extra_headers == {
+        "X-Client-Name": "finance-sys-agent",
+        "X-Nacos-Only": "kept",
+        "X-Request-Source": "m9-real-history",
+    }
+
+
+def test_settings_from_nacos_config_allows_env_llm_timeout_and_retry_overrides(monkeypatch):
+    monkeypatch.setenv("AGENT_LLM_TIMEOUT_MS", "90000")
+    monkeypatch.setenv("AGENT_LLM_MAX_RETRIES", "0")
+
+    settings = _settings_from_nacos_config(
+        {
+            "llm": {
+                "enabled": True,
+                "provider": "openai_compatible",
+                "endpoint": "https://llm.test/v1/chat/completions",
+                "api_key": "nacos-key",
+                "model": "nacos-model",
+                "timeout_ms": 300000,
+                "max_retries": 3,
+            }
+        }
+    )
+
+    assert settings.llm.timeout_ms == 90000
+    assert settings.llm.max_retries == 0
 
 
 def test_nacos_loader_fetches_same_json_config():

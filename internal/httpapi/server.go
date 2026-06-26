@@ -75,10 +75,13 @@ func (s *Server) Router() http.Handler {
 		r.Post("/documents/upload", s.handleUploadDocument)
 		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
+		r.Get("/documents/{id}/recommendations", s.handleListDocumentRecommendations)
 		r.Get("/documents/{id}/resolution-runs", s.handleListDocumentResolutionRuns)
 		r.Get("/documents/{id}/untrackable-targets", s.handleListDocumentUntrackableTargets)
 		r.Get("/resolution-runs/{id}", s.handleGetResolutionRun)
 		r.Get("/plans", s.handleListPlans)
+		r.Get("/recommendations", s.handleListRecommendations)
+		r.Get("/recommendations/{id}", s.handleGetRecommendation)
 		r.Get("/admin/security/lookup", s.handleLookupSecurity)
 		r.Post("/internal/security/resolve", s.handleResolveSecurity)
 		r.Post("/internal/security/verify", s.handleVerifySecurity)
@@ -209,8 +212,23 @@ func (s *Server) handleAnalyzeDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	s.logRequest(r, slog.LevelInfo, "handle analyze document start", "document_id", id)
-	plans, err := s.documents.AnalyzeDocument(r.Context(), id)
+	tradeDate, hasTradeDate, err := parseOptionalTradeDate(r.URL.Query().Get("trade_date"))
+	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle analyze document invalid trade_date", "document_id", id, "error", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	logAttrs := []any{"document_id", id}
+	if hasTradeDate {
+		logAttrs = append(logAttrs, "trade_date", tradeDate.Format(time.DateOnly))
+	}
+	s.logRequest(r, slog.LevelInfo, "handle analyze document start", logAttrs...)
+	var plans []domain.CandidatePlan
+	if hasTradeDate {
+		plans, err = s.documents.AnalyzeDocumentForTradeDate(r.Context(), id, tradeDate)
+	} else {
+		plans, err = s.documents.AnalyzeDocument(r.Context(), id)
+	}
 	if err != nil {
 		s.logRequest(r, slog.LevelError, "handle analyze document failed", "document_id", id, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
@@ -452,6 +470,18 @@ func parseID(raw string) (int64, error) {
 		return 0, fmt.Errorf("invalid id %q", raw)
 	}
 	return id, nil
+}
+
+func parseOptionalTradeDate(raw string) (time.Time, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false, nil
+	}
+	value, err := time.Parse(time.DateOnly, raw)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("invalid trade_date %q, expected YYYY-MM-DD", raw)
+	}
+	return value, true, nil
 }
 
 func parseBoolForm(raw string) bool {

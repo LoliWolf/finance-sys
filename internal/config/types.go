@@ -104,13 +104,14 @@ type PDFOCRConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled    bool        `json:"enabled"`
-	Provider   LLMProvider `json:"provider"`
-	Endpoint   string      `json:"endpoint"`
-	APIKey     string      `json:"api_key"`
-	Model      string      `json:"model"`
-	TimeoutMS  int         `json:"timeout_ms"`
-	MaxRetries int         `json:"max_retries"`
+	Enabled      bool              `json:"enabled"`
+	Provider     LLMProvider       `json:"provider"`
+	Endpoint     string            `json:"endpoint"`
+	APIKey       string            `json:"api_key"`
+	Model        string            `json:"model"`
+	TimeoutMS    int               `json:"timeout_ms"`
+	MaxRetries   int               `json:"max_retries"`
+	ExtraHeaders map[string]string `json:"extra_headers"`
 }
 
 type AgentConfig struct {
