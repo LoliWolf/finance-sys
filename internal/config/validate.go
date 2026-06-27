@@ -87,6 +87,21 @@ func Validate(cfg *Config) error {
 		require(cfg.Agent.Observation.MaxJSONBytes > 0, "agent.observation.max_json_bytes must be positive when agent.observation.enabled is true")
 		require(cfg.Agent.Observation.RetentionDays > 0, "agent.observation.retention_days must be positive when agent.observation.enabled is true")
 	}
+	if cfg.MarketData.Enabled {
+		require(cfg.MarketData.Provider == "tushare", "market_data.provider must be tushare when market_data.enabled is true")
+		if cfg.MarketData.Tushare.Enabled {
+			validateMarketDataTushare(cfg.MarketData.Tushare, require)
+		}
+		if cfg.MarketData.AsyncWorker.Enabled {
+			require(cfg.MarketData.AsyncWorker.PollIntervalMS > 0, "market_data.async_worker.poll_interval_ms must be positive when enabled")
+			require(cfg.MarketData.AsyncWorker.ClaimTimeoutMS > 0, "market_data.async_worker.claim_timeout_ms must be positive when enabled")
+			require(cfg.MarketData.AsyncWorker.MaxConcurrentRuns > 0, "market_data.async_worker.max_concurrent_runs must be positive when enabled")
+			require(cfg.MarketData.AsyncWorker.BatchSize > 0, "market_data.async_worker.batch_size must be positive when enabled")
+		}
+		if cfg.MarketData.StockDaily.Enabled {
+			validateStockDailySync(cfg.MarketData.StockDaily, require)
+		}
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},
@@ -105,4 +120,44 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func validateMarketDataTushare(cfg MarketDataTushareConfig, require func(bool, string)) {
+	require(strings.TrimSpace(cfg.SDKPackage) != "", "market_data.tushare.sdk_package is required when enabled")
+	require(cfg.TimeoutMS > 0 && cfg.TimeoutMS <= 120000, "market_data.tushare.timeout_ms must be in (0,120000] when enabled")
+	require(cfg.MaxRetries >= 0, "market_data.tushare.max_retries must be zero or positive")
+	require(cfg.TokenCooldownMS >= 0, "market_data.tushare.token_cooldown_ms must be zero or positive")
+	require(len(cfg.Tokens) > 0, "market_data.tushare.tokens must not be empty when enabled")
+
+	aliases := map[string]struct{}{}
+	enabledTokens := 0
+	for _, token := range cfg.Tokens {
+		alias := strings.TrimSpace(token.Alias)
+		require(alias != "", "market_data.tushare.tokens alias is required")
+		if alias != "" {
+			if _, exists := aliases[alias]; exists {
+				require(false, "market_data.tushare.tokens alias must be unique")
+			}
+			aliases[alias] = struct{}{}
+		}
+		require(token.Weight > 0, "market_data.tushare.tokens weight must be positive")
+		if token.Enabled {
+			enabledTokens++
+			require(strings.TrimSpace(token.Token) != "", "market_data.tushare.tokens token is required when token is enabled")
+		}
+	}
+	require(enabledTokens > 0, "market_data.tushare.tokens must contain at least one enabled token when enabled")
+}
+
+func validateStockDailySync(cfg StockDailySyncConfig, require func(bool, string)) {
+	require(len(cfg.SyncAssetTypes) > 0, "market_data.stock_daily.sync_asset_types must not be empty when enabled")
+	allowedAssetTypes := map[string]struct{}{
+		"STOCK": {},
+		"ETF":   {},
+	}
+	for _, assetType := range cfg.SyncAssetTypes {
+		_, ok := allowedAssetTypes[strings.ToUpper(strings.TrimSpace(assetType))]
+		require(ok, fmt.Sprintf("unsupported market_data.stock_daily.sync_asset_types value %q", assetType))
+	}
+	require(len(cfg.Fields) > 0, "market_data.stock_daily.fields must not be empty when enabled")
 }

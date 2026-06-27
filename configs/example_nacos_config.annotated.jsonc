@@ -5,7 +5,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 2
+    "config_version": 3
   },
   "service": {
     "http": {
@@ -122,6 +122,52 @@
       "static_token": ""
     },
     "allow_legacy_llm_fallback": false
+  },
+  "market_data": {
+    // Go 主系统内的市场数据同步配置。股票日行情同步走 go-tushare-sdk，不再通过 Python skill 子进程取数。
+    "enabled": false,
+    "provider": "tushare",
+    "tushare": {
+      // SDK 包：github.com/yushikuann/go-tushare-sdk/client。真实 token 只放 Nacos 私密配置，不提交仓库。
+      "enabled": false,
+      "sdk_package": "github.com/yushikuann/go-tushare-sdk/client",
+      "tokens": [
+        {
+          "alias": "primary",
+          "token": "",
+          "enabled": false,
+          "weight": 1
+        },
+        {
+          "alias": "backup",
+          "token": "",
+          "enabled": false,
+          "weight": 1
+        }
+      ],
+      "timeout_ms": 10000,
+      "max_retries": 2,
+      // token 触发频控或临时错误后的冷却时间；worker 后续按 alias 做轮转和冷却。
+      "token_cooldown_ms": 60000
+    },
+    "async_worker": {
+      // 本阶段仅由 HTTP 接口创建任务；worker 是否内置在 API 进程或独立命令后续实现时再定。
+      "enabled": false,
+      "poll_interval_ms": 1000,
+      "claim_timeout_ms": 300000,
+      "max_concurrent_runs": 1,
+      "batch_size": 500
+    },
+    "stock_daily": {
+      "enabled": false,
+      // 第一版同步 A 股股票和 ETF。
+      "sync_asset_types": ["STOCK", "ETF"],
+      // Tushare daily 常用字段；amount 和 vol 保留 Tushare 原始单位。
+      "fields": ["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"],
+      "preserve_raw_units": true,
+      "store_raw_content": true,
+      "missing_item_mark_enabled": true
+    }
   },
   "rules": {
     "version": "rules-v2",

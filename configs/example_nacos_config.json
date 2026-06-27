@@ -3,7 +3,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 2
+    "config_version": 3
   },
   "service": {
     "http": {
@@ -128,6 +128,61 @@
       "static_token": ""
     },
     "allow_legacy_llm_fallback": false
+  },
+  "market_data": {
+    "enabled": false,
+    "provider": "tushare",
+    "tushare": {
+      "enabled": false,
+      "sdk_package": "github.com/yushikuann/go-tushare-sdk/client",
+      "tokens": [
+        {
+          "alias": "primary",
+          "token": "",
+          "enabled": false,
+          "weight": 1
+        },
+        {
+          "alias": "backup",
+          "token": "",
+          "enabled": false,
+          "weight": 1
+        }
+      ],
+      "timeout_ms": 10000,
+      "max_retries": 2,
+      "token_cooldown_ms": 60000
+    },
+    "async_worker": {
+      "enabled": false,
+      "poll_interval_ms": 1000,
+      "claim_timeout_ms": 300000,
+      "max_concurrent_runs": 1,
+      "batch_size": 500
+    },
+    "stock_daily": {
+      "enabled": false,
+      "sync_asset_types": [
+        "STOCK",
+        "ETF"
+      ],
+      "fields": [
+        "ts_code",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "change",
+        "pct_chg",
+        "vol",
+        "amount"
+      ],
+      "preserve_raw_units": true,
+      "store_raw_content": true,
+      "missing_item_mark_enabled": true
+    }
   },
   "rules": {
     "version": "rules-v2",

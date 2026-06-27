@@ -10,6 +10,7 @@ type Config struct {
 	Document    DocumentConfig    `json:"document"`
 	LLM         LLMConfig         `json:"llm"`
 	Agent       AgentConfig       `json:"agent"`
+	MarketData  MarketDataConfig  `json:"market_data"`
 	Rules       RulesConfig       `json:"rules"`
 }
 
@@ -151,6 +152,47 @@ type AgentAuthConfig struct {
 	Enabled     bool   `json:"enabled"`
 	HeaderName  string `json:"header_name"`
 	StaticToken string `json:"static_token"`
+}
+
+type MarketDataConfig struct {
+	Enabled     bool                    `json:"enabled"`
+	Provider    string                  `json:"provider"`
+	Tushare     MarketDataTushareConfig `json:"tushare"`
+	AsyncWorker MarketDataWorkerConfig  `json:"async_worker"`
+	StockDaily  StockDailySyncConfig    `json:"stock_daily"`
+}
+
+type MarketDataTushareConfig struct {
+	Enabled         bool                 `json:"enabled"`
+	SDKPackage      string               `json:"sdk_package"`
+	Tokens          []TushareTokenConfig `json:"tokens"`
+	TimeoutMS       int                  `json:"timeout_ms"`
+	MaxRetries      int                  `json:"max_retries"`
+	TokenCooldownMS int                  `json:"token_cooldown_ms"`
+}
+
+type TushareTokenConfig struct {
+	Alias   string `json:"alias"`
+	Token   string `json:"token"`
+	Enabled bool   `json:"enabled"`
+	Weight  int    `json:"weight"`
+}
+
+type MarketDataWorkerConfig struct {
+	Enabled           bool `json:"enabled"`
+	PollIntervalMS    int  `json:"poll_interval_ms"`
+	ClaimTimeoutMS    int  `json:"claim_timeout_ms"`
+	MaxConcurrentRuns int  `json:"max_concurrent_runs"`
+	BatchSize         int  `json:"batch_size"`
+}
+
+type StockDailySyncConfig struct {
+	Enabled                bool     `json:"enabled"`
+	SyncAssetTypes         []string `json:"sync_asset_types"`
+	Fields                 []string `json:"fields"`
+	PreserveRawUnits       bool     `json:"preserve_raw_units"`
+	StoreRawContent        bool     `json:"store_raw_content"`
+	MissingItemMarkEnabled bool     `json:"missing_item_mark_enabled"`
 }
 
 type RulesConfig struct {
