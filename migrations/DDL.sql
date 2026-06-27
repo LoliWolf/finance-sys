@@ -23,7 +23,7 @@ CREATE TABLE `config_snapshots` (
   `raw_json` json NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=124 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=134 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- documents: table
 CREATE TABLE `documents` (
@@ -102,6 +102,65 @@ CREATE TABLE `instrument_resolution_runs` (
 -- No native definition for element: idx_resolution_runs_status (index)
 
 -- No native definition for element: idx_resolution_runs_skill_hash (index)
+
+-- market_data_sync_missing_items: table
+CREATE TABLE `market_data_sync_missing_items` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `sync_run_id` bigint NOT NULL,
+  `security_master_id` bigint NOT NULL,
+  `ts_code` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `symbol` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `security_name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `trade_date` date NOT NULL,
+  `reason` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `message` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_market_sync_missing_run_ts_date` (`sync_run_id`,`ts_code`,`trade_date`),
+  KEY `idx_market_sync_missing_ts_date` (`ts_code`,`trade_date`),
+  KEY `fk_market_sync_missing_security` (`security_master_id`),
+  CONSTRAINT `fk_market_sync_missing_run` FOREIGN KEY (`sync_run_id`) REFERENCES `market_data_sync_runs` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_market_sync_missing_security` FOREIGN KEY (`security_master_id`) REFERENCES `security_master` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=1005263 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- No native definition for element: idx_market_sync_missing_ts_date (index)
+
+-- market_data_sync_runs: table
+CREATE TABLE `market_data_sync_runs` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `sync_type` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `provider` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'TUSHARE',
+  `trade_date` date DEFAULT NULL,
+  `status` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `expected_count` int NOT NULL DEFAULT '0',
+  `fetched_count` int NOT NULL DEFAULT '0',
+  `matched_count` int NOT NULL DEFAULT '0',
+  `upserted_count` int NOT NULL DEFAULT '0',
+  `missing_count` int NOT NULL DEFAULT '0',
+  `failed_count` int NOT NULL DEFAULT '0',
+  `token_alias` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `request_params_json` json NOT NULL,
+  `error_code` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `error_message` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci,
+  `queued_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `started_at` timestamp NULL DEFAULT NULL,
+  `finished_at` timestamp NULL DEFAULT NULL,
+  `claimed_by` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `claimed_at` timestamp NULL DEFAULT NULL,
+  `config_version` bigint NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_market_sync_runs_claim` (`sync_type`,`status`,`queued_at`),
+  KEY `idx_market_sync_runs_type_date` (`sync_type`,`trade_date`,`created_at`),
+  KEY `idx_market_sync_runs_status` (`status`,`created_at`)
+) ENGINE=InnoDB AUTO_INCREMENT=1075 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- No native definition for element: idx_market_sync_runs_type_date (index)
+
+-- No native definition for element: idx_market_sync_runs_claim (index)
+
+-- No native definition for element: idx_market_sync_runs_status (index)
 
 -- parse_runs: table
 CREATE TABLE `parse_runs` (
@@ -244,6 +303,56 @@ CREATE TABLE `security_master` (
 -- No native definition for element: idx_security_master_market_symbol (index)
 
 -- No native definition for element: idx_security_master_asset_status (index)
+
+-- stock_daily_quotes: table
+CREATE TABLE `stock_daily_quotes` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `security_master_id` bigint NOT NULL,
+  `ts_code` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `symbol` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `security_name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `exchange` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `market` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `asset_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'STOCK',
+  `industry` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
+  `list_status` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'L',
+  `trade_date` date NOT NULL,
+  `open_price` decimal(18,4) DEFAULT NULL,
+  `high_price` decimal(18,4) DEFAULT NULL,
+  `low_price` decimal(18,4) DEFAULT NULL,
+  `close_price` decimal(18,4) DEFAULT NULL,
+  `pre_close_price` decimal(18,4) DEFAULT NULL,
+  `change_amount` decimal(18,4) DEFAULT NULL,
+  `pct_chg` decimal(18,6) DEFAULT NULL,
+  `volume` decimal(24,4) DEFAULT NULL,
+  `amount` decimal(24,4) DEFAULT NULL,
+  `source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'TUSHARE',
+  `tushare_content` json NOT NULL,
+  `config_version` bigint NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_stock_daily_quotes_ts_date_source` (`ts_code`,`trade_date`,`source`),
+  KEY `idx_stock_daily_quotes_trade_date` (`trade_date`),
+  KEY `idx_stock_daily_quotes_security_date` (`security_master_id`,`trade_date`),
+  KEY `idx_stock_daily_quotes_symbol_date` (`symbol`,`trade_date`),
+  KEY `idx_stock_daily_quotes_market_date` (`market`,`trade_date`),
+  KEY `idx_stock_daily_quotes_industry_date` (`industry`,`trade_date`),
+  KEY `idx_stock_daily_quotes_pct_chg` (`trade_date`,`pct_chg`),
+  CONSTRAINT `fk_stock_daily_quotes_security` FOREIGN KEY (`security_master_id`) REFERENCES `security_master` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=1817167 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- No native definition for element: idx_stock_daily_quotes_security_date (index)
+
+-- No native definition for element: idx_stock_daily_quotes_symbol_date (index)
+
+-- No native definition for element: idx_stock_daily_quotes_market_date (index)
+
+-- No native definition for element: idx_stock_daily_quotes_industry_date (index)
+
+-- No native definition for element: idx_stock_daily_quotes_pct_chg (index)
+
+-- No native definition for element: idx_stock_daily_quotes_trade_date (index)
 
 -- trade_candidate_plans: table
 CREATE TABLE `trade_candidate_plans` (

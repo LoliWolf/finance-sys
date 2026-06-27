@@ -77,6 +77,12 @@ func main() {
 			return "recommendation_event"
 		case "recommendation_event_evidences":
 			return "recommendation_event_evidence"
+		case "stock_daily_quotes":
+			return "stock_daily_quote"
+		case "market_data_sync_runs":
+			return "market_data_sync_run"
+		case "market_data_sync_missing_items":
+			return "market_data_sync_missing_item"
 		default:
 			return tableName
 		}
@@ -135,6 +141,21 @@ func main() {
 		g.GenerateModelAs("bloggers", "Blogger"),
 		g.GenerateModelAs("recommendation_events", "RecommendationEvent"),
 		g.GenerateModelAs("recommendation_event_evidences", "RecommendationEventEvidence"),
+		g.GenerateModelAs("stock_daily_quotes", "StockDailyQuote",
+			gen.FieldRename("ts_code", "TSCode"),
+			gen.FieldRename("tushare_content", "TushareContent"),
+			gen.FieldType("tushare_content", "[]byte"),
+		),
+		g.GenerateModelAs("market_data_sync_runs", "MarketDataSyncRun",
+			gen.FieldType("started_at", "*time.Time"),
+			gen.FieldType("finished_at", "*time.Time"),
+			gen.FieldType("claimed_at", "*time.Time"),
+			gen.FieldRename("request_params_json", "RequestParamsJSON"),
+			gen.FieldType("request_params_json", "[]byte"),
+		),
+		g.GenerateModelAs("market_data_sync_missing_items", "MarketDataSyncMissingItem",
+			gen.FieldRename("ts_code", "TSCode"),
+		),
 	)
 	g.Execute()
 	logger.Info("gorm gen completed", "source", snapshot.Source, "out_path", queryOutPath, "model_path", "internal/domain/db_model")

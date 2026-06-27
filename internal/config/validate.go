@@ -89,6 +89,7 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.MarketData.Enabled {
 		require(cfg.MarketData.Provider == "tushare", "market_data.provider must be tushare when market_data.enabled is true")
+		require(cfg.MarketData.Tushare.Enabled, "market_data.tushare.enabled must be true when market_data.enabled is true")
 		if cfg.MarketData.Tushare.Enabled {
 			validateMarketDataTushare(cfg.MarketData.Tushare, require)
 		}
@@ -129,17 +130,8 @@ func validateMarketDataTushare(cfg MarketDataTushareConfig, require func(bool, s
 	require(cfg.TokenCooldownMS >= 0, "market_data.tushare.token_cooldown_ms must be zero or positive")
 	require(len(cfg.Tokens) > 0, "market_data.tushare.tokens must not be empty when enabled")
 
-	aliases := map[string]struct{}{}
 	enabledTokens := 0
 	for _, token := range cfg.Tokens {
-		alias := strings.TrimSpace(token.Alias)
-		require(alias != "", "market_data.tushare.tokens alias is required")
-		if alias != "" {
-			if _, exists := aliases[alias]; exists {
-				require(false, "market_data.tushare.tokens alias must be unique")
-			}
-			aliases[alias] = struct{}{}
-		}
 		require(token.Weight > 0, "market_data.tushare.tokens weight must be positive")
 		if token.Enabled {
 			enabledTokens++

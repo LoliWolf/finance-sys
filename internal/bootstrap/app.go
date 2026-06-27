@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/httpapi"
 	"finance-sys/internal/llm"
+	"finance-sys/internal/marketdata"
 	"finance-sys/internal/nacoscfg"
 	"finance-sys/internal/parser"
 	"finance-sys/internal/rules"
@@ -25,14 +27,16 @@ import (
 )
 
 type App struct {
-	Runtime         *config.Runtime
-	Logger          *slog.Logger
-	DB              *gorm.DB
-	DocumentService *service.DocumentService
-	SecurityService *service.SecurityService
-	HTTPServer      *httpapi.Server
-	Watcher         *nacoscfg.Watcher
-	Reloader        *nacoscfg.Reloader
+	Runtime           *config.Runtime
+	Logger            *slog.Logger
+	DB                *gorm.DB
+	DocumentService   *service.DocumentService
+	SecurityService   *service.SecurityService
+	MarketDataService *service.MarketDataService
+	MarketDataWorker  *service.MarketDataWorker
+	HTTPServer        *httpapi.Server
+	Watcher           *nacoscfg.Watcher
+	Reloader          *nacoscfg.Reloader
 }
 
 func (a *App) Close() error {
@@ -83,6 +87,13 @@ func Build(ctx context.Context) (*App, error) {
 	securityService := service.NewSecurityService(db, logger)
 	candidateAssembler := service.NewCandidateAssembler(securityService, logger)
 	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, candidateAssembler, ruleEngine, logger)
+	marketDataHTTPClient := &http.Client{}
+	if snapshot.Config.MarketData.Tushare.TimeoutMS > 0 {
+		marketDataHTTPClient.Timeout = time.Duration(snapshot.Config.MarketData.Tushare.TimeoutMS) * time.Millisecond
+	}
+	marketDataProvider := marketdata.NewTushareProvider(marketDataHTTPClient)
+	marketDataService := service.NewMarketDataService(db, runtime, marketDataProvider, logger)
+	marketDataWorker := service.NewMarketDataWorker(marketDataService, runtime, logger)
 
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader
@@ -91,17 +102,19 @@ func Build(ctx context.Context) (*App, error) {
 		reloader = nacoscfg.NewReloader(loader, runtime, db, logger)
 	}
 
-	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, reloader, logger)
+	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, reloader, logger)
 	logger.Info("bootstrap build completed")
 	return &App{
-		Runtime:         runtime,
-		Logger:          logger,
-		DB:              db,
-		DocumentService: documentService,
-		SecurityService: securityService,
-		HTTPServer:      httpServer,
-		Watcher:         watcher,
-		Reloader:        reloader,
+		Runtime:           runtime,
+		Logger:            logger,
+		DB:                db,
+		DocumentService:   documentService,
+		SecurityService:   securityService,
+		MarketDataService: marketDataService,
+		MarketDataWorker:  marketDataWorker,
+		HTTPServer:        httpServer,
+		Watcher:           watcher,
+		Reloader:          reloader,
 	}, nil
 }
 

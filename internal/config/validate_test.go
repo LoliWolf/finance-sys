@@ -66,7 +66,22 @@ func TestValidateMarketDataTushareRequiresEnabledToken(t *testing.T) {
 	require.ErrorContains(t, err, "market_data.tushare.tokens token is required when token is enabled")
 }
 
-func TestValidateMarketDataTushareRejectsDuplicateTokenAlias(t *testing.T) {
+func TestValidateMarketDataRequiresTushareWhenEnabled(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.MarketData.Enabled = true
+	cfg.MarketData.Provider = "tushare"
+	cfg.MarketData.Tushare.Enabled = false
+
+	err = config.Validate(&cfg)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "market_data.tushare.enabled must be true when market_data.enabled is true")
+}
+
+func TestValidateMarketDataTushareAllowsDuplicateTokenAlias(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)
 
@@ -81,6 +96,5 @@ func TestValidateMarketDataTushareRejectsDuplicateTokenAlias(t *testing.T) {
 	}
 
 	err = config.Validate(&cfg)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "market_data.tushare.tokens alias must be unique")
+	require.NoError(t, err)
 }

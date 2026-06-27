@@ -15,6 +15,7 @@ import (
 	"finance-sys/internal/config"
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
+	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/service"
 
 	"github.com/go-chi/chi/v5"
@@ -27,12 +28,18 @@ type ConfigReloader interface {
 }
 
 type Server struct {
-	db        *gorm.DB
-	runtime   *config.Runtime
-	documents *service.DocumentService
-	security  *service.SecurityService
-	reloader  ConfigReloader
-	logger    *slog.Logger
+	db         *gorm.DB
+	runtime    *config.Runtime
+	documents  *service.DocumentService
+	security   *service.SecurityService
+	marketData marketDataService
+	reloader   ConfigReloader
+	logger     *slog.Logger
+}
+
+type marketDataService interface {
+	CreateStockDailySyncRun(context.Context, service.StockDailySyncRequest) (*service.StockDailySyncResponse, error)
+	ListSyncRuns(context.Context, service.MarketDataSyncRunQuery) ([]db_model.MarketDataSyncRun, error)
 }
 
 func NewServer(
@@ -40,16 +47,18 @@ func NewServer(
 	runtime *config.Runtime,
 	documents *service.DocumentService,
 	security *service.SecurityService,
+	marketData marketDataService,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
 	return &Server{
-		db:        db,
-		runtime:   runtime,
-		documents: documents,
-		security:  security,
-		reloader:  reloader,
-		logger:    logger,
+		db:         db,
+		runtime:    runtime,
+		documents:  documents,
+		security:   security,
+		marketData: marketData,
+		reloader:   reloader,
+		logger:     logger,
 	}
 }
 
@@ -83,6 +92,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/recommendations", s.handleListRecommendations)
 		r.Get("/recommendations/{id}", s.handleGetRecommendation)
 		r.Get("/admin/security/lookup", s.handleLookupSecurity)
+		r.Post("/admin/market/stock-daily/sync", s.handleCreateStockDailySyncRun)
+		r.Get("/admin/market/sync-runs", s.handleListMarketDataSyncRuns)
 		r.Post("/internal/security/resolve", s.handleResolveSecurity)
 		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
