@@ -66,6 +66,7 @@
     "pdf_ocr": {
       // 图片型/水印型 PDF OCR fallback。工具协议：输入 PDF 文件路径，stdout 输出 UTF-8 文本。
       "enabled": false,
+      // 保持稳定的仓库相对路径；非 Windows 运行时会自动映射到同名 .sh wrapper。
       "command": "tools/guziyuan_pdf_ocr_tool/ocr_pdf.bat",
       "args": ["{input}", "--stdout"],
       "min_text_chars": 80,

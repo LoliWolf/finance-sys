@@ -134,12 +134,44 @@ func parseDOC(ctx context.Context, fileName string, content []byte) (string, err
 		return "", err
 	}
 
-	cmd := exec.CommandContext(ctx, "antiword", tmpFile.Name())
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("antiword failed for %s: %w", fileName, err)
+	var failures []string
+	for _, extractor := range docTextExtractors(runtime.GOOS, tmpFile.Name()) {
+		cmd := exec.CommandContext(ctx, extractor.command, extractor.args...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		output, commandErr := cmd.Output()
+		if commandErr == nil {
+			return string(output), nil
+		}
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = commandErr.Error()
+		}
+		failures = append(failures, fmt.Sprintf("%s: %s", extractor.name, message))
 	}
-	return string(output), nil
+	return "", fmt.Errorf("document text extraction failed for %s: %s", fileName, strings.Join(failures, "; "))
+}
+
+type docTextExtractor struct {
+	name    string
+	command string
+	args    []string
+}
+
+func docTextExtractors(goos string, inputPath string) []docTextExtractor {
+	extractors := make([]docTextExtractor, 0, 2)
+	if goos == "darwin" {
+		extractors = append(extractors, docTextExtractor{
+			name:    "textutil",
+			command: "/usr/bin/textutil",
+			args:    []string{"-convert", "txt", "-stdout", "--", inputPath},
+		})
+	}
+	return append(extractors, docTextExtractor{
+		name:    "antiword",
+		command: "antiword",
+		args:    []string{inputPath},
+	})
 }
 
 func parsePDF(ctx context.Context, fileName string, content []byte, ocrCfg config.PDFOCRConfig) (string, bool, error) {
@@ -236,6 +268,21 @@ func buildOCRExec(command string, args []string) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	if fallback, mapped, err := mapWindowsBatchForPlatform(runtime.GOOS, resolved); err != nil {
+		return "", nil, err
+	} else if mapped {
+		return fallback, args, nil
+	}
+	if strings.EqualFold(filepath.Ext(resolved), ".py") {
+		python, err := resolveOCRPython()
+		if err != nil {
+			return "", nil, err
+		}
+		pythonArgs := make([]string, 0, len(args)+1)
+		pythonArgs = append(pythonArgs, resolved)
+		pythonArgs = append(pythonArgs, args...)
+		return python, pythonArgs, nil
+	}
 	if runtime.GOOS == "windows" {
 		switch strings.ToLower(filepath.Ext(resolved)) {
 		case ".bat", ".cmd":
@@ -252,6 +299,55 @@ func buildOCRExec(command string, args []string) (string, []string, error) {
 	return resolved, args, nil
 }
 
+func mapWindowsBatchForPlatform(goos string, command string) (string, bool, error) {
+	if goos == "windows" {
+		return command, false, nil
+	}
+	extension := strings.ToLower(filepath.Ext(command))
+	if extension != ".bat" && extension != ".cmd" {
+		return command, false, nil
+	}
+	fallback := strings.TrimSuffix(command, filepath.Ext(command)) + ".sh"
+	if !fileExists(fallback) {
+		return "", false, fmt.Errorf("ocr command %s is Windows-only and platform fallback was not found: %s", command, fallback)
+	}
+	return fallback, true, nil
+}
+
+func resolveOCRPython() (string, error) {
+	if root, ok := findProjectRoot(); ok {
+		for _, relativePath := range pythonVirtualenvPaths(runtime.GOOS) {
+			candidate := filepath.Join(root, relativePath)
+			if fileExists(candidate) {
+				return candidate, nil
+			}
+		}
+	}
+	for _, name := range pythonExecutableNames(runtime.GOOS) {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("python interpreter not found for OCR script")
+}
+
+func pythonVirtualenvPaths(goos string) []string {
+	if goos == "windows" {
+		return []string{filepath.Join("agent", ".venv", "Scripts", "python.exe")}
+	}
+	return []string{
+		filepath.Join("agent", ".venv", "bin", "python3"),
+		filepath.Join("agent", ".venv", "bin", "python"),
+	}
+}
+
+func pythonExecutableNames(goos string) []string {
+	if goos == "windows" {
+		return []string{"python.exe", "python", "py"}
+	}
+	return []string{"python3", "python"}
+}
+
 func resolveOCRCommand(command string) (string, error) {
 	command = strings.TrimSpace(os.ExpandEnv(command))
 	if command == "" {
@@ -261,7 +357,7 @@ func resolveOCRCommand(command string) (string, error) {
 		return command, nil
 	}
 
-	normalized := filepath.Clean(filepath.FromSlash(command))
+	normalized := normalizeCommandPath(command)
 	candidates := make([]string, 0, 2)
 	if filepath.IsAbs(normalized) {
 		candidates = append(candidates, normalized)
@@ -280,6 +376,13 @@ func resolveOCRCommand(command string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("ocr command not found: %s (looked in %s)", command, strings.Join(dedupeStrings(candidates), ", "))
+}
+
+func normalizeCommandPath(command string) string {
+	if filepath.Separator == '/' {
+		command = strings.ReplaceAll(command, `\`, "/")
+	}
+	return filepath.Clean(filepath.FromSlash(command))
 }
 
 func isPathCommand(command string) bool {

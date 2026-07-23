@@ -1,10 +1,10 @@
-import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from app.config import get_settings
+from app.http_client import HTTPClientError, StdlibHTTPClient, redact_secret
 
 
 TUSHARE_STOCK_BASIC_TOOL_NAME = "tushare_stock_basic_tool"
@@ -38,10 +38,15 @@ class OfficialTushareStockBasicTool:
     ) -> None:
         settings = get_settings().tushare
         self.config_enabled = settings.enabled or token is not None
-        self.token = token if token is not None else settings.token or os.getenv("TUSHARE_TOKEN", "")
-        self.endpoint = (endpoint or settings.endpoint or os.getenv("TUSHARE_ENDPOINT", DEFAULT_TUSHARE_ENDPOINT)).rstrip("/")
+        self.token = token if token is not None else settings.token
+        configured_endpoint = endpoint if endpoint is not None else settings.endpoint
+        self.endpoint = (configured_endpoint or DEFAULT_TUSHARE_ENDPOINT).rstrip("/")
         self.timeout_ms = timeout_ms if timeout_ms is not None else settings.timeout_ms
-        self.http_client = http_client or httpx.Client(timeout=self.timeout_ms / 1000)
+        self.http_client = (
+            http_client
+            if http_client is not None
+            else StdlibHTTPClient(timeout=self.timeout_ms / 1000)
+        )
 
     def enabled(self) -> bool:
         return bool(self.config_enabled and self.token and self.endpoint)
@@ -61,11 +66,17 @@ class OfficialTushareStockBasicTool:
                 timeout=self.timeout_ms / 1000,
             )
             response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise TushareToolError(f"tushare stock_basic failed: {exc}") from exc
+        except (httpx.HTTPError, HTTPClientError) as exc:
+            safe_error = redact_secret(str(exc), self.token)
+            raise TushareToolError(
+                f"tushare stock_basic failed: {safe_error}"
+            ) from exc
         payload = response.json()
         if int(payload.get("code", 0)) != 0:
-            raise TushareToolError(f"tushare stock_basic returned code {payload.get('code')}: {payload.get('msg', '')}")
+            message = redact_secret(str(payload.get("msg", "")), self.token)
+            raise TushareToolError(
+                f"tushare stock_basic returned code {payload.get('code')}: {message}"
+            )
         candidates = _candidates_from_tushare_payload(payload)
         matched = [item for item in candidates if _matches_query(raw_symbol, item)]
         return matched[:max_candidates]

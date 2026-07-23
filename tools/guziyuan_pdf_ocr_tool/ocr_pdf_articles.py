@@ -66,16 +66,24 @@ class OcrResult:
 
 
 def run(args: List[str], timeout: int = 180) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=127,
+            stdout="",
+            stderr=f"command not found: {args[0]} ({exc})",
+        )
 
 
 def find_pdfs(input_path: Path) -> List[Path]:
@@ -121,13 +129,16 @@ def extract_pdf_text(pdf: Path) -> str:
 
 def extract_pdf_text_layout(pdf: Path) -> str:
     """Extract PDF text while dropping translucent watermark text boxes."""
-    proc = subprocess.run(
-        ["pdftohtml", "-xml", "-stdout", str(pdf)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=120,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["pdftohtml", "-xml", "-stdout", str(pdf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
+            check=False,
+        )
+    except FileNotFoundError:
+        return ""
     if proc.returncode != 0 or not proc.stdout:
         return ""
     try:

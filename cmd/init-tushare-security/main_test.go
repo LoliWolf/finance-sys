@@ -1,11 +1,26 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestVenvPythonCandidatesArePlatformSpecific(t *testing.T) {
+	require.Equal(t,
+		[]string{filepath.Join("agent", ".venv", "Scripts", "python.exe")},
+		venvPythonCandidates("windows"),
+	)
+	require.Equal(t,
+		[]string{
+			filepath.Join("agent", ".venv", "bin", "python3"),
+			filepath.Join("agent", ".venv", "bin", "python"),
+		},
+		venvPythonCandidates("darwin"),
+	)
+}
 
 func TestSecurityMasterFromStockRecord(t *testing.T) {
 	record := map[string]any{

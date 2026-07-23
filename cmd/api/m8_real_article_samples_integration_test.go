@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -390,9 +389,6 @@ func m8RequireEnabled(t *testing.T) {
 	}
 	if os.Getenv(m8DMLAckEnv) != "write-real-db" {
 		t.Skipf("set %s=write-real-db after acknowledging this test writes to the configured MySQL database", m8DMLAckEnv)
-	}
-	if runtime.GOOS != "windows" {
-		t.Skip("real article OCR integration currently uses the Windows OCR wrapper")
 	}
 	require.DirExists(t, m8ArticleRoot())
 }

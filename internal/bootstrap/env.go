@@ -3,21 +3,26 @@ package bootstrap
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"finance-sys/internal/nacoscfg"
 )
 
+const (
+	defaultNacosNamespace = "public"
+	defaultNacosGroup     = "DEFAULT_GROUP"
+	defaultNacosDataID    = "expert_trade"
+)
+
 func LoadNacosBootstrapFromEnv() (nacoscfg.BootstrapConfig, error) {
 	cfg := nacoscfg.BootstrapConfig{
-		ServerAddr: os.Getenv("NACOS_SERVER_ADDR"),
-		Namespace:  os.Getenv("NACOS_NAMESPACE"),
-		Group:      os.Getenv("NACOS_GROUP"),
-		DataID:     os.Getenv("NACOS_DATA_ID"),
-		Username:   os.Getenv("NACOS_USERNAME"),
-		Password:   os.Getenv("NACOS_PASSWORD"),
+		ServerAddr: strings.TrimSpace(os.Getenv("NACOS_SERVER_ADDR")),
+		Namespace:  defaultNacosNamespace,
+		Group:      defaultNacosGroup,
+		DataID:     defaultNacosDataID,
 	}
-	if cfg.ServerAddr == "" || cfg.Namespace == "" || cfg.Group == "" || cfg.DataID == "" {
-		return nacoscfg.BootstrapConfig{}, fmt.Errorf("missing nacos bootstrap environment variables")
+	if cfg.ServerAddr == "" {
+		return nacoscfg.BootstrapConfig{}, fmt.Errorf("NACOS_SERVER_ADDR is required")
 	}
 	return cfg, nil
 }

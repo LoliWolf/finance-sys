@@ -1,10 +1,18 @@
 import json
+from http.server import BaseHTTPRequestHandler
+import socket
+from urllib.error import URLError
 
 import httpx
 import pytest
 
 from app.config import AgentSettings, LLMSettings
 from app.llm_client import LLMClient
+
+
+class QuietHTTPHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        return
 
 
 def test_llm_client_extracts_raw_intents_from_chat_completion():
@@ -52,6 +60,83 @@ def test_llm_client_extracts_raw_intents_from_chat_completion():
     assert len(intents) == 1
     assert intents[0].raw_symbol == "新易盛"
     assert requests[0].headers["authorization"] == "Bearer test-key"
+
+
+def test_llm_default_stdlib_transport_posts_and_retries_5xx(run_http_server):
+    observed = {"attempts": 0, "authorization": "", "model": ""}
+
+    class Handler(QuietHTTPHandler):
+        def do_POST(self):
+            observed["attempts"] += 1
+            length = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(length))
+            observed["authorization"] = self.headers["Authorization"]
+            observed["model"] = payload["model"]
+            if observed["attempts"] == 1:
+                body = b"temporary upstream failure"
+                self.send_response(502, "Bad Gateway")
+                self.send_header("Content-Type", "text/plain")
+            else:
+                body = json.dumps(_chat_completion_payload("新易盛")).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    endpoint = f"http://{run_http_server(Handler)}/v1/chat/completions"
+    client = LLMClient(
+        _settings(endpoint=endpoint, max_retries=1),
+        sleep=lambda _: None,
+    )
+
+    intents = client.extract_raw_intents("推荐新易盛", max_intents=5)
+
+    assert intents[0].raw_symbol == "新易盛"
+    assert observed == {
+        "attempts": 2,
+        "authorization": "Bearer test-key",
+        "model": "m4-test-model",
+    }
+
+
+def test_llm_default_stdlib_transport_redacts_api_key_from_error(run_http_server):
+    class Handler(QuietHTTPHandler):
+        def do_POST(self):
+            body = b"provider echoed test-key"
+            self.send_response(500, "Internal Server Error")
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    endpoint = f"http://{run_http_server(Handler)}/v1/chat/completions"
+    client = LLMClient(_settings(endpoint=endpoint), sleep=lambda _: None)
+
+    with pytest.raises(RuntimeError) as exc:
+        client.extract_raw_intents("推荐新易盛", max_intents=5)
+
+    assert "test-key" not in str(exc.value)
+    assert "[REDACTED]" in str(exc.value)
+
+
+def test_llm_default_stdlib_transport_retries_timeout(monkeypatch):
+    attempts = 0
+
+    def timeout_urlopen(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        raise URLError(socket.timeout("test-key must stay private"))
+
+    monkeypatch.setattr("app.http_client.open_url", timeout_urlopen)
+    client = LLMClient(_settings(max_retries=1), sleep=lambda _: None)
+
+    with pytest.raises(RuntimeError) as exc:
+        client.extract_raw_intents("推荐新易盛", max_intents=5)
+
+    assert attempts == 2
+    assert "timed out" in str(exc.value)
+    assert "test-key" not in str(exc.value)
 
 
 def test_llm_client_retries_5xx():
@@ -442,3 +527,33 @@ def _settings(**overrides):
     }
     values.update(overrides)
     return AgentSettings(config_source="test", llm=LLMSettings(**values))
+
+
+def _chat_completion_payload(raw_symbol: str):
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "raw_intents": [
+                                {
+                                    "intent_id": "intent-stdlib",
+                                    "raw_symbol": raw_symbol,
+                                    "direction": "LONG",
+                                    "reference_price": 0,
+                                    "reference_price_note": "price_missing_in_text",
+                                    "thesis": "source text supports recommendation",
+                                    "evidence": [
+                                        {"chunk_index": 0, "text": "source evidence"}
+                                    ],
+                                    "risks": [],
+                                    "confidence": 0.8,
+                                }
+                            ]
+                        }
+                    )
+                }
+            }
+        ]
+    }

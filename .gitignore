@@ -17,11 +17,13 @@ vendor/
 *.test
 *.out
 configs/.cache
+bootstrap_go122.env
 cmd/api/cache
 .gocache_verify/
 testdata/游资大V复盘文章汇总2026
 cmd/api/__debug_*.exe
 agent/.venv/
+tools/**/.venv/
 agent/.pytest_cache/
 agent/*.egg-info/
 agent/**/__pycache__/

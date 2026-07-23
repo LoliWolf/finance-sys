@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"fmt"
+	"os"
 	"runtime"
 	"testing"
 
@@ -29,9 +31,7 @@ func TestParseTextBuildsChunks(t *testing.T) {
 }
 
 func TestParsePDFFallsBackToConfiguredOCR(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("cmd.exe based fake OCR is Windows-specific")
-	}
+	t.Setenv("FINANCE_SYS_PARSER_OCR_HELPER", "1")
 
 	service := parser.New(nil)
 	result, err := service.Parse(context.Background(), "scan.pdf", []byte("not a real pdf"), config.DocumentConfig{
@@ -41,8 +41,8 @@ func TestParsePDFFallsBackToConfiguredOCR(t *testing.T) {
 		},
 		PDFOCR: config.PDFOCRConfig{
 			Enabled:      true,
-			Command:      "cmd",
-			Args:         []string{"/c", "echo OCR 600519.SH reference 1688"},
+			Command:      os.Args[0],
+			Args:         []string{"-test.run=^TestParserOCRHelperProcess$"},
 			MinTextChars: 80,
 			TimeoutMS:    5000,
 		},
@@ -53,6 +53,13 @@ func TestParsePDFFallsBackToConfiguredOCR(t *testing.T) {
 	require.Equal(t, true, result.RawMetadata["pdf_ocr_used"])
 	require.Contains(t, result.CleanedText, "OCR 600519.SH")
 	require.NotEmpty(t, result.Chunks)
+}
+
+func TestParserOCRHelperProcess(t *testing.T) {
+	if os.Getenv("FINANCE_SYS_PARSER_OCR_HELPER") != "1" {
+		return
+	}
+	fmt.Print("OCR 600519.SH reference 1688")
 }
 
 func TestParseDocxExtractsPlainText(t *testing.T) {
@@ -75,5 +82,24 @@ func TestParseDocxExtractsPlainText(t *testing.T) {
 	require.Equal(t, domain.ParseRunStatusParsed, result.Status)
 	require.Contains(t, result.CleanedText, "600519.SH")
 	require.Contains(t, result.CleanedText, "Reference price 1688")
+	require.NotEmpty(t, result.Chunks)
+}
+
+func TestParseDocUsesMacOSTextutil(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("textutil is provided by macOS")
+	}
+
+	service := parser.New(nil)
+	content := []byte(`{\rtf1\ansi Mac DOC recommends 600519.SH at 1688.}`)
+	result, err := service.Parse(context.Background(), "sample.doc", content, config.DocumentConfig{
+		Chunking: config.ChunkingConfig{
+			Enabled:     true,
+			TargetChars: 64,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.ParseRunStatusParsed, result.Status)
+	require.Contains(t, result.CleanedText, "600519.SH")
 	require.NotEmpty(t, result.Chunks)
 }

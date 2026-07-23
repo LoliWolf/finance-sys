@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,9 +26,7 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	if os.Getenv("FINANCE_SYS_HTTP_OCR_INTEGRATION") != "1" {
 		t.Skip("set FINANCE_SYS_HTTP_OCR_INTEGRATION=1 to run Nacos/MySQL HTTP OCR integration test")
 	}
-	if runtime.GOOS != "windows" {
-		t.Skip("fake OCR command uses cmd.exe")
-	}
+	t.Setenv("FINANCE_SYS_HTTP_OCR_HELPER", "1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -41,8 +38,8 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	cfg.Document.AutoAnalyzeUpload = false
 	cfg.Document.PDFOCR = config.PDFOCRConfig{
 		Enabled:      true,
-		Command:      "cmd",
-		Args:         []string{"/c", "echo OCR_SENTINEL 推荐 600519.SH 参考价 1688"},
+		Command:      os.Args[0],
+		Args:         []string{"-test.run=^TestHTTPOCRHelperProcess$"},
 		MinTextChars: 80,
 		TimeoutMS:    5000,
 	}
@@ -77,6 +74,13 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	require.Equal(t, true, parseRun.RawMetadata["pdf_ocr_used"])
 	require.Contains(t, parseRun.CleanedText, "OCR_SENTINEL")
 	require.Contains(t, parseRun.CleanedText, "600519.SH")
+}
+
+func TestHTTPOCRHelperProcess(t *testing.T) {
+	if os.Getenv("FINANCE_SYS_HTTP_OCR_HELPER") != "1" {
+		return
+	}
+	fmt.Print("OCR_SENTINEL 推荐 600519.SH 参考价 1688")
 }
 
 func TestHTTPUploadAllFuturePDFs(t *testing.T) {

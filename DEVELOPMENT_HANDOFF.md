@@ -4,6 +4,8 @@
 > 用途：从 Windows 切换到 macOS 后快速恢复开发，并明确当前实现边界和下一阶段工作。  
 > 详细产品和技术方案仍以[飞书知识库](https://my.feishu.cn/wiki/DAUVw7Lr6i7L3XkulELcWmoCnLh)为准。
 
+> 2026-07-23 运行环境更新：本文第 1 节的分支/提交状态是交接时快照。当前 macOS/Windows 安装、Nacos bootstrap、启动脚本和 OCR 命令以仓库 `README.md` 为准。
+
 ## 1. 当前代码状态
 
 - 当前分支：`feat/track`
@@ -265,53 +267,53 @@ git status
 
 ### 6.2 安装基础环境
 
-`go.mod` 声明 Go `1.22.11`，Python Agent 要求 Python `>=3.9`。截至 2026-07-22，[Homebrew 的 `go@1.22` 公式](https://formulae.brew.sh/formula/go%401.22)已停用，因此新 Mac 可安装当前 Go（版本不低于 1.22）；需要完全复现旧工具链时，再通过 Go 官方归档或版本管理器安装 1.22.x。
+`go.mod` 声明 Go `1.22.11`，Python Agent 要求 Python `>=3.9`。Go 可用官方归档或版本管理器安装 1.22.x；本地命令不依赖固定 Homebrew 前缀。
 
 ```bash
-brew install go python@3.12
 go version
 python3 --version
+pdftoppm -v
 ```
 
-Intel Mac 的 Homebrew 路径通常是 `/usr/local`；Apple Silicon 通常是 `/opt/homebrew`。如果 `python3` 没有指向 3.12，可使用 `python3.12` 创建虚拟环境。
+MySQL、Nacos、LLM 和 Tushare 继续使用 Nacos 指向的远程服务，不在 Mac 另外安装中间件。macOS 解析旧 `.doc` 优先使用系统 `textutil`，不需要 antiword。Intel 和 Apple Silicon 的 Homebrew 前缀不同，脚本不写死前缀。
 
 ### 6.3 配置 Nacos
 
-Go 服务和 Python Agent 读取同一组 bootstrap 环境变量：
+Go 服务和 Python Agent 读取同一组 bootstrap 环境变量。项目当前 Nacos 地址已在示例中；一般只需复制文件，切换网络时再改地址：
 
 ```bash
-export NACOS_SERVER_ADDR='<host>:8848'
-export NACOS_NAMESPACE='public'
-export NACOS_GROUP='DEFAULT_GROUP'
-export NACOS_DATA_ID='expert_trade'
-export NACOS_USERNAME=''
-export NACOS_PASSWORD=''
+cp bootstrap_go122.env.example bootstrap_go122.env
+# 必要时仅修改 NACOS_SERVER_ADDR=<reachable-host>:8848
 ```
 
-不要把真实 Nacos 密码、MySQL DSN、LLM Key 或 Tushare Token 写入 Git。长期开发可以把这些值放到不入库的本地 shell 配置或密码管理工具中。
+代码固定使用 `public / DEFAULT_GROUP / expert_trade` 定位配置文档，bootstrap 文件只保留 Nacos 地址。MySQL DSN、HTTP 端口、LLM Key、Tushare Token 和业务开关只维护在 Nacos JSON，不要写入 Git。非地址 bootstrap 键会被启动脚本拒绝；启动脚本会从 Nacos 动态读取 HTTP 端口做健康检查。
 
-如果没有提供完整 Nacos bootstrap 变量，Go 会回退到 `configs/example_nacos_config.json`；该文件默认配置不能连接正式数据库，也默认关闭行情同步。
+Go 主程序优先通过环境变量中的 Nacos 地址读取配置；地址缺失或 Nacos 读取失败时，降级读取 `configs/example_nacos_config.json`，用于本地开发调试。
 
 ### 6.4 验证 Go 服务
+
+当前 Nacos 开启 Agent 路由。先按 6.5 在一个终端启动 Agent，再在另一个终端启动 API：
 
 ```bash
 go mod download
 GOTOOLCHAIN=local go test -count=1 ./...
 GOTOOLCHAIN=local go build ./...
-go run ./cmd/api
+./debug_api_nacos.sh
 ```
 
-默认 HTTP 地址由 Nacos 决定，示例配置为：
+默认 HTTP 地址由 Nacos 决定，当前项目配置为：
 
 ```text
-http://localhost:18080
+http://127.0.0.1:30005
 ```
 
 健康检查：
 
 ```bash
-curl http://localhost:18080/healthz
+curl http://127.0.0.1:30005/healthz
 ```
+
+需要后台运行和自动打开上传页时使用 `./start_api_nacos.sh`。Windows 保留对等的 `debug_api_nacos.bat` 和 `start_api_nacos.bat`。
 
 ### 6.5 启动 Python Agent
 
@@ -321,7 +323,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[test]'
 python -m pytest -q
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8108
+python -m app.runner
 ```
 
 Python Agent 不是行情同步的依赖；只有文档分析配置为 Agent 路由时才需要启动。

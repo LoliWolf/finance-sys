@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"finance-sys/internal/agentclient"
@@ -126,22 +127,59 @@ func LoadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snap
 		if loadErr == nil {
 			return snapshot, loader, nil
 		}
-		return nil, nil, fmt.Errorf("load nacos config: %w", loadErr)
+		if logger != nil {
+			logger.WarnContext(ctx, "load nacos config failed; using local example", "error", loadErr.Error())
+		}
+	} else if logger != nil {
+		logger.InfoContext(ctx, "nacos address unavailable; using local example", "error", err.Error())
 	}
 
-	raw, err := os.ReadFile("configs/example_nacos_config.json")
+	snapshot, fallbackErr := loadLocalExampleSnapshot()
+	if fallbackErr != nil {
+		if err == nil {
+			return nil, nil, fmt.Errorf("load nacos config and local example fallback: %w", fallbackErr)
+		}
+		return nil, nil, fmt.Errorf("load local example fallback after nacos bootstrap error %v: %w", err, fallbackErr)
+	}
+	return snapshot, nil, nil
+}
+
+func loadLocalExampleSnapshot() (*config.Snapshot, error) {
+	path, err := findLocalExampleConfig()
 	if err != nil {
-		return nil, nil, fmt.Errorf("load local config fallback: %w", err)
+		return nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load local config fallback: %w", err)
 	}
 	var cfg config.Config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("decode local config fallback: %w", err)
 	}
 	if err := config.Validate(&cfg); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	snapshot, err := config.NewSnapshot(&cfg, raw, "local_example", time.Now())
-	return snapshot, nil, err
+	return config.NewSnapshot(&cfg, raw, "local_example", time.Now())
+}
+
+func findLocalExampleConfig() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	for {
+		candidate := filepath.Join(dir, "configs", "example_nacos_config.json")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", fmt.Errorf("configs/example_nacos_config.json was not found from the working directory or its parents")
 }
 
 func openDB(ctx context.Context, cfg *config.Config) (*gorm.DB, error) {

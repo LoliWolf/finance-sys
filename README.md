@@ -17,7 +17,7 @@
 7. 由 `internal/rules` 确定性生成入场价、止损价、止盈价和仓位。
 8. 持久化候选计划、推荐事件、标的解析观测和不可追踪目标，供 API 查询。
 
-当前已经落地到推荐事件事实层；行情同步、推荐后走势评估、统计排行榜和可视化报表属于后续规划链路，尚未作为当前 HTTP 主链路实现。
+当前已经落地推荐事件事实层，以及 Tushare 日线同步任务、同步 worker 和同步记录查询。推荐后窗口评估、统计排行榜和可视化报表仍属于后续规划链路。
 
 ## 后续规划链路
 
@@ -35,7 +35,7 @@ RecommendationEvent 推荐事实
 这部分的工程边界：
 
 - 行情和收益计算必须使用确定性代码，不能由 LLM 生成。
-- Tushare token 只能来自 Nacos 或显式安全参数，不能提交到仓库。
+- 真实运行的 Tushare token 只能来自 Nacos，不能提交到仓库或本地 bootstrap 文件。
 - 第一阶段只使用日线和交易日历，不做分钟级实时交易。
 - 行情缺失、停牌、权限不足、代码无法识别时必须记录为不可评估状态，不混入胜率分母。
 - 评估结果和统计结果应挂在稳定的 `recommendation_events` 上，而不是易变的 `trade_candidate_plans.plan_id`。
@@ -99,18 +99,55 @@ RecommendationEvent 推荐事实
 - `GET /api/v1/recommendations`
 - `GET /api/v1/recommendations/{id}`
 - `GET /api/v1/admin/security/lookup`
+- `POST /api/v1/admin/market/stock-daily/sync`
+- `GET /api/v1/admin/market/sync-runs`
 - `POST /api/v1/internal/security/resolve`
 - `POST /api/v1/internal/security/verify`
 - `POST /api/v1/admin/config/reload`
 
-## 配置
+## 跨平台开发环境
 
-生产和正式联调使用 Nacos 中的单个 JSON 配置文档。API 启动和 `generate.go` 使用同一套配置加载路径：
+原生开发机只需要 Go 1.22.x、Python 3.9+ 和文档处理依赖。MySQL、Nacos、LLM 和 Tushare 都使用 Nacos 指向的现有远程服务，不要在 Mac/Windows 本机另外安装这些中间件。
 
-1. 优先读取 Nacos bootstrap 环境变量并加载 Nacos 配置。
-2. 本地开发未配置 Nacos 时，回退到 `configs/example_nacos_config.json`。
+macOS：
 
-不要把真实生产 DSN、模型 API Key、Tushare token 或其他私密凭据提交到仓库。
+```bash
+python3 --version
+python3 -m venv tools/guziyuan_pdf_ocr_tool/.venv
+tools/guziyuan_pdf_ocr_tool/.venv/bin/python -m pip install -r tools/guziyuan_pdf_ocr_tool/requirements.txt
+go version
+pdftoppm -v
+swift --version
+```
+
+Go 可使用官方安装包或版本管理器；不要在脚本中写死 `/opt/homebrew` 或 `/usr/local`。macOS 的旧 `.doc` 解析优先使用系统 `/usr/bin/textutil`，不需要 antiword。OCR 只硬依赖 `pdftoppm`；其缺失时再可选安装 Poppler，其他 Poppler 提取命令缺失时工具会降级到整页渲染 + Vision OCR。
+
+Windows：
+
+- 安装 Go 1.22.x、Python 3.9+ 和 Poppler，并把它们的可执行目录加入 `PATH`。只有需要解析旧 `.doc` 时才额外安装 antiword。
+- 图片型 PDF OCR 使用 Windows.Media.Ocr，需安装简体中文 OCR 语言包。
+- 使用 `py -3 -m venv tools\guziyuan_pdf_ocr_tool\.venv` 创建 OCR 虚拟环境，再用该环境的 `python.exe -m pip install -r tools\guziyuan_pdf_ocr_tool\requirements.txt` 安装依赖。
+- 用 `go version`、`where pdftoppm` 和 `py -3 --version` 检查环境；如需 `.doc` 再检查 `where antiword`。
+
+## Nacos 配置
+
+线上运行通过环境变量 `NACOS_SERVER_ADDR` 读取 Nacos 中的单个 JSON 配置文档。MySQL DSN、HTTP 端口、LLM Key、Tushare token 和业务开关都在 Nacos，不在本地 bootstrap 文件中重复维护。没有设置 Nacos 地址，或 Nacos 配置读取失败时，Go 主程序会降级读取 `configs/example_nacos_config.json`，方便本地开发调试。
+
+复制 bootstrap 示例：
+
+```bash
+# macOS
+cp bootstrap_go122.env.example bootstrap_go122.env
+```
+
+```bat
+rem Windows cmd.exe
+copy bootstrap_go122.env.example bootstrap_go122.env
+```
+
+`bootstrap_go122.env` 已被 Git 忽略。项目当前 Nacos 地址已写入示例；只有切换网络或环境时才需要改 `NACOS_SERVER_ADDR`。用于定位配置文档的 `public / DEFAULT_GROUP / expert_trade` 固定在代码中。程序不会读取本地的 namespace、group、dataId、Nacos 凭据或业务配置覆盖值；bootstrap 文件若出现地址以外的配置键，启动脚本会直接报错。
+
+`config_snapshots.raw_json` 会把实际加载的配置 JSON 原文写入数据库，供内部审计和版本追踪；该内容不会写入仓库。
 
 ## 生成数据库模型
 
@@ -122,23 +159,76 @@ go run generate.go
 
 该命令会按启动路径读取配置中的 MySQL DSN，并基于当前数据库结构同步 `internal/domain/db_model`。
 
-## 运行
+## 运行 API
+
+当前 Nacos 配置为 `agent.enabled=true`，因此完整文档分析要先在一个终端启动 Agent（首次安装见 `agent/README.md`）：
+
+```bash
+cd agent
+.venv/bin/python -m app.runner
+```
+
+Windows PowerShell：
+
+```powershell
+Set-Location agent
+.\.venv\Scripts\python.exe -m app.runner
+```
+
+然后在另一个终端启动 API。
+
+直接本地调试且不提供 `NACOS_SERVER_ADDR` 时，可以运行：
 
 ```bash
 go run ./cmd/api
 ```
 
+此时主程序使用 `configs/example_nacos_config.json`；如果设置了 Nacos 地址但远端暂时不可读，也会使用同一份本地示例配置。
+
+macOS 后台启动（构建、等待健康检查，默认打开上传页）：
+
+```bash
+./start_api_nacos.sh
+```
+
+前台调试：
+
+```bash
+./debug_api_nacos.sh
+```
+
+Windows 使用：
+
+```bat
+start_api_nacos.bat
+debug_api_nacos.bat
+```
+
+脚本优先读取不入库的 `bootstrap_go122.env`，文件不存在时读取 `bootstrap_go122.env.example`。它们会直接从 Nacos JSON 读取 `service.http.port`，因此 bootstrap 文件不保存 HTTP 端口，也不接受本地 `APP_PORT`/`APP_BASE_URL` 覆盖。
+
+脚本只会停止上次由同一脚本记录的 PID；如果端口被其他进程占用会报错，不会误杀其他服务。macOS 日志位于 `tmp/api_nacos.log`，Windows 日志位于 `tmp/api_nacos.out.log` 和 `tmp/api_nacos.err.log`。当前 Nacos 配置解析为 `http://127.0.0.1:30005`。
+
 如需初始化 Tushare 证券主数据：
 
 ```bash
-go run ./cmd/init-tushare-security
+GOTOOLCHAIN=local go run ./cmd/init-tushare-security --python "$(pwd)/agent/.venv/bin/python"
 ```
 
 ## 验证
 
+macOS/Linux：
+
 ```bash
-env GOTOOLCHAIN=local go test ./...
-env GOTOOLCHAIN=local go build ./...
+GOTOOLCHAIN=local go test ./...
+GOTOOLCHAIN=local go build ./...
+```
+
+在 Windows PowerShell：
+
+```powershell
+$env:GOTOOLCHAIN = 'local'
+go test ./...
+go build ./...
 ```
 
 部分集成测试会写入配置指向的 MySQL，默认通过环境变量门禁跳过。运行前先阅读对应测试文件中的说明。

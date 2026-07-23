@@ -16,6 +16,15 @@ PDF 二进制输入 -> UTF-8 纯文本输出
 - Windows：使用系统 Windows.Media.Ocr，需安装中文 OCR 语言包 `zh-Hans-CN`
 - macOS：使用系统 Vision OCR，通过 `mac_ocr.swift` 调用；需要 macOS 10.15+，并能运行 `swift`
 
+建议把 OCR 依赖放在工具自身的虚拟环境：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Windows 可使用 `py -3 -m venv .venv` 和 `.venv\Scripts\python.exe -m pip install -r requirements.txt`。wrapper 会优先使用 OCR 工具自身的 `.venv`，然后使用 `$PYTHON`/`%PYTHON%`，最后才查找系统 Python。启动前会明确检查 Pillow、必需的 `pdftoppm` 和对应平台 OCR 运行时。`pdftotext`、`pdftohtml` 或 `pdfimages` 缺失时会警告并降级到整页渲染 + 系统 OCR。
+
 ## 二进制输入，纯文本输出
 
 Windows 推荐用 `cmd.exe` 的 `type` 配合 bat，避免 PowerShell 5 的 `type/Get-Content` 把 PDF 当文本流处理：
@@ -36,10 +45,10 @@ cmd /c "type input.pdf | pdf_ocr_tool\ocr_pdf.bat - > output.txt"
 pdf_ocr_tool\ocr_pdf.bat input.pdf --stdout > output.txt
 ```
 
-跨平台推荐直接调用 Python：
+在 macOS 上推荐使用仓库 wrapper：
 
 ```bash
-python pdf_ocr_tool/ocr_pdf_articles.py - < input.pdf > output.txt
+tools/guziyuan_pdf_ocr_tool/ocr_pdf.sh - < input.pdf > output.txt
 ```
 
 `-` 表示从 `stdin` 读取 PDF bytes。该模式下正文只写到 `stdout`；错误和质量评估信息写到 `stderr`。
@@ -47,7 +56,7 @@ python pdf_ocr_tool/ocr_pdf_articles.py - < input.pdf > output.txt
 ## 文件输入，纯文本输出
 
 ```bash
-python pdf_ocr_tool/ocr_pdf_articles.py input.pdf --stdout > output.txt
+tools/guziyuan_pdf_ocr_tool/ocr_pdf.sh input.pdf --stdout > output.txt
 ```
 
 Windows bat：
@@ -59,7 +68,7 @@ pdf_ocr_tool\ocr_pdf.bat input.pdf --stdout > output.txt
 ## 批量输出文件
 
 ```bash
-python pdf_ocr_tool/ocr_pdf_articles.py pdf_folder --out-dir ocr_output
+tools/guziyuan_pdf_ocr_tool/ocr_pdf.sh pdf_folder --out-dir ocr_output
 ```
 
 每个 PDF 会生成一个 UTF-8 文本文件：
@@ -87,7 +96,7 @@ python pdf_ocr_tool/ocr_pdf_articles.py pdf_folder --out-dir ocr_output
 ## 质量评估
 
 ```bash
-python pdf_ocr_tool/ocr_pdf_articles.py input.pdf --stdout --reference reference.txt --threshold 0.99 > output.txt
+tools/guziyuan_pdf_ocr_tool/ocr_pdf.sh input.pdf --stdout --reference reference.txt --threshold 0.99 > output.txt
 ```
 
 返回码：
