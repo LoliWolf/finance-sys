@@ -32,3 +32,5 @@ agent/**/__pycache__/
 api.exe
 /api
 cmd/api/.ocr_work
+/guziyuan_pdf_ocr_tool/
+testdata/guziyuanpdf
