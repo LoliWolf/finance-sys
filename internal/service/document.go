@@ -135,7 +135,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 	s.logger.InfoContext(ctx, "document service analyze content loaded", "document_id", documentID, "file_name", document.FileName, "size_bytes", len(content))
 
 	documentCfg := cfg.Document
-	documentCfg.PDFOCR.Enabled = document.PDFOCREnabled
+	documentCfg.PDFUseOCR = document.PDFOCREnabled
 	parsed, parseErr := s.parser.Parse(ctx, document.FileName, content, documentCfg)
 	parsed.DocumentID = document.ID
 	parseRunModel, err := parseRunToModel(parsed)

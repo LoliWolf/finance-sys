@@ -5,7 +5,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 5
+    "config_version": 6
   },
   "service": {
     "http": {
@@ -65,8 +65,7 @@
       "overlap_chars": 120
     },
     "pdf_ocr": {
-      // 图片型/水印型 PDF OCR fallback。工具协议：输入 PDF 文件路径，stdout 输出 UTF-8 文本。
-      "enabled": false,
+      // 文档上传的 pdf_use_ocr=true 时直接调用该工具；工具协议：输入 PDF 文件路径，stdout 输出 UTF-8 文本。
       // 保持稳定的仓库相对路径；非 Windows 运行时会自动映射到同名 .sh wrapper。
       "command": "tools/guziyuan_pdf_ocr_tool/ocr_pdf.bat",
       "args": ["{input}", "--stdout"],

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"finance-sys/internal/config"
@@ -30,20 +31,20 @@ func TestParseTextBuildsChunks(t *testing.T) {
 	require.NotEmpty(t, result.Chunks)
 }
 
-func TestParsePDFFallsBackToConfiguredOCR(t *testing.T) {
+func TestParsePDFUsesConfiguredOCRDirectly(t *testing.T) {
 	t.Setenv("FINANCE_SYS_PARSER_OCR_HELPER", "1")
 
 	service := parser.New(nil)
-	result, err := service.Parse(context.Background(), "scan.pdf", []byte("not a real pdf"), config.DocumentConfig{
+	result, err := service.Parse(context.Background(), "native.pdf", buildMinimalPDF("NATIVE TEXT MUST NOT WIN"), config.DocumentConfig{
+		PDFUseOCR: true,
 		Chunking: config.ChunkingConfig{
 			Enabled:     true,
 			TargetChars: 64,
 		},
 		PDFOCR: config.PDFOCRConfig{
-			Enabled:      true,
 			Command:      os.Args[0],
 			Args:         []string{"-test.run=^TestParserOCRHelperProcess$"},
-			MinTextChars: 80,
+			MinTextChars: 10,
 			TimeoutMS:    5000,
 		},
 	})
@@ -89,6 +90,36 @@ func TestParsePDFUsesPDFKitForChineseResearchReportOnMac(t *testing.T) {
 	require.Equal(t, domain.ParserNamePDFKit, result.ParserName)
 	require.Contains(t, result.CleanedText, "餐饮供应链温和复苏")
 	require.Contains(t, result.CleanedText, "华龙证券研究所")
+}
+
+func TestParsePDFUsesVendoredOCRForGuziyuanPDFOnMac(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("PDFKit and Vision OCR are provided by macOS")
+	}
+	content, err := os.ReadFile("../../testdata/guziyuanpdf/大成路旁7.21强修复.pdf")
+	if os.IsNotExist(err) {
+		t.Skip("local guziyuan acceptance PDF is not present")
+	}
+	require.NoError(t, err)
+
+	service := parser.New(nil)
+	result, err := service.Parse(context.Background(), "大成路旁7.21强修复.pdf", content, config.DocumentConfig{
+		PDFUseOCR: true,
+		Chunking:  config.ChunkingConfig{Enabled: true, TargetChars: 2000},
+		PDFOCR: config.PDFOCRConfig{
+			Command:              "../../tools/guziyuan_pdf_ocr_tool/ocr_pdf.bat",
+			Args:                 []string{"{input}", "--stdout"},
+			MinTextChars:         80,
+			TimeoutMS:            120000,
+			TreatExitCodeOneAsOK: true,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.ParserNamePDFOCR, result.ParserName)
+	require.Equal(t, true, result.RawMetadata["pdf_ocr_used"])
+	require.Contains(t, result.CleanedText, "7月22日强修复")
+	require.Contains(t, result.CleanedText, "共进股份")
+	require.NotContains(t, strings.ToLower(result.CleanedText), "guziyuan")
 }
 
 func buildMinimalPDF(text string) []byte {

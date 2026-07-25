@@ -401,7 +401,6 @@ func m8ConfigureRuntime(t *testing.T, app *bootstrap.App, agentBaseURL string) {
 	cfg.Document.AutoAnalyzeUpload = false
 	cfg.Document.SHA256Dedup = true
 	cfg.Document.PDFOCR = config.PDFOCRConfig{
-		Enabled:              true,
 		Command:              filepath.Join("..", "..", "tools", "guziyuan_pdf_ocr_tool", "ocr_pdf.bat"),
 		Args:                 []string{"{input}", "--stdout"},
 		MinTextChars:         80,

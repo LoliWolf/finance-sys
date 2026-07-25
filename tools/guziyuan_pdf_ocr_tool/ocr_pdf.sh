@@ -28,24 +28,20 @@ if ! "$python_cmd" -c 'from PIL import Image' >/dev/null 2>&1; then
   exit 126
 fi
 
-missing_commands=
-for required_command in pdftoppm; do
-  if ! command -v "$required_command" >/dev/null 2>&1; then
-    missing_commands="$missing_commands $required_command"
+system_name=$(uname -s)
+if [ "$system_name" = Darwin ]; then
+  if ! command -v swift >/dev/null 2>&1; then
+    echo "[ERROR] Swift is required for macOS PDFKit and Vision OCR." >&2
+    exit 127
   fi
-done
-if [ "$(uname -s)" = Darwin ] && ! command -v swift >/dev/null 2>&1; then
-  missing_commands="$missing_commands swift"
-fi
-if [ -n "$missing_commands" ]; then
-  echo "[ERROR] PDF OCR dependencies are missing from PATH:$missing_commands" >&2
-  echo "        macOS: install Poppler and the Xcode Command Line Tools; do not hard-code a Homebrew prefix." >&2
+elif ! command -v pdftoppm >/dev/null 2>&1; then
+  echo "[ERROR] PDF OCR dependency is missing from PATH: pdftoppm" >&2
   exit 127
 fi
 
 for optional_command in pdftotext pdftohtml pdfimages; do
   if ! command -v "$optional_command" >/dev/null 2>&1; then
-    echo "[WARN] Optional PDF extractor is unavailable; OCR will fall back to page rendering: $optional_command" >&2
+    echo "[WARN] Optional PDF extractor is unavailable: $optional_command" >&2
   fi
 done
 

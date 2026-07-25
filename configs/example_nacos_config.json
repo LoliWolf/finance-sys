@@ -3,7 +3,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 5
+    "config_version": 6
   },
   "service": {
     "http": {
@@ -73,7 +73,6 @@
       "overlap_chars": 120
     },
     "pdf_ocr": {
-      "enabled": false,
       "command": "tools/guziyuan_pdf_ocr_tool/ocr_pdf.bat",
       "args": [
         "{input}",

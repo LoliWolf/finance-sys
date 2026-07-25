@@ -132,7 +132,7 @@ onMounted(async () => {
           <label class="upload-drop">
             <FileUp :size="32" stroke-width="1.4" />
             <strong>{{ selectedFile?.name || '选择一份测试研报' }}</strong>
-            <span>{{ selectedFile ? `${formatNumber(selectedFile.size / 1024, 1)} KB` : '点击选择文件；PDF 默认先提取文本，需要时开启 OCR' }}</span>
+            <span>{{ selectedFile ? `${formatNumber(selectedFile.size / 1024, 1)} KB` : '点击选择文件；图片型或水印型 PDF 可直接使用专用 OCR' }}</span>
             <input type="file" accept=".pdf,.doc,.docx,.txt,.md,.csv" @change="chooseFile" />
           </label>
           <div class="form-grid" style="margin-top:16px">
@@ -140,7 +140,7 @@ onMounted(async () => {
             <div class="field"><label>作者（可选）</label><input v-model="author" placeholder="分析层会从正文抽取" /></div>
             <div class="field"><label>机构（可选）</label><input v-model="institution" placeholder="分析层会从正文抽取" /></div>
             <div class="field full"><label>报告 / 推荐日期</label><input v-model="reportDate" type="date" /><small class="muted">用于确定推荐事实日期和后续 T+1 评价起点。</small></div>
-            <label class="toggle-row full"><input v-model="pdfUseOCR" type="checkbox" />PDF 文本不足时启用 OCR</label>
+            <label class="toggle-row full"><input v-model="pdfUseOCR" type="checkbox" />PDF 使用专用 OCR（跳过内置与 PDFKit 文本提取）</label>
             <label class="toggle-row full"><input v-model="forceAnalyze" type="checkbox" />重复文件也重新分析（调整日期或解析逻辑后使用）</label>
             <button class="button primary full" type="button" :disabled="uploading || !selectedFile" @click="upload">
               <LoaderCircle v-if="uploading" class="spin" :size="16" /><Play v-else :size="16" />{{ uploading ? '正在执行完整分析链路…' : '上传并开始分析' }}

@@ -1104,7 +1104,6 @@ func m9RealHistoryAgentConfig(cfg config.AgentConfig) config.AgentConfig {
 func m9RealOCRConfig(t *testing.T, current config.PDFOCRConfig) config.PDFOCRConfig {
 	t.Helper()
 	ocr := current
-	ocr.Enabled = true
 	if strings.TrimSpace(ocr.Command) == "" || strings.Contains(strings.ToLower(ocr.Command), "fake") {
 		ocr.Command = filepath.Join("..", "..", "tools", "guziyuan_pdf_ocr_tool", "ocr_pdf.bat")
 	}

@@ -12,9 +12,9 @@ PDF 二进制输入 -> UTF-8 纯文本输出
 
 - Python 3.9+
 - Python 依赖：`pip install -r requirements.txt`
-- Poppler 命令行工具在 `PATH` 中：`pdftotext`、`pdftohtml`、`pdfimages`、`pdftoppm`
+- Windows：Poppler 的 `pdftoppm` 必须在 `PATH` 中；`pdftotext`、`pdftohtml`、`pdfimages` 为可选优化。
 - Windows：使用系统 Windows.Media.Ocr，需安装中文 OCR 语言包 `zh-Hans-CN`
-- macOS：使用系统 Vision OCR，通过 `mac_ocr.swift` 调用；需要 macOS 10.15+，并能运行 `swift`
+- macOS：使用系统 PDFKit 渲染和 Vision OCR，不要求安装 Poppler；需要 macOS 10.15+，并能运行 `swift`
 
 建议把 OCR 依赖放在工具自身的虚拟环境：
 
@@ -23,7 +23,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-Windows 可使用 `py -3 -m venv .venv` 和 `.venv\Scripts\python.exe -m pip install -r requirements.txt`。wrapper 会优先使用 OCR 工具自身的 `.venv`，然后使用 `$PYTHON`/`%PYTHON%`，最后才查找系统 Python。启动前会明确检查 Pillow、必需的 `pdftoppm` 和对应平台 OCR 运行时。`pdftotext`、`pdftohtml` 或 `pdfimages` 缺失时会警告并降级到整页渲染 + 系统 OCR。
+Windows 可使用 `py -3 -m venv .venv` 和 `.venv\Scripts\python.exe -m pip install -r requirements.txt`。wrapper 会优先使用 OCR 工具自身的 `.venv`，然后使用 `$PYTHON`/`%PYTHON%`，最后才查找系统 Python。macOS 缺少 Poppler 时会自动降级到 PDFKit 整页渲染；Windows 仍使用 `pdftoppm` 渲染。
 
 ## 二进制输入，纯文本输出
 
@@ -83,7 +83,7 @@ tools/guziyuan_pdf_ocr_tool/ocr_pdf.sh pdf_folder --out-dir ocr_output
 
 1. PDF XML 文本层，按字体颜色/透明度过滤水印。
 2. PDF 内嵌原图，绕过 PDF 叠加文字水印。
-3. 整页渲染后调用系统 OCR 兜底。
+3. 整页渲染后调用系统 OCR 兜底；macOS 使用 PDFKit + Vision，Windows 使用 Poppler + Windows.Media.Ocr。
 
 可手动指定：
 
@@ -119,7 +119,7 @@ exit:   0/1/2
 示例：
 
 ```bash
-python /path/to/pdf_ocr_tool/ocr_pdf_articles.py - < input.pdf > output.txt
+/path/to/pdf_ocr_tool/ocr_pdf.sh - < input.pdf > output.txt
 ```
 
 Windows：

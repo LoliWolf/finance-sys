@@ -19,6 +19,18 @@ func TestValidateExampleConfig(t *testing.T) {
 	require.NoError(t, config.Validate(&cfg))
 }
 
+func TestValidateRequiresPDFOCRCommand(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Document.PDFOCR.Command = ""
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "document.pdf_ocr.command is required")
+}
+
 func TestValidateAllowsConfiguredLongAgentTimeout(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)

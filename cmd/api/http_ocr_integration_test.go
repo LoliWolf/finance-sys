@@ -37,10 +37,9 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	cfg := cloneConfig(t, app.Runtime.Config())
 	cfg.Document.AutoAnalyzeUpload = false
 	cfg.Document.PDFOCR = config.PDFOCRConfig{
-		Enabled:      true,
 		Command:      os.Args[0],
 		Args:         []string{"-test.run=^TestHTTPOCRHelperProcess$"},
-		MinTextChars: 80,
+		MinTextChars: 10,
 		TimeoutMS:    5000,
 	}
 	app.Runtime.Update(&config.Snapshot{
@@ -97,7 +96,6 @@ func TestHTTPUploadAllFuturePDFs(t *testing.T) {
 	cfg := cloneConfig(t, app.Runtime.Config())
 	cfg.Document.AutoAnalyzeUpload = false
 	cfg.Document.PDFOCR = config.PDFOCRConfig{
-		Enabled:              true,
 		Command:              filepath.Join("..", "..", "tools", "guziyuan_pdf_ocr_tool", "ocr_pdf.bat"),
 		Args:                 []string{"{input}", "--stdout"},
 		MinTextChars:         80,

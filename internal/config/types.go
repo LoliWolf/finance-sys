@@ -83,6 +83,7 @@ type DocumentConfig struct {
 	SourceDefaults    SourceDefaultsConfig `json:"source_defaults"`
 	Chunking          ChunkingConfig       `json:"chunking"`
 	PDFOCR            PDFOCRConfig         `json:"pdf_ocr"`
+	PDFUseOCR         bool                 `json:"-"`
 }
 
 type SourceDefaultsConfig struct {
@@ -97,7 +98,6 @@ type ChunkingConfig struct {
 }
 
 type PDFOCRConfig struct {
-	Enabled              bool     `json:"enabled"`
 	Command              string   `json:"command"`
 	Args                 []string `json:"args"`
 	MinTextChars         int      `json:"min_text_chars"`

@@ -65,7 +65,7 @@ func (s *Service) Parse(ctx context.Context, fileName string, content []byte, cf
 	case ".docx":
 		text, err = parseDOCX(content)
 	case ".pdf":
-		text, result.ParserName, err = parsePDF(ctx, fileName, content, cfg.PDFOCR)
+		text, result.ParserName, err = parsePDF(ctx, fileName, content, cfg.PDFUseOCR, cfg.PDFOCR)
 		if result.ParserName == domain.ParserNamePDFOCR {
 			result.RawMetadata["pdf_ocr_used"] = true
 		}
@@ -186,9 +186,30 @@ func docTextExtractors(goos string, inputPath string) []docTextExtractor {
 	})
 }
 
-func parsePDF(ctx context.Context, fileName string, content []byte, ocrCfg config.PDFOCRConfig) (string, domain.ParserName, error) {
+func parsePDF(ctx context.Context, fileName string, content []byte, useOCR bool, ocrCfg config.PDFOCRConfig) (string, domain.ParserName, error) {
+	if useOCR {
+		tmpFile, err := os.CreateTemp("", "finance-sys-*.pdf")
+		if err != nil {
+			return "", domain.ParserNamePDFOCR, err
+		}
+		defer os.Remove(tmpFile.Name())
+		if _, err := tmpFile.Write(content); err != nil {
+			tmpFile.Close()
+			return "", domain.ParserNamePDFOCR, err
+		}
+		if err := tmpFile.Close(); err != nil {
+			return "", domain.ParserNamePDFOCR, err
+		}
+
+		ocrText, ocrErr := parsePDFWithOCR(ctx, tmpFile.Name(), ocrCfg)
+		if ocrErr != nil {
+			return "", domain.ParserNamePDFOCR, fmt.Errorf("ocr failed for %s: %w", fileName, ocrErr)
+		}
+		return ocrText, domain.ParserNamePDFOCR, nil
+	}
+
 	nativeText, nativeErr := extractPDFNative(content)
-	if nativeErr == nil && !needsPDFTextFallback(nativeText, ocrCfg) {
+	if nativeErr == nil && hasUsablePDFText(nativeText) {
 		return nativeText, domain.ParserNamePDFNative, nil
 	}
 	if nativeErr == nil && !hasUsablePDFText(nativeText) {
@@ -209,7 +230,7 @@ func parsePDF(ctx context.Context, fileName string, content []byte, ocrCfg confi
 	}
 
 	pdfKitText, pdfKitErr := extractPDFKit(ctx, tmpFile.Name())
-	if pdfKitErr == nil && !needsPDFTextFallback(pdfKitText, ocrCfg) {
+	if pdfKitErr == nil && hasUsablePDFText(pdfKitText) {
 		return pdfKitText, domain.ParserNamePDFKit, nil
 	}
 	if pdfKitErr == nil && !hasUsablePDFText(pdfKitText) {
@@ -219,33 +240,13 @@ func parsePDF(ctx context.Context, fileName string, content []byte, ocrCfg confi
 	cmd := exec.CommandContext(ctx, "pdftotext", "-layout", tmpFile.Name(), "-")
 	output, cliErr := cmd.Output()
 	cliText := string(output)
-	if cliErr == nil && !needsPDFTextFallback(cliText, ocrCfg) {
+	if cliErr == nil && hasUsablePDFText(cliText) {
 		return cliText, domain.ParserNamePDFCLI, nil
 	}
 	if cliErr == nil && !hasUsablePDFText(cliText) {
 		cliErr = fmt.Errorf("no text extracted")
 	}
-	if !ocrCfg.Enabled {
-		if hasUsablePDFText(nativeText) {
-			return nativeText, domain.ParserNamePDFNative, nil
-		}
-		if hasUsablePDFText(pdfKitText) {
-			return pdfKitText, domain.ParserNamePDFKit, nil
-		}
-		if hasUsablePDFText(cliText) {
-			return cliText, domain.ParserNamePDFCLI, nil
-		}
-		return "", domain.ParserNamePDFNative, fmt.Errorf("PDF text extraction failed for %s: native parser: %v; PDFKit: %v; pdftotext: %v", fileName, nativeErr, pdfKitErr, cliErr)
-	}
-
-	ocrText, ocrErr := parsePDFWithOCR(ctx, tmpFile.Name(), ocrCfg)
-	if ocrErr != nil {
-		if nativeErr != nil && pdfKitErr != nil && cliErr != nil {
-			return "", domain.ParserNamePDFOCR, fmt.Errorf("PDF text extraction failed for %s: native parser: %v; PDFKit: %v; pdftotext: %v; ocr: %v", fileName, nativeErr, pdfKitErr, cliErr, ocrErr)
-		}
-		return "", domain.ParserNamePDFOCR, fmt.Errorf("ocr failed for %s: %w", fileName, ocrErr)
-	}
-	return ocrText, domain.ParserNamePDFOCR, nil
+	return "", domain.ParserNamePDFNative, fmt.Errorf("PDF text extraction failed for %s: native parser: %v; PDFKit: %v; pdftotext: %v", fileName, nativeErr, pdfKitErr, cliErr)
 }
 
 func extractPDFKit(ctx context.Context, inputPath string) (string, error) {
@@ -289,19 +290,6 @@ func extractPDFNative(content []byte) (text string, err error) {
 	return string(output), nil
 }
 
-func needsPDFTextFallback(text string, cfg config.PDFOCRConfig) bool {
-	if !hasUsablePDFText(text) {
-		return true
-	}
-	if !cfg.Enabled {
-		return false
-	}
-	if cfg.MinTextChars <= 0 {
-		return strings.TrimSpace(text) == ""
-	}
-	return len([]rune(cleanText(text))) < cfg.MinTextChars
-}
-
 func hasUsablePDFText(text string) bool {
 	return strings.TrimSpace(cleanText(text)) != ""
 }
@@ -334,19 +322,25 @@ func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRCon
 	if err != nil {
 		if cfg.TreatExitCodeOneAsOK {
 			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(output) > 0 {
-				return string(output), nil
+				err = nil
 			}
 		}
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
-			message = err.Error()
+		if err != nil {
+			message := strings.TrimSpace(stderr.String())
+			if message == "" {
+				message = err.Error()
+			}
+			return "", fmt.Errorf("%s", message)
 		}
-		return "", fmt.Errorf("%s", message)
 	}
-	if strings.TrimSpace(string(output)) == "" {
+	text := string(output)
+	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("ocr produced empty text")
 	}
-	return string(output), nil
+	if cfg.MinTextChars > 0 && len([]rune(cleanText(text))) < cfg.MinTextChars {
+		return "", fmt.Errorf("ocr produced insufficient text: got %d chars, require at least %d", len([]rune(cleanText(text))), cfg.MinTextChars)
+	}
+	return text, nil
 }
 
 func buildOCRExec(command string, args []string) (string, []string, error) {
