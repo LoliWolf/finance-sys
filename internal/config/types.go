@@ -11,6 +11,7 @@ type Config struct {
 	LLM         LLMConfig         `json:"llm"`
 	Agent       AgentConfig       `json:"agent"`
 	MarketData  MarketDataConfig  `json:"market_data"`
+	Evaluation  EvaluationConfig  `json:"evaluation"`
 	Rules       RulesConfig       `json:"rules"`
 }
 
@@ -193,6 +194,38 @@ type StockDailySyncConfig struct {
 	PreserveRawUnits       bool     `json:"preserve_raw_units"`
 	StoreRawContent        bool     `json:"store_raw_content"`
 	MissingItemMarkEnabled bool     `json:"missing_item_mark_enabled"`
+}
+
+type EvaluationConfig struct {
+	Enabled                   bool                            `json:"enabled"`
+	RecommendationPerformance RecommendationPerformanceConfig `json:"recommendation_performance"`
+}
+
+type RecommendationPerformanceConfig struct {
+	Enabled               bool                    `json:"enabled"`
+	Windows               []int                   `json:"windows"`
+	QuoteSource           string                  `json:"quote_source"`
+	EntryPriceRule        string                  `json:"entry_price_rule"`
+	BasePriceRule         string                  `json:"base_price_rule"`
+	WinThresholdRatio     float64                 `json:"win_threshold_ratio"`
+	MinQuoteCoverageRatio float64                 `json:"min_quote_coverage_ratio"`
+	CalcVersion           string                  `json:"calc_version"`
+	AsyncWorker           EvaluationWorkerConfig  `json:"async_worker"`
+	Ranking               EvaluationRankingConfig `json:"ranking"`
+}
+
+type EvaluationWorkerConfig struct {
+	Enabled           bool `json:"enabled"`
+	PollIntervalMS    int  `json:"poll_interval_ms"`
+	ClaimTimeoutMS    int  `json:"claim_timeout_ms"`
+	MaxConcurrentRuns int  `json:"max_concurrent_runs"`
+	BatchSize         int  `json:"batch_size"`
+}
+
+type EvaluationRankingConfig struct {
+	DefaultWindowDays     int    `json:"default_window_days"`
+	DefaultMinSampleCount int    `json:"default_min_sample_count"`
+	DefaultSort           string `json:"default_sort"`
 }
 
 type RulesConfig struct {

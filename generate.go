@@ -83,6 +83,10 @@ func main() {
 			return "market_data_sync_run"
 		case "market_data_sync_missing_items":
 			return "market_data_sync_missing_item"
+		case "recommendation_evaluation_runs":
+			return "recommendation_evaluation_run"
+		case "recommendation_event_window_metrics":
+			return "recommendation_event_window_metric"
 		default:
 			return tableName
 		}
@@ -155,6 +159,29 @@ func main() {
 		),
 		g.GenerateModelAs("market_data_sync_missing_items", "MarketDataSyncMissingItem",
 			gen.FieldRename("ts_code", "TSCode"),
+		),
+		g.GenerateModelAs("recommendation_evaluation_runs", "RecommendationEvaluationRun",
+			gen.FieldRename("request_params_json", "RequestParamsJSON"),
+			gen.FieldType("request_params_json", "[]byte"),
+			gen.FieldType("started_at", "*time.Time"),
+			gen.FieldType("finished_at", "*time.Time"),
+		),
+		g.GenerateModelAs("recommendation_event_window_metrics", "RecommendationEventWindowMetric",
+			gen.FieldRename("ts_code", "TSCode"),
+			gen.FieldType("base_date", "*time.Time"),
+			gen.FieldType("base_close_price", "*float64"),
+			gen.FieldType("entry_date", "*time.Time"),
+			gen.FieldType("entry_price", "*float64"),
+			gen.FieldType("exit_date", "*time.Time"),
+			gen.FieldType("exit_close_price", "*float64"),
+			gen.FieldType("raw_return_ratio", "*float64"),
+			gen.FieldType("direction_return_ratio", "*float64"),
+			gen.FieldType("max_favorable_return_ratio", "*float64"),
+			gen.FieldType("max_adverse_return_ratio", "*float64"),
+			gen.FieldType("max_drawdown_ratio", "*float64"),
+			gen.FieldType("win_flag", "*bool"),
+			gen.FieldType("best_trade_date", "*time.Time"),
+			gen.FieldType("worst_trade_date", "*time.Time"),
 		),
 	)
 	g.Execute()

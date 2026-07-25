@@ -103,6 +103,12 @@ func Validate(cfg *Config) error {
 			validateStockDailySync(cfg.MarketData.StockDaily, require)
 		}
 	}
+	if cfg.Evaluation.Enabled {
+		require(cfg.Evaluation.RecommendationPerformance.Enabled, "evaluation.recommendation_performance.enabled must be true when evaluation.enabled is true")
+		if cfg.Evaluation.RecommendationPerformance.Enabled {
+			validateRecommendationPerformance(cfg.Evaluation.RecommendationPerformance, require)
+		}
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},
@@ -152,4 +158,38 @@ func validateStockDailySync(cfg StockDailySyncConfig, require func(bool, string)
 		require(ok, fmt.Sprintf("unsupported market_data.stock_daily.sync_asset_types value %q", assetType))
 	}
 	require(len(cfg.Fields) > 0, "market_data.stock_daily.fields must not be empty when enabled")
+}
+
+func validateRecommendationPerformance(cfg RecommendationPerformanceConfig, require func(bool, string)) {
+	require(len(cfg.Windows) > 0, "evaluation.recommendation_performance.windows must not be empty when enabled")
+	seenWindows := make(map[int]struct{}, len(cfg.Windows))
+	for _, window := range cfg.Windows {
+		require(window > 0, "evaluation.recommendation_performance.windows must contain only positive values")
+		_, duplicated := seenWindows[window]
+		require(!duplicated, "evaluation.recommendation_performance.windows must not contain duplicates")
+		seenWindows[window] = struct{}{}
+	}
+	require(strings.TrimSpace(cfg.QuoteSource) != "", "evaluation.recommendation_performance.quote_source is required when enabled")
+	require(cfg.EntryPriceRule == "NEXT_TRADE_OPEN", "evaluation.recommendation_performance.entry_price_rule must be NEXT_TRADE_OPEN")
+	require(cfg.BasePriceRule == "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE", "evaluation.recommendation_performance.base_price_rule must be RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE")
+	require(cfg.WinThresholdRatio > -1 && cfg.WinThresholdRatio < 1, "evaluation.recommendation_performance.win_threshold_ratio must be in (-1,1)")
+	require(cfg.MinQuoteCoverageRatio > 0 && cfg.MinQuoteCoverageRatio <= 1, "evaluation.recommendation_performance.min_quote_coverage_ratio must be in (0,1]")
+	require(strings.TrimSpace(cfg.CalcVersion) != "", "evaluation.recommendation_performance.calc_version is required when enabled")
+	if cfg.AsyncWorker.Enabled {
+		require(cfg.AsyncWorker.PollIntervalMS > 0, "evaluation.recommendation_performance.async_worker.poll_interval_ms must be positive when enabled")
+		require(cfg.AsyncWorker.ClaimTimeoutMS > 0, "evaluation.recommendation_performance.async_worker.claim_timeout_ms must be positive when enabled")
+		require(cfg.AsyncWorker.MaxConcurrentRuns > 0, "evaluation.recommendation_performance.async_worker.max_concurrent_runs must be positive when enabled")
+		require(cfg.AsyncWorker.BatchSize > 0, "evaluation.recommendation_performance.async_worker.batch_size must be positive when enabled")
+	}
+	_, defaultWindowExists := seenWindows[cfg.Ranking.DefaultWindowDays]
+	require(defaultWindowExists, "evaluation.recommendation_performance.ranking.default_window_days must be present in windows")
+	require(cfg.Ranking.DefaultMinSampleCount >= 0, "evaluation.recommendation_performance.ranking.default_min_sample_count must be zero or positive")
+	allowedSorts := map[string]struct{}{
+		"win_rate":          {},
+		"avg_return":        {},
+		"sample_count":      {},
+		"performance_score": {},
+	}
+	_, sortAllowed := allowedSorts[cfg.Ranking.DefaultSort]
+	require(sortAllowed, "evaluation.recommendation_performance.ranking.default_sort is unsupported")
 }

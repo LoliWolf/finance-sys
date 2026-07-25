@@ -3,7 +3,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 3
+    "config_version": 5
   },
   "service": {
     "http": {
@@ -11,7 +11,7 @@
       "port": 18080,
       "api_prefix": "/api/v1",
       "read_timeout_ms": 30000,
-      "write_timeout_ms": 30000,
+      "write_timeout_ms": 900000,
       "idle_timeout_ms": 60000,
       "shutdown_timeout_seconds": 20,
       "max_header_bytes": 1048576,
@@ -182,6 +182,36 @@
       "preserve_raw_units": true,
       "store_raw_content": true,
       "missing_item_mark_enabled": true
+    }
+  },
+  "evaluation": {
+    "enabled": false,
+    "recommendation_performance": {
+      "enabled": false,
+      "windows": [
+        5,
+        10,
+        30,
+        90
+      ],
+      "quote_source": "TUSHARE",
+      "entry_price_rule": "NEXT_TRADE_OPEN",
+      "base_price_rule": "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE",
+      "win_threshold_ratio": 0,
+      "min_quote_coverage_ratio": 1,
+      "calc_version": "rec-performance-v1",
+      "async_worker": {
+        "enabled": false,
+        "poll_interval_ms": 1000,
+        "claim_timeout_ms": 300000,
+        "max_concurrent_runs": 1,
+        "batch_size": 500
+      },
+      "ranking": {
+        "default_window_days": 30,
+        "default_min_sample_count": 5,
+        "default_sort": "win_rate"
+      }
     }
   },
   "rules": {

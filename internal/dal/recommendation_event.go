@@ -3,6 +3,7 @@ package dal
 import (
 	"context"
 	"errors"
+	"time"
 
 	"finance-sys/internal/domain/db_model"
 
@@ -13,6 +14,17 @@ import (
 var RecommendationEvents = &RecommendationEventDML{}
 
 type RecommendationEventDML struct{}
+
+type RecommendationEventEvaluationFilter struct {
+	DateFrom   *time.Time
+	DateTo     *time.Time
+	BloggerIDs []int64
+	Symbols    []string
+	EventIDs   []int64
+	OnlyActive bool
+	AfterID    int64
+	Limit      int
+}
 
 func (*RecommendationEventDML) Create(ctx context.Context, db *gorm.DB, model *db_model.RecommendationEvent) error {
 	return db.WithContext(ctx).Create(model).Error
@@ -83,6 +95,39 @@ func (*RecommendationEventDML) QueryLatest(ctx context.Context, db *gorm.DB, lim
 func (*RecommendationEventDML) QueryByParam(ctx context.Context, db *gorm.DB, param QueryParam) ([]db_model.RecommendationEvent, error) {
 	var models []db_model.RecommendationEvent
 	if err := ApplyQuery(ctx, db, param).Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
+func (*RecommendationEventDML) QueryForEvaluation(ctx context.Context, db *gorm.DB, filter RecommendationEventEvaluationFilter) ([]db_model.RecommendationEvent, error) {
+	var models []db_model.RecommendationEvent
+	tx := db.WithContext(ctx).Order("id ASC")
+	if filter.DateFrom != nil {
+		tx = tx.Where("recommend_date >= ?", *filter.DateFrom)
+	}
+	if filter.DateTo != nil {
+		tx = tx.Where("recommend_date <= ?", *filter.DateTo)
+	}
+	if len(filter.BloggerIDs) > 0 {
+		tx = tx.Where("blogger_id IN ?", filter.BloggerIDs)
+	}
+	if len(filter.Symbols) > 0 {
+		tx = tx.Where("symbol IN ?", filter.Symbols)
+	}
+	if len(filter.EventIDs) > 0 {
+		tx = tx.Where("id IN ?", filter.EventIDs)
+	}
+	if filter.OnlyActive {
+		tx = tx.Where("status = ?", "ACTIVE")
+	}
+	if filter.AfterID > 0 {
+		tx = tx.Where("id > ?", filter.AfterID)
+	}
+	if filter.Limit > 0 {
+		tx = tx.Limit(filter.Limit)
+	}
+	if err := tx.Find(&models).Error; err != nil {
 		return nil, err
 	}
 	return models, nil

@@ -17,6 +17,7 @@ import (
 	"finance-sys/internal/domain"
 	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/service"
+	"finance-sys/internal/stats"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -33,6 +34,8 @@ type Server struct {
 	documents  *service.DocumentService
 	security   *service.SecurityService
 	marketData marketDataService
+	evaluation recommendationEvaluationService
+	stats      performanceStatsService
 	reloader   ConfigReloader
 	logger     *slog.Logger
 }
@@ -42,12 +45,31 @@ type marketDataService interface {
 	ListSyncRuns(context.Context, service.MarketDataSyncRunQuery) ([]db_model.MarketDataSyncRun, error)
 }
 
+type recommendationEvaluationService interface {
+	CreateRun(context.Context, service.RecommendationEvaluationRequest) (*service.RecommendationEvaluationRunResponse, error)
+	GetRun(context.Context, int64) (*service.RecommendationEvaluationRunView, error)
+	ListRuns(context.Context, service.RecommendationEvaluationRunQuery) ([]service.RecommendationEvaluationRunView, error)
+}
+
+type performanceStatsService interface {
+	BloggerRankings(context.Context, stats.Filter) (*stats.BloggerRankingResponse, error)
+	BloggerSummary(context.Context, int64, stats.Filter) (*stats.BloggerSummaryResponse, error)
+	BloggerTimeseries(context.Context, int64, stats.Filter) (*stats.BloggerTimeseriesResponse, error)
+	RecommendationPerformanceList(context.Context, stats.Filter) (*stats.RecommendationPerformanceList, error)
+	RecommendationDetail(context.Context, int64) (*stats.RecommendationDetail, error)
+	PriceSeries(context.Context, int64, int, int) (*stats.PriceSeriesResponse, error)
+	SecurityRankings(context.Context, stats.Filter) (*stats.SecurityRankingResponse, error)
+	SecuritySummary(context.Context, string, stats.Filter) (*stats.SecurityRankingItem, error)
+}
+
 func NewServer(
 	db *gorm.DB,
 	runtime *config.Runtime,
 	documents *service.DocumentService,
 	security *service.SecurityService,
 	marketData marketDataService,
+	evaluation recommendationEvaluationService,
+	performanceStats performanceStatsService,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
@@ -57,6 +79,8 @@ func NewServer(
 		documents:  documents,
 		security:   security,
 		marketData: marketData,
+		evaluation: evaluation,
+		stats:      performanceStats,
 		reloader:   reloader,
 		logger:     logger,
 	}
@@ -76,8 +100,6 @@ func (s *Server) Router() http.Handler {
 		apiPrefix = cfg.Service.HTTP.APIPrefix
 	}
 
-	router.Get("/", s.handleUploadPage)
-	router.Get("/upload", s.handleUploadPage)
 	router.Get("/healthz", s.handleHealth)
 	router.Route(apiPrefix, func(r chi.Router) {
 		r.Get("/documents", s.handleListDocuments)
@@ -91,13 +113,29 @@ func (s *Server) Router() http.Handler {
 		r.Get("/plans", s.handleListPlans)
 		r.Get("/recommendations", s.handleListRecommendations)
 		r.Get("/recommendations/{id}", s.handleGetRecommendation)
+		r.Get("/recommendations/{id}/performance", s.handleGetRecommendationPerformance)
+		r.Get("/recommendations/{id}/price-series", s.handleGetRecommendationPriceSeries)
+		r.Get("/recommendation-performance", s.handleListRecommendationPerformance)
+		r.Get("/bloggers/rankings", s.handleBloggerRankings)
+		r.Get("/bloggers/{id}/performance/summary", s.handleBloggerPerformanceSummary)
+		r.Get("/bloggers/{id}/performance/timeseries", s.handleBloggerPerformanceTimeseries)
+		r.Get("/bloggers/{id}/recommendations/performance", s.handleBloggerRecommendationPerformance)
+		r.Get("/securities/rankings", s.handleSecurityRankings)
+		r.Get("/securities/{tsCode}/performance/summary", s.handleSecurityPerformanceSummary)
+		r.Get("/securities/{tsCode}/recommendations/performance", s.handleSecurityRecommendationPerformance)
 		r.Get("/admin/security/lookup", s.handleLookupSecurity)
 		r.Post("/admin/market/stock-daily/sync", s.handleCreateStockDailySyncRun)
 		r.Get("/admin/market/sync-runs", s.handleListMarketDataSyncRuns)
+		r.Post("/admin/evaluations/recommendations/runs", s.handleCreateRecommendationEvaluationRun)
+		r.Get("/admin/evaluations/recommendations/runs", s.handleListRecommendationEvaluationRuns)
+		r.Get("/admin/evaluations/recommendations/runs/{id}", s.handleGetRecommendationEvaluationRun)
 		r.Post("/internal/security/resolve", s.handleResolveSecurity)
 		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
 	})
+	frontend := newFrontendHandler()
+	router.Get("/", frontend.ServeHTTP)
+	router.Get("/*", frontend.ServeHTTP)
 	return router
 }
 
@@ -162,6 +200,12 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logRequest(r, slog.LevelInfo, "handle upload document file loaded", "file_name", header.Filename, "size_bytes", len(content))
+	tradeDate, hasTradeDate, err := parseOptionalTradeDate(r.FormValue("trade_date"))
+	if err != nil {
+		s.logRequest(r, slog.LevelWarn, "handle upload document invalid trade_date", "file_name", header.Filename, "error", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	document, duplicate, err := s.documents.IngestDocument(r.Context(), domain.DocumentIngestRequest{
 		Author:      r.FormValue("author"),
@@ -182,14 +226,27 @@ func (s *Server) handleUploadDocument(w http.ResponseWriter, r *http.Request) {
 		"duplicate": duplicate,
 		"document":  document,
 	}
-	shouldAutoAnalyze := cfg.Document.AutoAnalyzeUpload && (!duplicate || document.Status == domain.DocumentStatusFailed)
+	forceAnalyze := parseBoolForm(r.FormValue("force_analyze"))
+	shouldAutoAnalyze := cfg.Document.AutoAnalyzeUpload && (!duplicate || forceAnalyze || document.Status == domain.DocumentStatusFailed || document.Status == domain.DocumentStatusInvalid)
 	if shouldAutoAnalyze {
 		reason := "new_document"
-		if duplicate {
-			reason = "duplicate_failed_rerun"
+		if duplicate && forceAnalyze {
+			reason = "duplicate_forced_retry"
+		} else if duplicate {
+			reason = "duplicate_retry"
 		}
-		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze start", "document_id", document.ID, "reason", reason, "document_status", document.Status)
-		plans, err := s.documents.AnalyzeDocument(r.Context(), document.ID)
+		logAttrs := []any{"document_id", document.ID, "reason", reason, "document_status", document.Status}
+		if hasTradeDate {
+			logAttrs = append(logAttrs, "trade_date", tradeDate.Format(time.DateOnly))
+			response["analysis_trade_date"] = tradeDate.Format(time.DateOnly)
+		}
+		s.logRequest(r, slog.LevelInfo, "handle upload document auto analyze start", logAttrs...)
+		var plans []domain.CandidatePlan
+		if hasTradeDate {
+			plans, err = s.documents.AnalyzeDocumentForTradeDate(r.Context(), document.ID, tradeDate)
+		} else {
+			plans, err = s.documents.AnalyzeDocument(r.Context(), document.ID)
+		}
 		if err != nil {
 			s.logRequest(r, slog.LevelError, "handle upload document auto analyze failed", "document_id", document.ID, "reason", reason, "error", err.Error())
 			writeError(w, http.StatusInternalServerError, err)

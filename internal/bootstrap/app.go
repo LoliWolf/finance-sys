@@ -21,6 +21,7 @@ import (
 	"finance-sys/internal/parser"
 	"finance-sys/internal/rules"
 	"finance-sys/internal/service"
+	"finance-sys/internal/stats"
 	"finance-sys/internal/telemetry"
 
 	"gorm.io/driver/mysql"
@@ -35,6 +36,9 @@ type App struct {
 	SecurityService   *service.SecurityService
 	MarketDataService *service.MarketDataService
 	MarketDataWorker  *service.MarketDataWorker
+	EvaluationService *service.RecommendationEvaluationService
+	EvaluationWorker  *service.RecommendationEvaluationWorker
+	StatsService      *stats.Service
 	HTTPServer        *httpapi.Server
 	Watcher           *nacoscfg.Watcher
 	Reloader          *nacoscfg.Reloader
@@ -95,6 +99,9 @@ func Build(ctx context.Context) (*App, error) {
 	marketDataProvider := marketdata.NewTushareProvider(marketDataHTTPClient)
 	marketDataService := service.NewMarketDataService(db, runtime, marketDataProvider, logger)
 	marketDataWorker := service.NewMarketDataWorker(marketDataService, runtime, logger)
+	evaluationService := service.NewRecommendationEvaluationService(db, runtime, logger)
+	evaluationWorker := service.NewRecommendationEvaluationWorker(evaluationService, runtime, logger)
+	statsService := stats.NewService(db, runtime)
 
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader
@@ -103,7 +110,7 @@ func Build(ctx context.Context) (*App, error) {
 		reloader = nacoscfg.NewReloader(loader, runtime, db, logger)
 	}
 
-	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, reloader, logger)
+	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, evaluationService, statsService, reloader, logger)
 	logger.Info("bootstrap build completed")
 	return &App{
 		Runtime:           runtime,
@@ -113,6 +120,9 @@ func Build(ctx context.Context) (*App, error) {
 		SecurityService:   securityService,
 		MarketDataService: marketDataService,
 		MarketDataWorker:  marketDataWorker,
+		EvaluationService: evaluationService,
+		EvaluationWorker:  evaluationWorker,
+		StatsService:      statsService,
 		HTTPServer:        httpServer,
 		Watcher:           watcher,
 		Reloader:          reloader,

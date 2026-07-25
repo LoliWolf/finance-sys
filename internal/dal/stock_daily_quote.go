@@ -2,6 +2,8 @@ package dal
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"finance-sys/internal/domain/db_model"
 
@@ -43,4 +45,52 @@ func (*StockDailyQuoteDML) UpsertBatch(ctx context.Context, db *gorm.DB, models 
 			"updated_at":         gorm.Expr("CURRENT_TIMESTAMP"),
 		}),
 	}).CreateInBatches(models, batchSize).Error
+}
+
+func (*StockDailyQuoteDML) QueryByTSCodeRange(ctx context.Context, db *gorm.DB, tsCode string, source string, dateFrom time.Time, dateTo time.Time) ([]db_model.StockDailyQuote, error) {
+	var models []db_model.StockDailyQuote
+	tx := db.WithContext(ctx).
+		Where("ts_code = ?", tsCode).
+		Where("source = ?", source).
+		Where("trade_date >= ?", dateFrom).
+		Order("trade_date ASC")
+	if !dateTo.IsZero() {
+		tx = tx.Where("trade_date <= ?", dateTo)
+	}
+	if err := tx.Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
+func (*StockDailyQuoteDML) QueryTradingDates(ctx context.Context, db *gorm.DB, source string, dateFrom time.Time, dateTo time.Time) ([]time.Time, error) {
+	var dates []time.Time
+	tx := db.WithContext(ctx).
+		Model(&db_model.StockDailyQuote{}).
+		Distinct("trade_date").
+		Where("source = ?", source).
+		Where("trade_date >= ?", dateFrom).
+		Order("trade_date ASC")
+	if !dateTo.IsZero() {
+		tx = tx.Where("trade_date <= ?", dateTo)
+	}
+	if err := tx.Pluck("trade_date", &dates).Error; err != nil {
+		return nil, err
+	}
+	return dates, nil
+}
+
+func (*StockDailyQuoteDML) QueryLatestTradeDate(ctx context.Context, db *gorm.DB, source string) (time.Time, error) {
+	var model db_model.StockDailyQuote
+	err := db.WithContext(ctx).
+		Where("source = ?", source).
+		Order("trade_date DESC").
+		First(&model).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return model.TradeDate, nil
 }
