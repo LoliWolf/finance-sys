@@ -3,12 +3,13 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 10
+    "config_version": 11
   },
   "service": {
     "http": {
       "host": "0.0.0.0",
-      "port": 18080,
+      "port": 18081,
+      "port_test": 18080,
       "api_prefix": "/api/v1",
       "read_timeout_ms": 30000,
       "write_timeout_ms": 900000,
@@ -125,7 +126,7 @@
     "mode": "primary",
     "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
     "health_endpoint": "http://127.0.0.1:8108/healthz",
-    "internal_api_base_url": "http://127.0.0.1:8080",
+    "internal_api_base_url": "http://127.0.0.1:18081",
     "tushare": {
       "enabled": false,
       "token": "",

@@ -5,12 +5,15 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 10
+    "config_version": 11
   },
   "service": {
     "http": {
       "host": "0.0.0.0",
-      "port": 18080,
+      // 生产环境端口；仅 FINANCE_SYS_ENV 精确等于 PROD 时使用。
+      "port": 18081,
+      // 开发与测试环境端口；FINANCE_SYS_ENV 缺失或不是 PROD 时使用。
+      "port_test": 18080,
       "api_prefix": "/api/v1",
       "read_timeout_ms": 30000,
       // 文档上传会同步等待模型分析完成，需覆盖长研报的 Agent 最长处理时间。
@@ -125,7 +128,7 @@
     "endpoint": "http://127.0.0.1:8108/v1/resolve-document",
     "health_endpoint": "http://127.0.0.1:8108/healthz",
     // Python Agent 调 Go 主系统内部只读工具接口的基础地址；M6 证券解析工具使用。
-    "internal_api_base_url": "http://127.0.0.1:8080",
+    "internal_api_base_url": "http://127.0.0.1:18081",
     "tushare": {
       // M6 Tushare 官方 stock_basic 只读召回工具。token 应放在 Nacos 私密配置，不提交真实值。
       "enabled": false,

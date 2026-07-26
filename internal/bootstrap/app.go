@@ -199,7 +199,7 @@ func loadLocalExampleSnapshot() (*config.Snapshot, error) {
 	if err := config.Validate(&cfg); err != nil {
 		return nil, err
 	}
-	config.SelectDatabaseForEnvironment(&cfg, os.Getenv(config.FinanceSysEnvironmentVariable))
+	config.ApplyRuntimeEnvironment(&cfg, os.Getenv(config.FinanceSysEnvironmentVariable))
 	return config.NewSnapshot(&cfg, raw, "local_example", time.Now())
 }
 

@@ -102,12 +102,31 @@ try {
   if ($nacosConfig -is [string]) {
     $nacosConfig = $nacosConfig | ConvertFrom-Json
   }
-  $AppPort = [string]$nacosConfig.service.http.port
+  $ProdAppPort = [string]$nacosConfig.service.http.port
+  $TestAppPort = [string]$nacosConfig.service.http.port_test
 } catch {
-  throw "Unable to read service.http.port from Nacos at $($env:NACOS_SERVER_ADDR): $($_.Exception.Message)"
+  throw "Unable to read HTTP ports from Nacos at $($env:NACOS_SERVER_ADDR): $($_.Exception.Message)"
 }
-if ($AppPort -notmatch '^\d+$') {
-  throw "Nacos service.http.port must be numeric: $AppPort"
+if ($ProdAppPort -notmatch '^\d+$') {
+  throw "Nacos service.http.port must be numeric: $ProdAppPort"
+}
+if ($TestAppPort -notmatch '^\d+$') {
+  throw "Nacos service.http.port_test must be numeric: $TestAppPort"
+}
+if ([int]$ProdAppPort -le 0 -or [int]$ProdAppPort -gt 65535) {
+  throw "Nacos service.http.port must be in (0,65535]: $ProdAppPort"
+}
+if ([int]$TestAppPort -le 0 -or [int]$TestAppPort -gt 65535) {
+  throw "Nacos service.http.port_test must be in (0,65535]: $TestAppPort"
+}
+if ([int]$ProdAppPort -eq [int]$TestAppPort) {
+  throw "Nacos production and test HTTP ports must be different."
+}
+$DatabaseProfile = "test"
+$AppPort = $TestAppPort
+if ($env:FINANCE_SYS_ENV -ceq "PROD") {
+  $DatabaseProfile = "production"
+  $AppPort = $ProdAppPort
 }
 $AppBaseUrl = "http://127.0.0.1:$AppPort"
 
@@ -145,12 +164,9 @@ if ($listeners) {
   throw "Port $AppPort is already in use by PID(s): $owners. Stop that process or update service.http.port in Nacos."
 }
 
-$DatabaseProfile = "test"
-if ($env:FINANCE_SYS_ENV -ceq "PROD") {
-  $DatabaseProfile = "production"
-}
 Write-Host "[INFO] Nacos: $($env:NACOS_SERVER_ADDR) dataId=$NacosDataId group=$NacosGroup namespace=$NacosNamespace"
 Write-Host "[INFO] Database profile: $DatabaseProfile (FINANCE_SYS_ENV=$($env:FINANCE_SYS_ENV))"
+Write-Host "[INFO] Effective HTTP port: $AppPort"
 
 if ($Mode -eq "debug") {
   Write-Host "[DEBUG] Starting API in the foreground. Press Ctrl+C to stop."

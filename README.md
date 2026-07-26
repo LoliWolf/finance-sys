@@ -131,7 +131,7 @@ Windows：
 
 ## Nacos 配置
 
-运行时通过环境变量 `NACOS_SERVER_ADDR` 读取 Nacos 中的单个 JSON 配置文档。生产 MySQL 完整配置位于 `database`，同构开发测试库完整配置位于 `database_test`。只有进程环境变量 `FINANCE_SYS_ENV` 精确等于 `PROD` 才使用 `database`；变量缺失、为空、大小写不符或其他值均使用 `database_test`。HTTP 端口、LLM Key、Tushare token 和业务开关也都在 Nacos，不在本地 bootstrap 文件中重复维护。没有设置 Nacos 地址，或 Nacos 配置读取失败时，Go 主程序会降级读取 `configs/example_nacos_config.json`，并应用同一数据库选择规则。
+运行时通过环境变量 `NACOS_SERVER_ADDR` 读取 Nacos 中的单个 JSON 配置文档。生产 MySQL 完整配置位于 `database`，同构开发测试库完整配置位于 `database_test`；生产 HTTP 端口位于 `service.http.port`，测试 HTTP 端口位于 `service.http.port_test`。只有进程环境变量 `FINANCE_SYS_ENV` 精确等于 `PROD` 才使用生产数据库与生产端口；变量缺失、为空、大小写不符或其他值均使用测试数据库与测试端口。LLM Key、Tushare token 和业务开关也都在 Nacos，不在本地 bootstrap 文件中重复维护。没有设置 Nacos 地址，或 Nacos 配置读取失败时，Go 主程序会降级读取 `configs/example_nacos_config.json`，并应用同一环境规则。
 
 复制 bootstrap 示例：
 
@@ -218,9 +218,9 @@ start_api_nacos.bat
 debug_api_nacos.bat
 ```
 
-脚本优先读取不入库的 `bootstrap_go122.env`，文件不存在时读取 `bootstrap_go122.env.example`。它们会直接从 Nacos JSON 读取 `service.http.port`，因此 bootstrap 文件不保存 HTTP 端口，也不接受本地 `APP_PORT`/`APP_BASE_URL` 覆盖。
+脚本优先读取不入库的 `bootstrap_go122.env`，文件不存在时读取 `bootstrap_go122.env.example`。它们会直接从 Nacos JSON 读取生产端口 `service.http.port` 和测试端口 `service.http.port_test`；只有 `FINANCE_SYS_ENV=PROD` 才使用生产端口，其余情况一律使用测试端口，不做端口加减推导。因此 bootstrap 文件不保存 HTTP 端口，也不接受本地 `APP_PORT`/`APP_BASE_URL` 覆盖。
 
-脚本只会停止上次由同一脚本记录的 PID；如果端口被其他进程占用会报错，不会误杀其他服务。macOS 日志位于 `tmp/api_nacos.log`，Windows 日志位于 `tmp/api_nacos.out.log` 和 `tmp/api_nacos.err.log`。当前 Nacos 配置解析为 `http://127.0.0.1:30005`。
+脚本只会停止上次由同一脚本记录的 PID；如果端口被其他进程占用会报错，不会误杀其他服务。macOS 日志位于 `tmp/api_nacos.log`，Windows 日志位于 `tmp/api_nacos.out.log` 和 `tmp/api_nacos.err.log`。当前 Nacos 显式配置测试端口 `30005`、生产端口 `30006`。
 
 如需初始化 Tushare 证券主数据：
 

@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, urlunparse
 from urllib.request import Request
 
 import httpx
@@ -18,6 +18,8 @@ DEFAULT_NACOS_GROUP = "DEFAULT_GROUP"
 DEFAULT_NACOS_DATA_ID = "expert_trade"
 DEFAULT_NACOS_TIMEOUT_MS = 5000
 DEFAULT_AGENT_VERSION = "m4-agent-0.1.0"
+FINANCE_SYS_ENV = "FINANCE_SYS_ENV"
+PRODUCTION_ENVIRONMENT = "PROD"
 
 
 class LLMSettings(BaseModel):
@@ -233,13 +235,36 @@ def _settings_from_nacos_config(config: Dict[str, Any]) -> AgentSettings:
         auth_header=str(auth.get("header_name") or "X-Agent-Token"),
         auth_token=str(auth.get("static_token") or ""),
         internal_api=InternalAPISettings(
-            base_url=str(agent.get("internal_api_base_url") or ""),
+            base_url=_runtime_internal_api_base_url(config, agent),
             auth_header=internal_api_auth_header,
             auth_token=internal_api_auth_token,
         ),
         tushare=TushareSettings(**(agent.get("tushare") or {})),
         llm=LLMSettings(**llm_config),
     )
+
+
+def _runtime_internal_api_base_url(config: Dict[str, Any], agent: Dict[str, Any]) -> str:
+    base_url = str(agent.get("internal_api_base_url") or "")
+    if not base_url:
+        return base_url
+    try:
+        http = (config.get("service") or {}).get("http") or {}
+        production_port = int(http.get("port"))
+        test_port = int(http.get("port_test"))
+        effective_port = (
+            production_port
+            if os.getenv(FINANCE_SYS_ENV) == PRODUCTION_ENVIRONMENT
+            else test_port
+        )
+        parsed = urlparse(base_url)
+        if parsed.hostname is None or parsed.port not in {production_port, test_port}:
+            return base_url
+        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        netloc = f"{host}:{effective_port}"
+        return urlunparse(parsed._replace(netloc=netloc))
+    except (TypeError, ValueError):
+        return base_url
 
 
 def _settings_from_env() -> AgentSettings:

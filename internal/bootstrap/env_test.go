@@ -58,6 +58,7 @@ func TestLoadInitialSnapshotUsesLocalExampleWithoutNacosAddress(t *testing.T) {
 	require.Equal(t, "finance-sys", snapshot.Config.Meta.AppName)
 	require.Equal(t, "test", string(snapshot.Config.SelectedDatabaseProfile))
 	require.Contains(t, snapshot.Config.Database.DSN, "/expert_trade_test?")
+	require.Equal(t, 18080, snapshot.Config.Service.HTTP.Port)
 }
 
 func TestLoadInitialSnapshotUsesLocalProductionDatabaseOnlyForExactPROD(t *testing.T) {
@@ -70,6 +71,7 @@ func TestLoadInitialSnapshotUsesLocalProductionDatabaseOnlyForExactPROD(t *testi
 	require.Equal(t, "production", string(snapshot.Config.SelectedDatabaseProfile))
 	require.Contains(t, snapshot.Config.Database.DSN, "/expert_trade?")
 	require.NotContains(t, snapshot.Config.Database.DSN, "/expert_trade_test?")
+	require.Equal(t, 18081, snapshot.Config.Service.HTTP.Port)
 }
 
 func TestLoadInitialSnapshotFallsBackWhenNacosCannotBeRead(t *testing.T) {

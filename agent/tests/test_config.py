@@ -89,6 +89,32 @@ def test_settings_from_nacos_config_reuses_llm_and_agent_auth():
     }
 
 
+def test_settings_from_nacos_config_selects_production_internal_api_port(monkeypatch):
+    monkeypatch.setenv("FINANCE_SYS_ENV", "PROD")
+
+    settings = _settings_from_nacos_config(
+        {
+            "service": {"http": {"port": 30006, "port_test": 30005}},
+            "agent": {"internal_api_base_url": "http://127.0.0.1:30006"},
+        }
+    )
+
+    assert settings.internal_api.base_url == "http://127.0.0.1:30006"
+
+
+def test_settings_from_nacos_config_requires_exact_prod_for_port_selection(monkeypatch):
+    monkeypatch.setenv("FINANCE_SYS_ENV", "prod")
+
+    settings = _settings_from_nacos_config(
+        {
+            "service": {"http": {"port": 30006, "port_test": 30005}},
+            "agent": {"internal_api_base_url": "http://127.0.0.1:30006"},
+        }
+    )
+
+    assert settings.internal_api.base_url == "http://127.0.0.1:30005"
+
+
 def test_settings_from_nacos_config_ignores_all_runtime_env_overrides(monkeypatch):
     monkeypatch.setenv("AGENT_VERSION", "env-agent-version")
     monkeypatch.setenv("AGENT_AUTH_ENABLED", "false")
