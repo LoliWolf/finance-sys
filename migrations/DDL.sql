@@ -483,6 +483,38 @@ CREATE TABLE `scheduled_task_runs` (
   KEY `idx_scheduled_task_runs_type_created` (`task_type`,`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+-- external_document_ingestions: per-source object journal used before and
+-- after documents.sha256 de-duplication. source_type and status are numeric
+-- domain enums; document_id remains nullable until the download is ingested.
+CREATE TABLE `external_document_ingestions` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `source_type` smallint unsigned NOT NULL,
+  `source_path` varchar(1024) NOT NULL,
+  `source_path_hash` char(64) NOT NULL,
+  `source_version` varchar(191) NOT NULL,
+  `file_name` varchar(512) NOT NULL,
+  `article_date` date NOT NULL,
+  `remote_size` bigint NOT NULL DEFAULT 0,
+  `remote_modified_at` timestamp(3) NULL DEFAULT NULL,
+  `content_sha256` char(64) NOT NULL DEFAULT '',
+  `document_id` bigint DEFAULT NULL,
+  `status` tinyint unsigned NOT NULL,
+  `attempt_count` int unsigned NOT NULL DEFAULT 0,
+  `last_error` text NOT NULL,
+  `discovered_at` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `downloaded_at` timestamp(3) NULL DEFAULT NULL,
+  `analyzed_at` timestamp(3) NULL DEFAULT NULL,
+  `config_version` bigint NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_external_ingestion_source_version` (`source_type`,`source_path_hash`,`source_version`),
+  KEY `idx_external_ingestion_status_updated` (`status`,`updated_at`),
+  KEY `idx_external_ingestion_article_date` (`article_date`),
+  KEY `idx_external_ingestion_document` (`document_id`),
+  CONSTRAINT `fk_external_ingestion_document` FOREIGN KEY (`document_id`) REFERENCES `documents` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 -- recommendation_event_window_metrics: table
 CREATE TABLE `recommendation_event_window_metrics` (
   `id` bigint NOT NULL AUTO_INCREMENT,

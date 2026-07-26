@@ -28,6 +28,8 @@ func Validate(cfg *Config) error {
 	require(strings.HasPrefix(cfg.Service.HTTP.APIPrefix, "/"), "service.http.api_prefix must start with /")
 	validateDatabase("database", cfg.DatabaseProduction, require)
 	validateDatabase("database_test", cfg.DatabaseTest, require)
+	require(cfg.Processing.OCRMaxConcurrency > 0, "processing.ocr_max_concurrency must be positive")
+	require(cfg.Processing.LLMMaxConcurrency > 0, "processing.llm_max_concurrency must be positive")
 	require(cfg.NacosClient.PollIntervalSeconds > 0, "nacos_client.poll_interval_seconds must be positive")
 	require(cfg.Document.MaxFileSizeMB > 0, "document.max_file_size_mb must be positive")
 	require(len(cfg.Document.AllowedExtensions) > 0, "document.allowed_extensions must not be empty")
@@ -88,6 +90,9 @@ func Validate(cfg *Config) error {
 		require(cfg.Agent.Observation.MaxJSONBytes > 0, "agent.observation.max_json_bytes must be positive when agent.observation.enabled is true")
 		require(cfg.Agent.Observation.RetentionDays > 0, "agent.observation.retention_days must be positive when agent.observation.enabled is true")
 	}
+	if cfg.ExternalDocuments.OpenList.Enabled {
+		validateOpenListDocumentSource(cfg.ExternalDocuments.OpenList, require)
+	}
 	if cfg.MarketData.Enabled {
 		require(cfg.MarketData.Provider == "tushare", "market_data.provider must be tushare when market_data.enabled is true")
 		require(cfg.MarketData.Tushare.Enabled, "market_data.tushare.enabled must be true when market_data.enabled is true")
@@ -124,6 +129,10 @@ func Validate(cfg *Config) error {
 			require(cfg.Evaluation.Enabled && cfg.Evaluation.RecommendationPerformance.Enabled, "evaluation.recommendation_performance must be enabled when scheduler.recommendation_evaluation_recent is enabled")
 			require(cfg.Evaluation.RecommendationPerformance.AsyncWorker.Enabled, "evaluation.recommendation_performance.async_worker must be enabled when scheduler.recommendation_evaluation_recent is enabled")
 		}
+		if cfg.Scheduler.OpenListDocumentIngestion.Enabled {
+			validateHourlySchedule("scheduler.openlist_document_ingestion", cfg.Scheduler.OpenListDocumentIngestion, require)
+			require(cfg.ExternalDocuments.OpenList.Enabled, "external_documents.openlist must be enabled when scheduler.openlist_document_ingestion is enabled")
+		}
 	}
 
 	allowed := map[string]struct{}{
@@ -148,6 +157,21 @@ func Validate(cfg *Config) error {
 func validateDailySchedule(name string, cfg DailyTaskScheduleConfig, require func(bool, string)) {
 	require(cfg.Hour >= 0 && cfg.Hour <= 23, name+".hour must be in [0,23]")
 	require(cfg.Minute >= 0 && cfg.Minute <= 59, name+".minute must be in [0,59]")
+}
+
+func validateHourlySchedule(name string, cfg HourlyTaskScheduleConfig, require func(bool, string)) {
+	require(cfg.Minute >= 0 && cfg.Minute <= 59, name+".minute must be in [0,59]")
+}
+
+func validateOpenListDocumentSource(cfg OpenListDocumentSourceConfig, require func(bool, string)) {
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	require(strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://"), "external_documents.openlist.base_url must start with http:// or https:// when enabled")
+	require(strings.TrimSpace(cfg.Username) != "", "external_documents.openlist.username is required when enabled")
+	require(strings.TrimSpace(cfg.Password) != "", "external_documents.openlist.password is required when enabled")
+	require(strings.HasPrefix(strings.TrimSpace(cfg.RootPath), "/"), "external_documents.openlist.root_path must start with / when enabled")
+	require(strings.TrimSpace(cfg.Institution) != "", "external_documents.openlist.institution is required when enabled")
+	require(cfg.RequestTimeoutMS > 0, "external_documents.openlist.request_timeout_ms must be positive when enabled")
+	require(cfg.ScanLookbackDays > 0, "external_documents.openlist.scan_lookback_days must be positive when enabled")
 }
 
 func validateDatabase(name string, cfg DatabaseConfig, require func(bool, string)) {

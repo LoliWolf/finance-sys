@@ -89,6 +89,8 @@ func main() {
 			return "recommendation_event_window_metric"
 		case "scheduled_task_runs":
 			return "scheduled_task_run"
+		case "external_document_ingestions":
+			return "external_document_ingestion"
 		default:
 			return tableName
 		}
@@ -193,6 +195,14 @@ func main() {
 			gen.FieldType("output_json", "[]byte"),
 			gen.FieldType("started_at", "*time.Time"),
 			gen.FieldType("finished_at", "*time.Time"),
+		),
+		g.GenerateModelAs("external_document_ingestions", "ExternalDocumentIngestion",
+			gen.FieldRename("source_path_hash", "SourcePathHash"),
+			gen.FieldRename("content_sha256", "ContentSHA256"),
+			gen.FieldType("remote_modified_at", "*time.Time"),
+			gen.FieldType("document_id", "*int64"),
+			gen.FieldType("downloaded_at", "*time.Time"),
+			gen.FieldType("analyzed_at", "*time.Time"),
 		),
 	)
 	g.Execute()

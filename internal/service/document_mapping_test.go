@@ -81,6 +81,12 @@ func TestDocumentStatusAfterParseFailureMarksInvalidForTerminalPDFPageCount(t *t
 	require.Equal(t, domain.DocumentStatusInvalid, documentStatusAfterParseFailure(err))
 }
 
+func TestDocumentStatusAfterParseFailureMarksInvalidForInsufficientOCRText(t *testing.T) {
+	err := errors.New("ocr failed for article.pdf: ocr produced insufficient text: got 69 chars, require at least 80")
+
+	require.Equal(t, domain.DocumentStatusInvalid, documentStatusAfterParseFailure(err))
+}
+
 func TestDocumentStatusAfterParseFailureKeepsFailedForOCRResourceFailures(t *testing.T) {
 	err := errors.New("ocr failed for article.pdf: Windows OCR failed: OutOfMemoryException")
 

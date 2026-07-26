@@ -9,7 +9,10 @@ func TestScheduledTaskTypeValuesAreStable(t *testing.T) {
 	if ScheduledTaskTypeEvaluationRecent != 2 {
 		t.Fatalf("evaluation task type changed: %d", ScheduledTaskTypeEvaluationRecent)
 	}
-	if !ScheduledTaskTypeStockDailyPreviousDay.Valid() || !ScheduledTaskTypeEvaluationRecent.Valid() {
+	if ScheduledTaskTypeOpenListDocuments != 3 {
+		t.Fatalf("OpenList document task type changed: %d", ScheduledTaskTypeOpenListDocuments)
+	}
+	if !ScheduledTaskTypeStockDailyPreviousDay.Valid() || !ScheduledTaskTypeEvaluationRecent.Valid() || !ScheduledTaskTypeOpenListDocuments.Valid() {
 		t.Fatal("known scheduled task types must be valid")
 	}
 	if ScheduledTaskType(99).Valid() {

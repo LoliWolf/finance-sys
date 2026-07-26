@@ -39,6 +39,7 @@ type App struct {
 	EvaluationService *service.RecommendationEvaluationService
 	EvaluationWorker  *service.RecommendationEvaluationWorker
 	ScheduledTasks    *service.ScheduledTaskService
+	ExternalDocuments *service.ExternalDocumentIngestionService
 	Scheduler         *service.AutomaticScheduler
 	StatsService      *stats.Service
 	HTTPServer        *httpapi.Server
@@ -93,7 +94,12 @@ func Build(ctx context.Context) (*App, error) {
 	ruleEngine := rules.New(logger)
 	securityService := service.NewSecurityService(db, logger)
 	candidateAssembler := service.NewCandidateAssembler(securityService, logger)
-	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, candidateAssembler, ruleEngine, logger)
+	processingPools, err := service.NewProcessingPools(snapshot.Config.Processing.OCRMaxConcurrency, snapshot.Config.Processing.LLMMaxConcurrency)
+	if err != nil {
+		_ = dbConnectionClose(db)
+		return nil, err
+	}
+	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, candidateAssembler, ruleEngine, processingPools, logger)
 	marketDataHTTPClient := &http.Client{}
 	if snapshot.Config.MarketData.Tushare.TimeoutMS > 0 {
 		marketDataHTTPClient.Timeout = time.Duration(snapshot.Config.MarketData.Tushare.TimeoutMS) * time.Millisecond
@@ -104,7 +110,8 @@ func Build(ctx context.Context) (*App, error) {
 	evaluationService := service.NewRecommendationEvaluationService(db, runtime, logger)
 	evaluationWorker := service.NewRecommendationEvaluationWorker(evaluationService, runtime, logger)
 	scheduledTasks := service.NewScheduledTaskService(db, runtime, logger)
-	automaticScheduler, err := service.NewAutomaticScheduler(scheduledTasks, marketDataService, evaluationService, runtime, logger)
+	externalDocuments := service.NewExternalDocumentIngestionService(db, runtime, documentService, logger)
+	automaticScheduler, err := service.NewAutomaticScheduler(scheduledTasks, marketDataService, evaluationService, externalDocuments, runtime, logger)
 	if err != nil {
 		_ = dbConnectionClose(db)
 		return nil, err
@@ -131,6 +138,7 @@ func Build(ctx context.Context) (*App, error) {
 		EvaluationService: evaluationService,
 		EvaluationWorker:  evaluationWorker,
 		ScheduledTasks:    scheduledTasks,
+		ExternalDocuments: externalDocuments,
 		Scheduler:         automaticScheduler,
 		StatsService:      statsService,
 		HTTPServer:        httpServer,

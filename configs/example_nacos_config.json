@@ -3,7 +3,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 7
+    "config_version": 10
   },
   "service": {
     "http": {
@@ -58,6 +58,10 @@
     "conn_max_lifetime_minutes": 30,
     "conn_max_idle_time_minutes": 10
   },
+  "processing": {
+    "ocr_max_concurrency": 2,
+    "llm_max_concurrency": 20
+  },
   "document": {
     "api_upload_enabled": true,
     "auto_analyze_upload": true,
@@ -89,6 +93,18 @@
       "min_text_chars": 80,
       "timeout_ms": 120000,
       "treat_exit_code_one_as_ok": true
+    }
+  },
+  "external_documents": {
+    "openlist": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:5244",
+      "username": "",
+      "password": "",
+      "root_path": "/我的资源/游资大V复盘文章汇总2026",
+      "institution": "个人",
+      "request_timeout_ms": 120000,
+      "scan_lookback_days": 14
     }
   },
   "llm": {
@@ -235,6 +251,10 @@
       "hour": 4,
       "minute": 0,
       "lookback_days": 90
+    },
+    "openlist_document_ingestion": {
+      "enabled": false,
+      "minute": 15
     }
   },
   "rules": {

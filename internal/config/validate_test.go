@@ -44,6 +44,33 @@ func TestValidateRequiresPDFOCRCommand(t *testing.T) {
 	require.ErrorContains(t, err, "document.pdf_ocr.command is required")
 }
 
+func TestValidateRequiresPositiveGlobalProcessingPools(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Processing.OCRMaxConcurrency = 0
+	cfg.Processing.LLMMaxConcurrency = 0
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "processing.ocr_max_concurrency must be positive")
+	require.ErrorContains(t, err, "processing.llm_max_concurrency must be positive")
+}
+
+func TestValidateOpenListSchedulerRequiresConfiguredSource(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Scheduler.Enabled = true
+	cfg.Scheduler.OpenListDocumentIngestion.Enabled = true
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "external_documents.openlist must be enabled")
+}
+
 func TestValidateAllowsConfiguredLongAgentTimeout(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)

@@ -1,22 +1,24 @@
 package config
 
 type Config struct {
-	Meta                    MetaConfig        `json:"meta"`
-	Service                 ServiceConfig     `json:"service"`
-	NacosClient             NacosClientConfig `json:"nacos_client"`
-	Security                SecurityConfig    `json:"security"`
-	Logging                 LoggingConfig     `json:"logging"`
-	DatabaseProduction      DatabaseConfig    `json:"database"`
-	DatabaseTest            DatabaseConfig    `json:"database_test"`
-	Database                DatabaseConfig    `json:"-"`
-	SelectedDatabaseProfile DatabaseProfile   `json:"-"`
-	Document                DocumentConfig    `json:"document"`
-	LLM                     LLMConfig         `json:"llm"`
-	Agent                   AgentConfig       `json:"agent"`
-	MarketData              MarketDataConfig  `json:"market_data"`
-	Evaluation              EvaluationConfig  `json:"evaluation"`
-	Scheduler               SchedulerConfig   `json:"scheduler"`
-	Rules                   RulesConfig       `json:"rules"`
+	Meta                    MetaConfig              `json:"meta"`
+	Service                 ServiceConfig           `json:"service"`
+	NacosClient             NacosClientConfig       `json:"nacos_client"`
+	Security                SecurityConfig          `json:"security"`
+	Logging                 LoggingConfig           `json:"logging"`
+	DatabaseProduction      DatabaseConfig          `json:"database"`
+	DatabaseTest            DatabaseConfig          `json:"database_test"`
+	Database                DatabaseConfig          `json:"-"`
+	SelectedDatabaseProfile DatabaseProfile         `json:"-"`
+	Processing              ProcessingConfig        `json:"processing"`
+	Document                DocumentConfig          `json:"document"`
+	ExternalDocuments       ExternalDocumentsConfig `json:"external_documents"`
+	LLM                     LLMConfig               `json:"llm"`
+	Agent                   AgentConfig             `json:"agent"`
+	MarketData              MarketDataConfig        `json:"market_data"`
+	Evaluation              EvaluationConfig        `json:"evaluation"`
+	Scheduler               SchedulerConfig         `json:"scheduler"`
+	Rules                   RulesConfig             `json:"rules"`
 }
 
 type MetaConfig struct {
@@ -78,6 +80,14 @@ type DatabaseConfig struct {
 	ConnMaxIdleTimeMinutes int            `json:"conn_max_idle_time_minutes"`
 }
 
+// ProcessingConfig controls process-wide resource pools shared by every
+// document entry point, including HTTP uploads, historical replay and external
+// source ingestion.
+type ProcessingConfig struct {
+	OCRMaxConcurrency int `json:"ocr_max_concurrency"`
+	LLMMaxConcurrency int `json:"llm_max_concurrency"`
+}
+
 type DocumentConfig struct {
 	APIUploadEnabled  bool                 `json:"api_upload_enabled"`
 	AutoAnalyzeUpload bool                 `json:"auto_analyze_upload"`
@@ -107,6 +117,21 @@ type PDFOCRConfig struct {
 	MinTextChars         int      `json:"min_text_chars"`
 	TimeoutMS            int      `json:"timeout_ms"`
 	TreatExitCodeOneAsOK bool     `json:"treat_exit_code_one_as_ok"`
+}
+
+type ExternalDocumentsConfig struct {
+	OpenList OpenListDocumentSourceConfig `json:"openlist"`
+}
+
+type OpenListDocumentSourceConfig struct {
+	Enabled          bool   `json:"enabled"`
+	BaseURL          string `json:"base_url"`
+	Username         string `json:"username"`
+	Password         string `json:"password"`
+	RootPath         string `json:"root_path"`
+	Institution      string `json:"institution"`
+	RequestTimeoutMS int    `json:"request_timeout_ms"`
+	ScanLookbackDays int    `json:"scan_lookback_days"`
 }
 
 type LLMConfig struct {
@@ -238,6 +263,7 @@ type SchedulerConfig struct {
 	ClaimTimeoutMS                 int                                    `json:"claim_timeout_ms"`
 	StockDailyPreviousDay          DailyTaskScheduleConfig                `json:"stock_daily_previous_day"`
 	RecommendationEvaluationRecent RecommendationEvaluationScheduleConfig `json:"recommendation_evaluation_recent"`
+	OpenListDocumentIngestion      HourlyTaskScheduleConfig               `json:"openlist_document_ingestion"`
 }
 
 type DailyTaskScheduleConfig struct {
@@ -249,6 +275,11 @@ type DailyTaskScheduleConfig struct {
 type RecommendationEvaluationScheduleConfig struct {
 	DailyTaskScheduleConfig
 	LookbackDays int `json:"lookback_days"`
+}
+
+type HourlyTaskScheduleConfig struct {
+	Enabled bool `json:"enabled"`
+	Minute  int  `json:"minute"`
 }
 
 type RulesConfig struct {
