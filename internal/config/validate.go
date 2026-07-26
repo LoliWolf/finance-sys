@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func Validate(cfg *Config) error {
@@ -21,20 +22,22 @@ func Validate(cfg *Config) error {
 
 	require(cfg.Meta.ConfigVersion > 0, "meta.config_version must be positive")
 	require(cfg.Meta.Timezone != "", "meta.timezone is required")
+	_, timezoneErr := time.LoadLocation(cfg.Meta.Timezone)
+	require(timezoneErr == nil, "meta.timezone must be a valid IANA timezone")
 	require(cfg.Service.HTTP.Port > 0, "service.http.port must be positive")
 	require(strings.HasPrefix(cfg.Service.HTTP.APIPrefix, "/"), "service.http.api_prefix must start with /")
-	require(cfg.Database.DSN != "", "database.dsn is required")
-	require(cfg.Database.Driver == DatabaseDriverMySQL, "database.driver must be mysql")
+	validateDatabase("database", cfg.DatabaseProduction, require)
+	validateDatabase("database_test", cfg.DatabaseTest, require)
+	require(cfg.Processing.OCRMaxConcurrency > 0, "processing.ocr_max_concurrency must be positive")
+	require(cfg.Processing.LLMMaxConcurrency > 0, "processing.llm_max_concurrency must be positive")
 	require(cfg.NacosClient.PollIntervalSeconds > 0, "nacos_client.poll_interval_seconds must be positive")
 	require(cfg.Document.MaxFileSizeMB > 0, "document.max_file_size_mb must be positive")
 	require(len(cfg.Document.AllowedExtensions) > 0, "document.allowed_extensions must not be empty")
 	require(cfg.Document.Chunking.TargetChars > 0, "document.chunking.target_chars must be positive")
-	if cfg.Document.PDFOCR.Enabled {
-		require(strings.TrimSpace(cfg.Document.PDFOCR.Command) != "", "document.pdf_ocr.command is required when enabled")
-		require(len(cfg.Document.PDFOCR.Args) > 0, "document.pdf_ocr.args must not be empty when enabled")
-		require(cfg.Document.PDFOCR.MinTextChars >= 0, "document.pdf_ocr.min_text_chars must be zero or positive")
-		require(cfg.Document.PDFOCR.TimeoutMS > 0, "document.pdf_ocr.timeout_ms must be positive when enabled")
-	}
+	require(strings.TrimSpace(cfg.Document.PDFOCR.Command) != "", "document.pdf_ocr.command is required")
+	require(len(cfg.Document.PDFOCR.Args) > 0, "document.pdf_ocr.args must not be empty")
+	require(cfg.Document.PDFOCR.MinTextChars >= 0, "document.pdf_ocr.min_text_chars must be zero or positive")
+	require(cfg.Document.PDFOCR.TimeoutMS > 0, "document.pdf_ocr.timeout_ms must be positive")
 	require(cfg.LLM.TimeoutMS > 0, "llm.timeout_ms must be positive")
 	require(cfg.LLM.MaxRetries >= 0, "llm.max_retries must be zero or positive")
 	for headerName := range cfg.LLM.ExtraHeaders {
@@ -87,6 +90,50 @@ func Validate(cfg *Config) error {
 		require(cfg.Agent.Observation.MaxJSONBytes > 0, "agent.observation.max_json_bytes must be positive when agent.observation.enabled is true")
 		require(cfg.Agent.Observation.RetentionDays > 0, "agent.observation.retention_days must be positive when agent.observation.enabled is true")
 	}
+	if cfg.ExternalDocuments.OpenList.Enabled {
+		validateOpenListDocumentSource(cfg.ExternalDocuments.OpenList, require)
+	}
+	if cfg.MarketData.Enabled {
+		require(cfg.MarketData.Provider == "tushare", "market_data.provider must be tushare when market_data.enabled is true")
+		require(cfg.MarketData.Tushare.Enabled, "market_data.tushare.enabled must be true when market_data.enabled is true")
+		if cfg.MarketData.Tushare.Enabled {
+			validateMarketDataTushare(cfg.MarketData.Tushare, require)
+		}
+		if cfg.MarketData.AsyncWorker.Enabled {
+			require(cfg.MarketData.AsyncWorker.PollIntervalMS > 0, "market_data.async_worker.poll_interval_ms must be positive when enabled")
+			require(cfg.MarketData.AsyncWorker.ClaimTimeoutMS > 0, "market_data.async_worker.claim_timeout_ms must be positive when enabled")
+			require(cfg.MarketData.AsyncWorker.MaxConcurrentRuns > 0, "market_data.async_worker.max_concurrent_runs must be positive when enabled")
+			require(cfg.MarketData.AsyncWorker.BatchSize > 0, "market_data.async_worker.batch_size must be positive when enabled")
+		}
+		if cfg.MarketData.StockDaily.Enabled {
+			validateStockDailySync(cfg.MarketData.StockDaily, require)
+		}
+	}
+	if cfg.Evaluation.Enabled {
+		require(cfg.Evaluation.RecommendationPerformance.Enabled, "evaluation.recommendation_performance.enabled must be true when evaluation.enabled is true")
+		if cfg.Evaluation.RecommendationPerformance.Enabled {
+			validateRecommendationPerformance(cfg.Evaluation.RecommendationPerformance, require)
+		}
+	}
+	if cfg.Scheduler.Enabled {
+		require(cfg.Scheduler.PollIntervalMS > 0, "scheduler.poll_interval_ms must be positive when enabled")
+		require(cfg.Scheduler.ClaimTimeoutMS > 0, "scheduler.claim_timeout_ms must be positive when enabled")
+		if cfg.Scheduler.StockDailyPreviousDay.Enabled {
+			validateDailySchedule("scheduler.stock_daily_previous_day", cfg.Scheduler.StockDailyPreviousDay, require)
+			require(cfg.MarketData.Enabled && cfg.MarketData.StockDaily.Enabled, "market_data.stock_daily must be enabled when scheduler.stock_daily_previous_day is enabled")
+			require(cfg.MarketData.AsyncWorker.Enabled, "market_data.async_worker must be enabled when scheduler.stock_daily_previous_day is enabled")
+		}
+		if cfg.Scheduler.RecommendationEvaluationRecent.Enabled {
+			validateDailySchedule("scheduler.recommendation_evaluation_recent", cfg.Scheduler.RecommendationEvaluationRecent.DailyTaskScheduleConfig, require)
+			require(cfg.Scheduler.RecommendationEvaluationRecent.LookbackDays > 0, "scheduler.recommendation_evaluation_recent.lookback_days must be positive when enabled")
+			require(cfg.Evaluation.Enabled && cfg.Evaluation.RecommendationPerformance.Enabled, "evaluation.recommendation_performance must be enabled when scheduler.recommendation_evaluation_recent is enabled")
+			require(cfg.Evaluation.RecommendationPerformance.AsyncWorker.Enabled, "evaluation.recommendation_performance.async_worker must be enabled when scheduler.recommendation_evaluation_recent is enabled")
+		}
+		if cfg.Scheduler.OpenListDocumentIngestion.Enabled {
+			validateHourlySchedule("scheduler.openlist_document_ingestion", cfg.Scheduler.OpenListDocumentIngestion, require)
+			require(cfg.ExternalDocuments.OpenList.Enabled, "external_documents.openlist must be enabled when scheduler.openlist_document_ingestion is enabled")
+		}
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},
@@ -105,4 +152,99 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func validateDailySchedule(name string, cfg DailyTaskScheduleConfig, require func(bool, string)) {
+	require(cfg.Hour >= 0 && cfg.Hour <= 23, name+".hour must be in [0,23]")
+	require(cfg.Minute >= 0 && cfg.Minute <= 59, name+".minute must be in [0,59]")
+}
+
+func validateHourlySchedule(name string, cfg HourlyTaskScheduleConfig, require func(bool, string)) {
+	require(cfg.Minute >= 0 && cfg.Minute <= 59, name+".minute must be in [0,59]")
+}
+
+func validateOpenListDocumentSource(cfg OpenListDocumentSourceConfig, require func(bool, string)) {
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	require(strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://"), "external_documents.openlist.base_url must start with http:// or https:// when enabled")
+	require(strings.TrimSpace(cfg.Username) != "", "external_documents.openlist.username is required when enabled")
+	require(strings.TrimSpace(cfg.Password) != "", "external_documents.openlist.password is required when enabled")
+	require(strings.HasPrefix(strings.TrimSpace(cfg.RootPath), "/"), "external_documents.openlist.root_path must start with / when enabled")
+	require(strings.TrimSpace(cfg.Institution) != "", "external_documents.openlist.institution is required when enabled")
+	require(cfg.RequestTimeoutMS > 0, "external_documents.openlist.request_timeout_ms must be positive when enabled")
+	require(cfg.ScanLookbackDays > 0, "external_documents.openlist.scan_lookback_days must be positive when enabled")
+}
+
+func validateDatabase(name string, cfg DatabaseConfig, require func(bool, string)) {
+	require(cfg.DSN != "", name+".dsn is required")
+	require(cfg.Driver == DatabaseDriverMySQL, name+".driver must be mysql")
+	require(cfg.MaxOpenConns > 0, name+".max_open_conns must be positive")
+	require(cfg.MaxIdleConns >= 0, name+".max_idle_conns must be zero or positive")
+	require(cfg.MaxIdleConns <= cfg.MaxOpenConns, name+".max_idle_conns must not exceed max_open_conns")
+	require(cfg.ConnMaxLifetimeMinutes > 0, name+".conn_max_lifetime_minutes must be positive")
+	require(cfg.ConnMaxIdleTimeMinutes > 0, name+".conn_max_idle_time_minutes must be positive")
+}
+
+func validateMarketDataTushare(cfg MarketDataTushareConfig, require func(bool, string)) {
+	require(strings.TrimSpace(cfg.SDKPackage) != "", "market_data.tushare.sdk_package is required when enabled")
+	require(cfg.TimeoutMS > 0 && cfg.TimeoutMS <= 120000, "market_data.tushare.timeout_ms must be in (0,120000] when enabled")
+	require(cfg.MaxRetries >= 0, "market_data.tushare.max_retries must be zero or positive")
+	require(cfg.TokenCooldownMS >= 0, "market_data.tushare.token_cooldown_ms must be zero or positive")
+	require(len(cfg.Tokens) > 0, "market_data.tushare.tokens must not be empty when enabled")
+
+	enabledTokens := 0
+	for _, token := range cfg.Tokens {
+		require(token.Weight > 0, "market_data.tushare.tokens weight must be positive")
+		if token.Enabled {
+			enabledTokens++
+			require(strings.TrimSpace(token.Token) != "", "market_data.tushare.tokens token is required when token is enabled")
+		}
+	}
+	require(enabledTokens > 0, "market_data.tushare.tokens must contain at least one enabled token when enabled")
+}
+
+func validateStockDailySync(cfg StockDailySyncConfig, require func(bool, string)) {
+	require(len(cfg.SyncAssetTypes) > 0, "market_data.stock_daily.sync_asset_types must not be empty when enabled")
+	allowedAssetTypes := map[string]struct{}{
+		"STOCK": {},
+		"ETF":   {},
+	}
+	for _, assetType := range cfg.SyncAssetTypes {
+		_, ok := allowedAssetTypes[strings.ToUpper(strings.TrimSpace(assetType))]
+		require(ok, fmt.Sprintf("unsupported market_data.stock_daily.sync_asset_types value %q", assetType))
+	}
+	require(len(cfg.Fields) > 0, "market_data.stock_daily.fields must not be empty when enabled")
+}
+
+func validateRecommendationPerformance(cfg RecommendationPerformanceConfig, require func(bool, string)) {
+	require(len(cfg.Windows) > 0, "evaluation.recommendation_performance.windows must not be empty when enabled")
+	seenWindows := make(map[int]struct{}, len(cfg.Windows))
+	for _, window := range cfg.Windows {
+		require(window > 0, "evaluation.recommendation_performance.windows must contain only positive values")
+		_, duplicated := seenWindows[window]
+		require(!duplicated, "evaluation.recommendation_performance.windows must not contain duplicates")
+		seenWindows[window] = struct{}{}
+	}
+	require(strings.TrimSpace(cfg.QuoteSource) != "", "evaluation.recommendation_performance.quote_source is required when enabled")
+	require(cfg.EntryPriceRule == "NEXT_TRADE_OPEN", "evaluation.recommendation_performance.entry_price_rule must be NEXT_TRADE_OPEN")
+	require(cfg.BasePriceRule == "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE", "evaluation.recommendation_performance.base_price_rule must be RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE")
+	require(cfg.WinThresholdRatio > -1 && cfg.WinThresholdRatio < 1, "evaluation.recommendation_performance.win_threshold_ratio must be in (-1,1)")
+	require(cfg.MinQuoteCoverageRatio > 0 && cfg.MinQuoteCoverageRatio <= 1, "evaluation.recommendation_performance.min_quote_coverage_ratio must be in (0,1]")
+	require(strings.TrimSpace(cfg.CalcVersion) != "", "evaluation.recommendation_performance.calc_version is required when enabled")
+	if cfg.AsyncWorker.Enabled {
+		require(cfg.AsyncWorker.PollIntervalMS > 0, "evaluation.recommendation_performance.async_worker.poll_interval_ms must be positive when enabled")
+		require(cfg.AsyncWorker.ClaimTimeoutMS > 0, "evaluation.recommendation_performance.async_worker.claim_timeout_ms must be positive when enabled")
+		require(cfg.AsyncWorker.MaxConcurrentRuns > 0, "evaluation.recommendation_performance.async_worker.max_concurrent_runs must be positive when enabled")
+		require(cfg.AsyncWorker.BatchSize > 0, "evaluation.recommendation_performance.async_worker.batch_size must be positive when enabled")
+	}
+	_, defaultWindowExists := seenWindows[cfg.Ranking.DefaultWindowDays]
+	require(defaultWindowExists, "evaluation.recommendation_performance.ranking.default_window_days must be present in windows")
+	require(cfg.Ranking.DefaultMinSampleCount >= 0, "evaluation.recommendation_performance.ranking.default_min_sample_count must be zero or positive")
+	allowedSorts := map[string]struct{}{
+		"win_rate":          {},
+		"avg_return":        {},
+		"sample_count":      {},
+		"performance_score": {},
+	}
+	_, sortAllowed := allowedSorts[cfg.Ranking.DefaultSort]
+	require(sortAllowed, "evaluation.recommendation_performance.ranking.default_sort is unsupported")
 }

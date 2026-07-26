@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -391,9 +390,6 @@ func m8RequireEnabled(t *testing.T) {
 	if os.Getenv(m8DMLAckEnv) != "write-real-db" {
 		t.Skipf("set %s=write-real-db after acknowledging this test writes to the configured MySQL database", m8DMLAckEnv)
 	}
-	if runtime.GOOS != "windows" {
-		t.Skip("real article OCR integration currently uses the Windows OCR wrapper")
-	}
 	require.DirExists(t, m8ArticleRoot())
 }
 
@@ -405,7 +401,6 @@ func m8ConfigureRuntime(t *testing.T, app *bootstrap.App, agentBaseURL string) {
 	cfg.Document.AutoAnalyzeUpload = false
 	cfg.Document.SHA256Dedup = true
 	cfg.Document.PDFOCR = config.PDFOCRConfig{
-		Enabled:              true,
 		Command:              filepath.Join("..", "..", "tools", "guziyuan_pdf_ocr_tool", "ocr_pdf.bat"),
 		Args:                 []string{"{input}", "--stdout"},
 		MinTextChars:         80,

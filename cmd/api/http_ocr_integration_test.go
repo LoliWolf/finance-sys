@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,9 +26,7 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	if os.Getenv("FINANCE_SYS_HTTP_OCR_INTEGRATION") != "1" {
 		t.Skip("set FINANCE_SYS_HTTP_OCR_INTEGRATION=1 to run Nacos/MySQL HTTP OCR integration test")
 	}
-	if runtime.GOOS != "windows" {
-		t.Skip("fake OCR command uses cmd.exe")
-	}
+	t.Setenv("FINANCE_SYS_HTTP_OCR_HELPER", "1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -40,10 +37,9 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	cfg := cloneConfig(t, app.Runtime.Config())
 	cfg.Document.AutoAnalyzeUpload = false
 	cfg.Document.PDFOCR = config.PDFOCRConfig{
-		Enabled:      true,
-		Command:      "cmd",
-		Args:         []string{"/c", "echo OCR_SENTINEL 推荐 600519.SH 参考价 1688"},
-		MinTextChars: 80,
+		Command:      os.Args[0],
+		Args:         []string{"-test.run=^TestHTTPOCRHelperProcess$"},
+		MinTextChars: 10,
 		TimeoutMS:    5000,
 	}
 	app.Runtime.Update(&config.Snapshot{
@@ -79,6 +75,13 @@ func TestHTTPUploadAnalyzeUsesPDFOCRProcessor(t *testing.T) {
 	require.Contains(t, parseRun.CleanedText, "600519.SH")
 }
 
+func TestHTTPOCRHelperProcess(t *testing.T) {
+	if os.Getenv("FINANCE_SYS_HTTP_OCR_HELPER") != "1" {
+		return
+	}
+	fmt.Print("OCR_SENTINEL 推荐 600519.SH 参考价 1688")
+}
+
 func TestHTTPUploadAllFuturePDFs(t *testing.T) {
 	if os.Getenv("FINANCE_SYS_HTTP_INGEST_ALL_TESTDATA") != "1" {
 		t.Skip("set FINANCE_SYS_HTTP_INGEST_ALL_TESTDATA=1 to upload every PDF under testdata/游资大V复盘文章汇总2026")
@@ -93,7 +96,6 @@ func TestHTTPUploadAllFuturePDFs(t *testing.T) {
 	cfg := cloneConfig(t, app.Runtime.Config())
 	cfg.Document.AutoAnalyzeUpload = false
 	cfg.Document.PDFOCR = config.PDFOCRConfig{
-		Enabled:              true,
 		Command:              filepath.Join("..", "..", "tools", "guziyuan_pdf_ocr_tool", "ocr_pdf.bat"),
 		Args:                 []string{"{input}", "--stdout"},
 		MinTextChars:         80,

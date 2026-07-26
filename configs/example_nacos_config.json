@@ -3,7 +3,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 2
+    "config_version": 10
   },
   "service": {
     "http": {
@@ -11,7 +11,7 @@
       "port": 18080,
       "api_prefix": "/api/v1",
       "read_timeout_ms": 30000,
-      "write_timeout_ms": 30000,
+      "write_timeout_ms": 900000,
       "idle_timeout_ms": 60000,
       "shutdown_timeout_seconds": 20,
       "max_header_bytes": 1048576,
@@ -50,6 +50,18 @@
     "conn_max_lifetime_minutes": 30,
     "conn_max_idle_time_minutes": 10
   },
+  "database_test": {
+    "driver": "mysql",
+    "dsn": "expert_trade:change_me@tcp(localhost:3306)/expert_trade_test?parseTime=true&multiStatements=true&charset=utf8mb4",
+    "max_open_conns": 20,
+    "max_idle_conns": 10,
+    "conn_max_lifetime_minutes": 30,
+    "conn_max_idle_time_minutes": 10
+  },
+  "processing": {
+    "ocr_max_concurrency": 2,
+    "llm_max_concurrency": 20
+  },
   "document": {
     "api_upload_enabled": true,
     "auto_analyze_upload": true,
@@ -73,7 +85,6 @@
       "overlap_chars": 120
     },
     "pdf_ocr": {
-      "enabled": false,
       "command": "tools/guziyuan_pdf_ocr_tool/ocr_pdf.bat",
       "args": [
         "{input}",
@@ -82,6 +93,18 @@
       "min_text_chars": 80,
       "timeout_ms": 120000,
       "treat_exit_code_one_as_ok": true
+    }
+  },
+  "external_documents": {
+    "openlist": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:5244",
+      "username": "",
+      "password": "",
+      "root_path": "/我的资源/游资大V复盘文章汇总2026",
+      "institution": "个人",
+      "request_timeout_ms": 120000,
+      "scan_lookback_days": 14
     }
   },
   "llm": {
@@ -128,6 +151,111 @@
       "static_token": ""
     },
     "allow_legacy_llm_fallback": false
+  },
+  "market_data": {
+    "enabled": false,
+    "provider": "tushare",
+    "tushare": {
+      "enabled": false,
+      "sdk_package": "github.com/yushikuann/go-tushare-sdk/client",
+      "tokens": [
+        {
+          "alias": "primary",
+          "token": "",
+          "enabled": false,
+          "weight": 1
+        },
+        {
+          "alias": "backup",
+          "token": "",
+          "enabled": false,
+          "weight": 1
+        }
+      ],
+      "timeout_ms": 10000,
+      "max_retries": 2,
+      "token_cooldown_ms": 60000
+    },
+    "async_worker": {
+      "enabled": false,
+      "poll_interval_ms": 1000,
+      "claim_timeout_ms": 300000,
+      "max_concurrent_runs": 1,
+      "batch_size": 500
+    },
+    "stock_daily": {
+      "enabled": false,
+      "sync_asset_types": [
+        "STOCK",
+        "ETF"
+      ],
+      "fields": [
+        "ts_code",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "change",
+        "pct_chg",
+        "vol",
+        "amount"
+      ],
+      "preserve_raw_units": true,
+      "store_raw_content": true,
+      "missing_item_mark_enabled": true
+    }
+  },
+  "evaluation": {
+    "enabled": false,
+    "recommendation_performance": {
+      "enabled": false,
+      "windows": [
+        5,
+        10,
+        30,
+        90
+      ],
+      "quote_source": "TUSHARE",
+      "entry_price_rule": "NEXT_TRADE_OPEN",
+      "base_price_rule": "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE",
+      "win_threshold_ratio": 0,
+      "min_quote_coverage_ratio": 1,
+      "calc_version": "rec-performance-v1",
+      "async_worker": {
+        "enabled": false,
+        "poll_interval_ms": 1000,
+        "claim_timeout_ms": 300000,
+        "max_concurrent_runs": 1,
+        "batch_size": 500
+      },
+      "ranking": {
+        "default_window_days": 30,
+        "default_min_sample_count": 5,
+        "default_sort": "win_rate"
+      }
+    }
+  },
+  "scheduler": {
+    "enabled": false,
+    "poll_interval_ms": 1000,
+    "claim_timeout_ms": 28800000,
+    "stock_daily_previous_day": {
+      "enabled": false,
+      "hour": 2,
+      "minute": 0
+    },
+    "recommendation_evaluation_recent": {
+      "enabled": false,
+      "hour": 4,
+      "minute": 0,
+      "lookback_days": 90
+    },
+    "openlist_document_ingestion": {
+      "enabled": false,
+      "minute": 15
+    }
   },
   "rules": {
     "version": "rules-v2",

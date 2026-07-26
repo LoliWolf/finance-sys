@@ -34,9 +34,11 @@ from PIL import Image, ImageChops, ImageFilter, ImageOps
 ROOT = Path(__file__).resolve().parent
 WIN_OCR = ROOT / "win_ocr.ps1"
 MAC_OCR = ROOT / "mac_ocr.swift"
+MAC_PDF = ROOT / "mac_pdf.swift"
 
 NOISE_PATTERNS = [
     r"www\.?guziyuan\.cn",
+    r"w{0,6}\.?g[uuv][z2][i1l]y?u?a?n\.?c[nm]",
     r"['u/\.\w]{0,20}guz[\.\w]{0,4}yuan\.?cn",
     r"guziyuan\.cn",
     r"以下内容仅[真頁]爱粉可见",
@@ -66,16 +68,24 @@ class OcrResult:
 
 
 def run(args: List[str], timeout: int = 180) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=127,
+            stdout="",
+            stderr=f"command not found: {args[0]} ({exc})",
+        )
 
 
 def find_pdfs(input_path: Path) -> List[Path]:
@@ -97,6 +107,20 @@ def work_slug_for(path: Path) -> str:
 
 
 def render_pdf(pdf: Path, render_dir: Path, dpi: int) -> List[Path]:
+    if platform.system().lower() == "darwin":
+        if not MAC_PDF.exists():
+            raise FileNotFoundError(f"Missing macOS PDF helper: {MAC_PDF}")
+        proc = run(
+            ["swift", str(MAC_PDF), "render", str(pdf), str(render_dir), str(dpi)],
+            timeout=600,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"macOS PDFKit render failed for {pdf}\n{proc.stderr.strip()}")
+        pages = sorted(render_dir.glob("page-*.png"))
+        if not pages:
+            raise RuntimeError(f"macOS PDFKit render produced no pages for {pdf}")
+        return pages
+
     prefix = render_dir / "page"
     cmd = [
         "pdftoppm",
@@ -113,6 +137,14 @@ def render_pdf(pdf: Path, render_dir: Path, dpi: int) -> List[Path]:
 
 
 def extract_pdf_text(pdf: Path) -> str:
+    if platform.system().lower() == "darwin":
+        if not MAC_PDF.exists():
+            return ""
+        proc = run(["swift", str(MAC_PDF), "text", str(pdf)], timeout=120)
+        if proc.returncode != 0:
+            return ""
+        return proc.stdout
+
     proc = run(["pdftotext", "-nopgbrk", str(pdf), "-"], timeout=120)
     if proc.returncode != 0:
         return ""
@@ -121,13 +153,16 @@ def extract_pdf_text(pdf: Path) -> str:
 
 def extract_pdf_text_layout(pdf: Path) -> str:
     """Extract PDF text while dropping translucent watermark text boxes."""
-    proc = subprocess.run(
-        ["pdftohtml", "-xml", "-stdout", str(pdf)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=120,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["pdftohtml", "-xml", "-stdout", str(pdf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
+            check=False,
+        )
+    except FileNotFoundError:
+        return ""
     if proc.returncode != 0 or not proc.stdout:
         return ""
     try:

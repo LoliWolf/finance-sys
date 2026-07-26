@@ -93,3 +93,18 @@ func (*SecurityMasterDML) QueryByParam(ctx context.Context, db *gorm.DB, param Q
 	}
 	return models, nil
 }
+
+func (*SecurityMasterDML) QueryActiveByAssetTypes(ctx context.Context, db *gorm.DB, assetTypes []string) ([]db_model.SecurityMaster, error) {
+	var models []db_model.SecurityMaster
+	tx := db.WithContext(ctx).
+		Where("is_active = ?", true).
+		Where("list_status = ?", "L").
+		Order("ts_code ASC")
+	if len(assetTypes) > 0 {
+		tx = tx.Where("asset_type IN ?", assetTypes)
+	}
+	if err := tx.Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}

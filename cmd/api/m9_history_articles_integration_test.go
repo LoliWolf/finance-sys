@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -536,9 +535,6 @@ func m9RequireRealHistoryEnabled(t *testing.T) {
 	}
 	if os.Getenv(m9RealHistoryDMLAckEnv) != "write-real-db" && os.Getenv("FINANCE_SYS_M9_NACOS_DML_ACK") != "write-real-db" {
 		t.Skipf("set %s=write-real-db after acknowledging this test writes to the configured MySQL database", m9RealHistoryDMLAckEnv)
-	}
-	if runtime.GOOS != "windows" {
-		t.Skip("the configured historical OCR wrapper is a Windows .bat tool")
 	}
 	require.DirExists(t, m8ArticleRoot())
 }
@@ -1108,7 +1104,6 @@ func m9RealHistoryAgentConfig(cfg config.AgentConfig) config.AgentConfig {
 func m9RealOCRConfig(t *testing.T, current config.PDFOCRConfig) config.PDFOCRConfig {
 	t.Helper()
 	ocr := current
-	ocr.Enabled = true
 	if strings.TrimSpace(ocr.Command) == "" || strings.Contains(strings.ToLower(ocr.Command), "fake") {
 		ocr.Command = filepath.Join("..", "..", "tools", "guziyuan_pdf_ocr_tool", "ocr_pdf.bat")
 	}

@@ -25,6 +25,15 @@ func main() {
 	if app.Watcher != nil {
 		go app.Watcher.Run(ctx)
 	}
+	if app.MarketDataWorker != nil {
+		go app.MarketDataWorker.Run(ctx)
+	}
+	if app.EvaluationWorker != nil {
+		go app.EvaluationWorker.Run(ctx)
+	}
+	if app.Scheduler != nil {
+		go app.Scheduler.Run(ctx)
+	}
 
 	go func() {
 		app.Logger.Info("api server started", "addr", server.Addr)

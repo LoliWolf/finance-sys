@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"finance-sys/internal/agentclient"
@@ -14,10 +16,12 @@ import (
 	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/httpapi"
 	"finance-sys/internal/llm"
+	"finance-sys/internal/marketdata"
 	"finance-sys/internal/nacoscfg"
 	"finance-sys/internal/parser"
 	"finance-sys/internal/rules"
 	"finance-sys/internal/service"
+	"finance-sys/internal/stats"
 	"finance-sys/internal/telemetry"
 
 	"gorm.io/driver/mysql"
@@ -25,14 +29,22 @@ import (
 )
 
 type App struct {
-	Runtime         *config.Runtime
-	Logger          *slog.Logger
-	DB              *gorm.DB
-	DocumentService *service.DocumentService
-	SecurityService *service.SecurityService
-	HTTPServer      *httpapi.Server
-	Watcher         *nacoscfg.Watcher
-	Reloader        *nacoscfg.Reloader
+	Runtime           *config.Runtime
+	Logger            *slog.Logger
+	DB                *gorm.DB
+	DocumentService   *service.DocumentService
+	SecurityService   *service.SecurityService
+	MarketDataService *service.MarketDataService
+	MarketDataWorker  *service.MarketDataWorker
+	EvaluationService *service.RecommendationEvaluationService
+	EvaluationWorker  *service.RecommendationEvaluationWorker
+	ScheduledTasks    *service.ScheduledTaskService
+	ExternalDocuments *service.ExternalDocumentIngestionService
+	Scheduler         *service.AutomaticScheduler
+	StatsService      *stats.Service
+	HTTPServer        *httpapi.Server
+	Watcher           *nacoscfg.Watcher
+	Reloader          *nacoscfg.Reloader
 }
 
 func (a *App) Close() error {
@@ -64,7 +76,7 @@ func Build(ctx context.Context) (*App, error) {
 		logger.Error("bootstrap open db failed", "error", err.Error())
 		return nil, err
 	}
-	logger.Info("bootstrap db connected")
+	logger.Info("bootstrap db connected", "database_profile", snapshot.Config.SelectedDatabaseProfile)
 
 	if snapshot.Config.NacosClient.WriteConfigSnapshotToDB {
 		_ = dal.ConfigSnapshots.Create(ctx, db, &db_model.ConfigSnapshot{
@@ -82,7 +94,29 @@ func Build(ctx context.Context) (*App, error) {
 	ruleEngine := rules.New(logger)
 	securityService := service.NewSecurityService(db, logger)
 	candidateAssembler := service.NewCandidateAssembler(securityService, logger)
-	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, candidateAssembler, ruleEngine, logger)
+	processingPools, err := service.NewProcessingPools(snapshot.Config.Processing.OCRMaxConcurrency, snapshot.Config.Processing.LLMMaxConcurrency)
+	if err != nil {
+		_ = dbConnectionClose(db)
+		return nil, err
+	}
+	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, candidateAssembler, ruleEngine, processingPools, logger)
+	marketDataHTTPClient := &http.Client{}
+	if snapshot.Config.MarketData.Tushare.TimeoutMS > 0 {
+		marketDataHTTPClient.Timeout = time.Duration(snapshot.Config.MarketData.Tushare.TimeoutMS) * time.Millisecond
+	}
+	marketDataProvider := marketdata.NewTushareProvider(marketDataHTTPClient)
+	marketDataService := service.NewMarketDataService(db, runtime, marketDataProvider, logger)
+	marketDataWorker := service.NewMarketDataWorker(marketDataService, runtime, logger)
+	evaluationService := service.NewRecommendationEvaluationService(db, runtime, logger)
+	evaluationWorker := service.NewRecommendationEvaluationWorker(evaluationService, runtime, logger)
+	scheduledTasks := service.NewScheduledTaskService(db, runtime, logger)
+	externalDocuments := service.NewExternalDocumentIngestionService(db, runtime, documentService, logger)
+	automaticScheduler, err := service.NewAutomaticScheduler(scheduledTasks, marketDataService, evaluationService, externalDocuments, runtime, logger)
+	if err != nil {
+		_ = dbConnectionClose(db)
+		return nil, err
+	}
+	statsService := stats.NewService(db, runtime)
 
 	var watcher *nacoscfg.Watcher
 	var reloader *nacoscfg.Reloader
@@ -91,18 +125,37 @@ func Build(ctx context.Context) (*App, error) {
 		reloader = nacoscfg.NewReloader(loader, runtime, db, logger)
 	}
 
-	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, reloader, logger)
+	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, evaluationService, statsService, reloader, logger)
 	logger.Info("bootstrap build completed")
 	return &App{
-		Runtime:         runtime,
-		Logger:          logger,
-		DB:              db,
-		DocumentService: documentService,
-		SecurityService: securityService,
-		HTTPServer:      httpServer,
-		Watcher:         watcher,
-		Reloader:        reloader,
+		Runtime:           runtime,
+		Logger:            logger,
+		DB:                db,
+		DocumentService:   documentService,
+		SecurityService:   securityService,
+		MarketDataService: marketDataService,
+		MarketDataWorker:  marketDataWorker,
+		EvaluationService: evaluationService,
+		EvaluationWorker:  evaluationWorker,
+		ScheduledTasks:    scheduledTasks,
+		ExternalDocuments: externalDocuments,
+		Scheduler:         automaticScheduler,
+		StatsService:      statsService,
+		HTTPServer:        httpServer,
+		Watcher:           watcher,
+		Reloader:          reloader,
 	}, nil
+}
+
+func dbConnectionClose(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 func LoadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snapshot, *nacoscfg.Loader, error) {
@@ -113,22 +166,60 @@ func LoadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snap
 		if loadErr == nil {
 			return snapshot, loader, nil
 		}
-		return nil, nil, fmt.Errorf("load nacos config: %w", loadErr)
+		if logger != nil {
+			logger.WarnContext(ctx, "load nacos config failed; using local example", "error", loadErr.Error())
+		}
+	} else if logger != nil {
+		logger.InfoContext(ctx, "nacos address unavailable; using local example", "error", err.Error())
 	}
 
-	raw, err := os.ReadFile("configs/example_nacos_config.json")
+	snapshot, fallbackErr := loadLocalExampleSnapshot()
+	if fallbackErr != nil {
+		if err == nil {
+			return nil, nil, fmt.Errorf("load nacos config and local example fallback: %w", fallbackErr)
+		}
+		return nil, nil, fmt.Errorf("load local example fallback after nacos bootstrap error %v: %w", err, fallbackErr)
+	}
+	return snapshot, nil, nil
+}
+
+func loadLocalExampleSnapshot() (*config.Snapshot, error) {
+	path, err := findLocalExampleConfig()
 	if err != nil {
-		return nil, nil, fmt.Errorf("load local config fallback: %w", err)
+		return nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load local config fallback: %w", err)
 	}
 	var cfg config.Config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("decode local config fallback: %w", err)
 	}
 	if err := config.Validate(&cfg); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	snapshot, err := config.NewSnapshot(&cfg, raw, "local_example", time.Now())
-	return snapshot, nil, err
+	config.SelectDatabaseForEnvironment(&cfg, os.Getenv(config.FinanceSysEnvironmentVariable))
+	return config.NewSnapshot(&cfg, raw, "local_example", time.Now())
+}
+
+func findLocalExampleConfig() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	for {
+		candidate := filepath.Join(dir, "configs", "example_nacos_config.json")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", fmt.Errorf("configs/example_nacos_config.json was not found from the working directory or its parents")
 }
 
 func openDB(ctx context.Context, cfg *config.Config) (*gorm.DB, error) {

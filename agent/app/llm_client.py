@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from app.config import AgentSettings, get_settings
+from app.http_client import HTTPTransportError, StdlibHTTPClient, redact_secrets
 from app.schemas import AgentRawIntent
 from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill_prompt_block
 
@@ -18,8 +19,8 @@ PROTECTED_EXTRA_HEADER_NAMES = {"authorization", "content-type"}
 class LLMClient:
     """OpenAI-compatible model client for raw intent extraction.
 
-    The client is optional at runtime. When AGENT_LLM_ENABLED is false, the graph
-    uses deterministic extraction for local tests and smoke runs.
+    The client is optional at runtime. When the runtime LLM setting is disabled,
+    the graph uses deterministic extraction for local tests and smoke runs.
     """
 
     def __init__(
@@ -30,8 +31,10 @@ class LLMClient:
     ) -> None:
         self.settings = settings or get_settings()
         self.llm = self.settings.llm
-        self.http_client = http_client or httpx.Client(
-            timeout=self.llm.timeout_ms / 1000
+        self.http_client = (
+            http_client
+            if http_client is not None
+            else StdlibHTTPClient(timeout=self.llm.timeout_ms / 1000)
         )
         self._sleep = sleep or time.sleep
 
@@ -89,8 +92,12 @@ class LLMClient:
                     timeout=self.llm.timeout_ms / 1000,
                 )
                 response_text = response.text.strip()
-                if response.status_code >= 400:
-                    message = f"llm http {response.status_code}: {response_text}"
+                if response.status_code < 200 or response.status_code >= 300:
+                    safe_response_text = redact_secrets(
+                        response_text,
+                        [self.llm.api_key, *self.llm.extra_headers.values()],
+                    )
+                    message = f"llm http {response.status_code}: {safe_response_text}"
                     if _is_provider_moderation_block(response_text):
                         raise _NonRetryableLLMError(message)
                     if response.status_code >= 500:
@@ -102,7 +109,12 @@ class LLMClient:
                     raise _RetryableLLMError(f"invalid llm response: {exc}") from exc
             except _NonRetryableLLMError as exc:
                 raise RuntimeError(str(exc)) from exc
-            except (httpx.TimeoutException, httpx.TransportError, _RetryableLLMError) as exc:
+            except (
+                httpx.TimeoutException,
+                httpx.TransportError,
+                HTTPTransportError,
+                _RetryableLLMError,
+            ) as exc:
                 last_error = exc
                 if attempt == attempts:
                     break

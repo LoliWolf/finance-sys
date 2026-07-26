@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,7 +79,7 @@ func main() {
 	opts := parseFlags()
 
 	if opts.bootstrapEnv != "" {
-		if err := loadEnvFileIfExists(opts.bootstrapEnv); err != nil {
+		if err := bootstrap.LoadNacosServerAddressFromFiles(opts.bootstrapEnv); err != nil {
 			fatal(err)
 		}
 	}
@@ -162,7 +162,7 @@ func parseFlags() options {
 	defaultEnv := defaultBootstrapEnvPath()
 	opts := options{}
 	flag.StringVar(&opts.bootstrapEnv, "bootstrap-env", defaultEnv, "Nacos bootstrap env file. Empty disables file loading.")
-	flag.StringVar(&opts.pythonPath, "python", "", "Python executable. Defaults to agent/.venv/Scripts/python.exe when present, else python.")
+	flag.StringVar(&opts.pythonPath, "python", "", "Python executable. Defaults to the platform-specific agent/.venv interpreter, then python3/python on PATH.")
 	flag.StringVar(&opts.skillScript, "skill-script", filepath.Join("agent", "skills", "tushare", "scripts", "tushare_call.py"), "Tushare skill CLI script path.")
 	flag.StringVar(&opts.outDir, "out-dir", "", "Directory for Tushare JSON exports. Defaults to tmp/tushare-init/<timestamp>.")
 	flag.StringVar(&opts.stockStatuses, "stock-statuses", "L,D,P", "Comma-separated stock_basic list_status values.")
@@ -186,39 +186,6 @@ func defaultBootstrapEnvPath() string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
-}
-
-func loadEnvFileIfExists(path string) error {
-	if strings.TrimSpace(path) == "" || !fileExists(path) {
-		return nil
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		value = strings.Trim(value, `"'`)
-		if key == "" || os.Getenv(key) != "" {
-			continue
-		}
-		if err := os.Setenv(key, value); err != nil {
-			return err
-		}
-	}
-	return scanner.Err()
 }
 
 func loadNacosSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snapshot, error) {
@@ -253,11 +220,30 @@ func openDB(ctx context.Context, cfg *config.Config) (*gorm.DB, error) {
 }
 
 func detectPython() string {
-	venvPython := filepath.Join("agent", ".venv", "Scripts", "python.exe")
-	if fileExists(venvPython) {
-		return venvPython
+	for _, candidate := range venvPythonCandidates(runtime.GOOS) {
+		if fileExists(candidate) {
+			return candidate
+		}
 	}
-	return "python"
+	for _, name := range []string{"python3", "python"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	if runtime.GOOS == "windows" {
+		return "python"
+	}
+	return "python3"
+}
+
+func venvPythonCandidates(goos string) []string {
+	if goos == "windows" {
+		return []string{filepath.Join("agent", ".venv", "Scripts", "python.exe")}
+	}
+	return []string{
+		filepath.Join("agent", ".venv", "bin", "python3"),
+		filepath.Join("agent", ".venv", "bin", "python"),
+	}
 }
 
 func (r *runner) run(ctx context.Context) (summary, error) {

@@ -35,14 +35,15 @@ type ruleEngine interface {
 }
 
 type DocumentService struct {
-	db        *gorm.DB
-	runtime   *config.Runtime
-	parser    documentParser
-	analyzer  planAnalyzer
-	assembler *CandidateAssembler
-	rules     ruleEngine
-	observer  *ResolutionObserver
-	logger    *slog.Logger
+	db         *gorm.DB
+	runtime    *config.Runtime
+	parser     documentParser
+	analyzer   planAnalyzer
+	assembler  *CandidateAssembler
+	rules      ruleEngine
+	observer   *ResolutionObserver
+	processing *ProcessingPools
+	logger     *slog.Logger
 }
 
 func NewDocumentService(
@@ -52,17 +53,19 @@ func NewDocumentService(
 	analyzer planAnalyzer,
 	assembler *CandidateAssembler,
 	rules ruleEngine,
+	processing *ProcessingPools,
 	logger *slog.Logger,
 ) *DocumentService {
 	return &DocumentService{
-		db:        db,
-		runtime:   runtime,
-		parser:    parser,
-		analyzer:  analyzer,
-		assembler: assembler,
-		rules:     rules,
-		observer:  NewResolutionObserver(runtime, logger),
-		logger:    logger,
+		db:         db,
+		runtime:    runtime,
+		parser:     parser,
+		analyzer:   analyzer,
+		assembler:  assembler,
+		rules:      rules,
+		observer:   NewResolutionObserver(runtime, logger),
+		processing: processing,
+		logger:     logger,
 	}
 }
 
@@ -135,8 +138,27 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 	s.logger.InfoContext(ctx, "document service analyze content loaded", "document_id", documentID, "file_name", document.FileName, "size_bytes", len(content))
 
 	documentCfg := cfg.Document
-	documentCfg.PDFOCR.Enabled = document.PDFOCREnabled
-	parsed, parseErr := s.parser.Parse(ctx, document.FileName, content, documentCfg)
+	documentCfg.PDFUseOCR = document.PDFOCREnabled
+	var parsed domain.ParseRun
+	var parseErr error
+	if documentCfg.PDFUseOCR && strings.EqualFold(filepath.Ext(document.FileName), ".pdf") {
+		releaseOCR, acquireErr := s.processing.AcquireOCR(ctx)
+		if acquireErr != nil {
+			parseErr = acquireErr
+			parsed = domain.ParseRun{
+				Status:        domain.ParseRunStatusFailed,
+				ParserName:    domain.ParserNamePDFOCR,
+				ParserVersion: "global-ocr-pool",
+				ErrorMessage:  acquireErr.Error(),
+				RawMetadata:   map[string]any{"pdf_ocr_used": true, "pool_acquire_failed": true},
+			}
+		} else {
+			parsed, parseErr = s.parser.Parse(ctx, document.FileName, content, documentCfg)
+			releaseOCR()
+		}
+	} else {
+		parsed, parseErr = s.parser.Parse(ctx, document.FileName, content, documentCfg)
+	}
 	parsed.DocumentID = document.ID
 	parseRunModel, err := parseRunToModel(parsed)
 	if err != nil {
@@ -185,7 +207,15 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 	}
 	s.logger.InfoContext(ctx, "document service analyze parse success", "document_id", documentID, "parse_run_id", parseRun.ID, "chunk_count", len(parseRun.Chunks))
 
-	analysis, err := s.analyzeWithObservation(ctx, *document, *parseRun)
+	var analysis AnalysisObservation
+	releaseLLM, acquireErr := s.processing.AcquireLLM(ctx)
+	if acquireErr != nil {
+		err = acquireErr
+		analysis = AnalysisObservation{AgentMode: observationAgentMode(cfg), Route: string(domain.ResolutionRouteLocalOnly)}
+	} else {
+		analysis, err = s.analyzeWithObservation(ctx, *document, *parseRun)
+		releaseLLM()
+	}
 	intents := analysis.Intents
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze llm failed", "document_id", documentID, "parse_run_id", parseRun.ID, "error", err.Error())
@@ -344,7 +374,8 @@ func isTerminalInvalidParseFailure(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "invalid page count 0") ||
 		strings.Contains(message, "wrong page range given") ||
-		strings.Contains(message, "first page (1) can not be after the last page (0)")
+		strings.Contains(message, "first page (1) can not be after the last page (0)") ||
+		strings.Contains(message, "ocr produced insufficient text")
 }
 
 func documentStatusAfterAnalysisFailure(resolutions []domain.InstrumentResolution, err error) domain.DocumentStatus {

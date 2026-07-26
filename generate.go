@@ -77,6 +77,20 @@ func main() {
 			return "recommendation_event"
 		case "recommendation_event_evidences":
 			return "recommendation_event_evidence"
+		case "stock_daily_quotes":
+			return "stock_daily_quote"
+		case "market_data_sync_runs":
+			return "market_data_sync_run"
+		case "market_data_sync_missing_items":
+			return "market_data_sync_missing_item"
+		case "recommendation_evaluation_runs":
+			return "recommendation_evaluation_run"
+		case "recommendation_event_window_metrics":
+			return "recommendation_event_window_metric"
+		case "scheduled_task_runs":
+			return "scheduled_task_run"
+		case "external_document_ingestions":
+			return "external_document_ingestion"
 		default:
 			return tableName
 		}
@@ -135,6 +149,61 @@ func main() {
 		g.GenerateModelAs("bloggers", "Blogger"),
 		g.GenerateModelAs("recommendation_events", "RecommendationEvent"),
 		g.GenerateModelAs("recommendation_event_evidences", "RecommendationEventEvidence"),
+		g.GenerateModelAs("stock_daily_quotes", "StockDailyQuote",
+			gen.FieldRename("ts_code", "TSCode"),
+			gen.FieldRename("tushare_content", "TushareContent"),
+			gen.FieldType("tushare_content", "[]byte"),
+		),
+		g.GenerateModelAs("market_data_sync_runs", "MarketDataSyncRun",
+			gen.FieldType("started_at", "*time.Time"),
+			gen.FieldType("finished_at", "*time.Time"),
+			gen.FieldType("claimed_at", "*time.Time"),
+			gen.FieldRename("request_params_json", "RequestParamsJSON"),
+			gen.FieldType("request_params_json", "[]byte"),
+		),
+		g.GenerateModelAs("market_data_sync_missing_items", "MarketDataSyncMissingItem",
+			gen.FieldRename("ts_code", "TSCode"),
+		),
+		g.GenerateModelAs("recommendation_evaluation_runs", "RecommendationEvaluationRun",
+			gen.FieldRename("request_params_json", "RequestParamsJSON"),
+			gen.FieldType("request_params_json", "[]byte"),
+			gen.FieldType("started_at", "*time.Time"),
+			gen.FieldType("finished_at", "*time.Time"),
+		),
+		g.GenerateModelAs("recommendation_event_window_metrics", "RecommendationEventWindowMetric",
+			gen.FieldRename("ts_code", "TSCode"),
+			gen.FieldType("base_date", "*time.Time"),
+			gen.FieldType("base_close_price", "*float64"),
+			gen.FieldType("entry_date", "*time.Time"),
+			gen.FieldType("entry_price", "*float64"),
+			gen.FieldType("exit_date", "*time.Time"),
+			gen.FieldType("exit_close_price", "*float64"),
+			gen.FieldType("raw_return_ratio", "*float64"),
+			gen.FieldType("direction_return_ratio", "*float64"),
+			gen.FieldType("max_favorable_return_ratio", "*float64"),
+			gen.FieldType("max_adverse_return_ratio", "*float64"),
+			gen.FieldType("max_drawdown_ratio", "*float64"),
+			gen.FieldType("win_flag", "*bool"),
+			gen.FieldType("best_trade_date", "*time.Time"),
+			gen.FieldType("worst_trade_date", "*time.Time"),
+		),
+		g.GenerateModelAs("scheduled_task_runs", "ScheduledTaskRun",
+			gen.FieldType("task_type", "uint16"),
+			gen.FieldRename("input_json", "InputJSON"),
+			gen.FieldRename("output_json", "OutputJSON"),
+			gen.FieldType("input_json", "[]byte"),
+			gen.FieldType("output_json", "[]byte"),
+			gen.FieldType("started_at", "*time.Time"),
+			gen.FieldType("finished_at", "*time.Time"),
+		),
+		g.GenerateModelAs("external_document_ingestions", "ExternalDocumentIngestion",
+			gen.FieldRename("source_path_hash", "SourcePathHash"),
+			gen.FieldRename("content_sha256", "ContentSHA256"),
+			gen.FieldType("remote_modified_at", "*time.Time"),
+			gen.FieldType("document_id", "*int64"),
+			gen.FieldType("downloaded_at", "*time.Time"),
+			gen.FieldType("analyzed_at", "*time.Time"),
+		),
 	)
 	g.Execute()
 	logger.Info("gorm gen completed", "source", snapshot.Source, "out_path", queryOutPath, "model_path", "internal/domain/db_model")

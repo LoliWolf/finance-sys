@@ -32,6 +32,10 @@ type ParserName string
 const (
 	// ParserNameTextNative 表示使用内置文本解析器处理 txt、md、csv 等纯文本文件。
 	ParserNameTextNative ParserName = "text-native"
+	// ParserNamePDFNative 表示通过内置纯 Go 解析器从 PDF 中提取文本。
+	ParserNamePDFNative ParserName = "pdf-native"
+	// ParserNamePDFKit 表示在 macOS 上通过系统 PDFKit 框架从 PDF 中提取文本。
+	ParserNamePDFKit ParserName = "pdfkit-native"
 	// ParserNamePDFCLI 表示通过外部命令行工具从 PDF 中提取文本。
 	ParserNamePDFCLI ParserName = "pdf-cli"
 	// ParserNamePDFOCR 表示通过 OCR 命令从扫描型 PDF 中提取文本。

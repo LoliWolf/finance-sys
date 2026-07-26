@@ -19,6 +19,58 @@ func TestValidateExampleConfig(t *testing.T) {
 	require.NoError(t, config.Validate(&cfg))
 }
 
+func TestValidateRequiresCompleteTestDatabaseConfig(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.DatabaseTest = config.DatabaseConfig{}
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "database_test.dsn is required")
+	require.ErrorContains(t, err, "database_test.driver must be mysql")
+}
+
+func TestValidateRequiresPDFOCRCommand(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Document.PDFOCR.Command = ""
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "document.pdf_ocr.command is required")
+}
+
+func TestValidateRequiresPositiveGlobalProcessingPools(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Processing.OCRMaxConcurrency = 0
+	cfg.Processing.LLMMaxConcurrency = 0
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "processing.ocr_max_concurrency must be positive")
+	require.ErrorContains(t, err, "processing.llm_max_concurrency must be positive")
+}
+
+func TestValidateOpenListSchedulerRequiresConfiguredSource(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Scheduler.Enabled = true
+	cfg.Scheduler.OpenListDocumentIngestion.Enabled = true
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "external_documents.openlist must be enabled")
+}
+
 func TestValidateAllowsConfiguredLongAgentTimeout(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)
@@ -46,4 +98,158 @@ func TestValidateRejectsLLMExtraHeadersOverridingProtectedHeaders(t *testing.T) 
 	require.Error(t, err)
 	require.ErrorContains(t, err, "llm.extra_headers must not override Authorization")
 	require.ErrorContains(t, err, "llm.extra_headers must not override Content-Type")
+}
+
+func TestValidateMarketDataTushareRequiresEnabledToken(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.MarketData.Enabled = true
+	cfg.MarketData.Provider = "tushare"
+	cfg.MarketData.Tushare.Enabled = true
+	cfg.MarketData.Tushare.Tokens = []config.TushareTokenConfig{
+		{Alias: "primary", Token: "", Enabled: true, Weight: 1},
+	}
+
+	err = config.Validate(&cfg)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "market_data.tushare.tokens token is required when token is enabled")
+}
+
+func TestValidateMarketDataRequiresTushareWhenEnabled(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.MarketData.Enabled = true
+	cfg.MarketData.Provider = "tushare"
+	cfg.MarketData.Tushare.Enabled = false
+
+	err = config.Validate(&cfg)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "market_data.tushare.enabled must be true when market_data.enabled is true")
+}
+
+func TestValidateMarketDataTushareAllowsDuplicateTokenAlias(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.MarketData.Enabled = true
+	cfg.MarketData.Provider = "tushare"
+	cfg.MarketData.Tushare.Enabled = true
+	cfg.MarketData.Tushare.Tokens = []config.TushareTokenConfig{
+		{Alias: "primary", Token: "token-a", Enabled: true, Weight: 1},
+		{Alias: "primary", Token: "token-b", Enabled: true, Weight: 1},
+	}
+
+	err = config.Validate(&cfg)
+	require.NoError(t, err)
+}
+
+func TestValidateRecommendationPerformanceAcceptsConfiguredWindows(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Evaluation.Enabled = true
+	cfg.Evaluation.RecommendationPerformance = config.RecommendationPerformanceConfig{
+		Enabled:               true,
+		Windows:               []int{5, 10, 30, 90},
+		QuoteSource:           "TUSHARE",
+		EntryPriceRule:        "NEXT_TRADE_OPEN",
+		BasePriceRule:         "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE",
+		WinThresholdRatio:     0,
+		MinQuoteCoverageRatio: 0.9,
+		CalcVersion:           "v1",
+		AsyncWorker: config.EvaluationWorkerConfig{
+			Enabled:           true,
+			PollIntervalMS:    500,
+			ClaimTimeoutMS:    60000,
+			MaxConcurrentRuns: 1,
+			BatchSize:         500,
+		},
+		Ranking: config.EvaluationRankingConfig{
+			DefaultWindowDays:     30,
+			DefaultMinSampleCount: 5,
+			DefaultSort:           "performance_score",
+		},
+	}
+
+	require.NoError(t, config.Validate(&cfg))
+}
+
+func TestValidateRecommendationPerformanceRejectsDuplicateAndUnknownDefaultWindow(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Evaluation.Enabled = true
+	cfg.Evaluation.RecommendationPerformance.Enabled = true
+	cfg.Evaluation.RecommendationPerformance.Windows = []int{5, 5, 10}
+	cfg.Evaluation.RecommendationPerformance.QuoteSource = "TUSHARE"
+	cfg.Evaluation.RecommendationPerformance.EntryPriceRule = "NEXT_TRADE_OPEN"
+	cfg.Evaluation.RecommendationPerformance.BasePriceRule = "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE"
+	cfg.Evaluation.RecommendationPerformance.MinQuoteCoverageRatio = 0.9
+	cfg.Evaluation.RecommendationPerformance.CalcVersion = "v1"
+	cfg.Evaluation.RecommendationPerformance.Ranking.DefaultWindowDays = 30
+	cfg.Evaluation.RecommendationPerformance.Ranking.DefaultSort = "win_rate"
+
+	err = config.Validate(&cfg)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "windows must not contain duplicates")
+	require.ErrorContains(t, err, "ranking.default_window_days must be present in windows")
+}
+
+func TestValidateSchedulerRequiresEnabledWorkersAndValidSchedules(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.MarketData.Enabled = true
+	cfg.MarketData.Tushare.Enabled = true
+	cfg.MarketData.Tushare.Tokens = []config.TushareTokenConfig{
+		{Alias: "primary", Token: "test-token", Enabled: true, Weight: 1},
+	}
+	cfg.MarketData.StockDaily.Enabled = true
+	cfg.Evaluation.Enabled = true
+	cfg.Evaluation.RecommendationPerformance.Enabled = true
+	cfg.Scheduler = config.SchedulerConfig{
+		Enabled:        true,
+		PollIntervalMS: 1000,
+		ClaimTimeoutMS: 8 * 60 * 60 * 1000,
+		StockDailyPreviousDay: config.DailyTaskScheduleConfig{
+			Enabled: true,
+			Hour:    2,
+			Minute:  0,
+		},
+		RecommendationEvaluationRecent: config.RecommendationEvaluationScheduleConfig{
+			DailyTaskScheduleConfig: config.DailyTaskScheduleConfig{
+				Enabled: true,
+				Hour:    4,
+				Minute:  0,
+			},
+			LookbackDays: 90,
+		},
+	}
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "market_data.async_worker must be enabled")
+	require.ErrorContains(t, err, "evaluation.recommendation_performance.async_worker must be enabled")
+
+	cfg.MarketData.AsyncWorker.Enabled = true
+	cfg.Evaluation.RecommendationPerformance.AsyncWorker.Enabled = true
+	cfg.Scheduler.RecommendationEvaluationRecent.Hour = 24
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "scheduler.recommendation_evaluation_recent.hour must be in [0,23]")
+
+	cfg.Scheduler.RecommendationEvaluationRecent.Hour = 4
+	require.NoError(t, config.Validate(&cfg))
 }
