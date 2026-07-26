@@ -108,28 +108,52 @@ nacos_config=$(curl -fsS --max-time 10 --get "http://$NACOS_SERVER_ADDR/nacos/v1
     exit 1
   }
 if command -v jq >/dev/null 2>&1; then
-  APP_PORT=$(printf '%s' "$nacos_config" | jq -er '.service.http.port') || {
+  PROD_APP_PORT=$(printf '%s' "$nacos_config" | jq -er '.service.http.port') || {
     echo "[ERROR] Nacos JSON does not contain service.http.port." >&2
+    exit 1
+  }
+  TEST_APP_PORT=$(printf '%s' "$nacos_config" | jq -er '.service.http.port_test') || {
+    echo "[ERROR] Nacos JSON does not contain service.http.port_test." >&2
     exit 1
   }
 elif command -v python3 >/dev/null 2>&1; then
-  APP_PORT=$(printf '%s' "$nacos_config" | python3 -c 'import json,sys; print(json.load(sys.stdin)["service"]["http"]["port"])') || {
+  ports=$(printf '%s' "$nacos_config" | python3 -c 'import json,sys; h=json.load(sys.stdin)["service"]["http"]; print(h["port"], h["port_test"])') || {
+    echo "[ERROR] Nacos JSON does not contain service.http.port and service.http.port_test." >&2
+    exit 1
+  }
+  set -- $ports
+  PROD_APP_PORT=$1
+  TEST_APP_PORT=$2
+elif command -v plutil >/dev/null 2>&1; then
+  PROD_APP_PORT=$(printf '%s' "$nacos_config" | plutil -extract service.http.port raw -o - -) || {
     echo "[ERROR] Nacos JSON does not contain service.http.port." >&2
     exit 1
   }
-elif command -v plutil >/dev/null 2>&1; then
-  APP_PORT=$(printf '%s' "$nacos_config" | plutil -extract service.http.port raw -o - -) || {
-    echo "[ERROR] Nacos JSON does not contain service.http.port." >&2
+  TEST_APP_PORT=$(printf '%s' "$nacos_config" | plutil -extract service.http.port_test raw -o - -) || {
+    echo "[ERROR] Nacos JSON does not contain service.http.port_test." >&2
     exit 1
   }
 else
-  echo "[ERROR] jq, python3, or plutil is required to read service.http.port from Nacos." >&2
+  echo "[ERROR] jq, python3, or plutil is required to read the HTTP ports from Nacos." >&2
   exit 127
 fi
-app_base_url=http://127.0.0.1:$APP_PORT
-case "$APP_PORT" in
-  ''|*[!0-9]*) echo "[ERROR] APP_PORT must be numeric: $APP_PORT" >&2; exit 2 ;;
+case "$PROD_APP_PORT" in
+  ''|*[!0-9]*) echo "[ERROR] Nacos service.http.port must be numeric: $PROD_APP_PORT" >&2; exit 2 ;;
 esac
+case "$TEST_APP_PORT" in
+  ''|*[!0-9]*) echo "[ERROR] Nacos service.http.port_test must be numeric: $TEST_APP_PORT" >&2; exit 2 ;;
+esac
+[ "$PROD_APP_PORT" -gt 0 ] && [ "$PROD_APP_PORT" -le 65535 ] || { echo "[ERROR] Nacos service.http.port must be in (0,65535]: $PROD_APP_PORT" >&2; exit 2; }
+[ "$TEST_APP_PORT" -gt 0 ] && [ "$TEST_APP_PORT" -le 65535 ] || { echo "[ERROR] Nacos service.http.port_test must be in (0,65535]: $TEST_APP_PORT" >&2; exit 2; }
+[ "$PROD_APP_PORT" -ne "$TEST_APP_PORT" ] || { echo "[ERROR] Nacos production and test HTTP ports must be different." >&2; exit 2; }
+
+database_profile=test
+APP_PORT=$TEST_APP_PORT
+if [ "${FINANCE_SYS_ENV:-}" = PROD ]; then
+  database_profile=production
+  APP_PORT=$PROD_APP_PORT
+fi
+app_base_url=http://127.0.0.1:$APP_PORT
 
 tmp_dir=$root_dir/tmp
 pid_file=$tmp_dir/api_nacos.pid
@@ -173,17 +197,14 @@ if command -v lsof >/dev/null 2>&1; then
   listeners=$(lsof -nP -tiTCP:"$APP_PORT" -sTCP:LISTEN 2>/dev/null || true)
   if [ -n "$listeners" ]; then
     echo "[ERROR] Port $APP_PORT is already in use by PID(s): $(printf '%s' "$listeners" | tr '\n' ' ')" >&2
-    echo "        Stop that process or update service.http.port in Nacos." >&2
+    echo "        Stop that process or update the selected HTTP port in Nacos." >&2
     exit 1
   fi
 fi
 
-database_profile=test
-if [ "${FINANCE_SYS_ENV:-}" = PROD ]; then
-  database_profile=production
-fi
 echo "[INFO] Nacos: $NACOS_SERVER_ADDR dataId=$nacos_data_id group=$nacos_group namespace=$nacos_namespace"
 echo "[INFO] Database profile: $database_profile (FINANCE_SYS_ENV=${FINANCE_SYS_ENV:-unset})"
+echo "[INFO] Effective HTTP port: $APP_PORT"
 
 if [ "$mode" = debug ]; then
   echo "[DEBUG] Starting API in the foreground. Press Ctrl+C to stop."

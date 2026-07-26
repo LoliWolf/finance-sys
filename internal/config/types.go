@@ -34,7 +34,9 @@ type ServiceConfig struct {
 
 type HTTPServerConfig struct {
 	Host                   string     `json:"host"`
-	Port                   int        `json:"port"`
+	PortProduction         int        `json:"port"`
+	PortTest               int        `json:"port_test"`
+	Port                   int        `json:"-"`
 	APIPrefix              string     `json:"api_prefix"`
 	ReadTimeoutMS          int        `json:"read_timeout_ms"`
 	WriteTimeoutMS         int        `json:"write_timeout_ms"`
