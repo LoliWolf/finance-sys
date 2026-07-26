@@ -47,6 +47,7 @@ func TestLoadNacosBootstrapFromEnvRequiresServerAddress(t *testing.T) {
 
 func TestLoadInitialSnapshotUsesLocalExampleWithoutNacosAddress(t *testing.T) {
 	t.Setenv("NACOS_SERVER_ADDR", "")
+	t.Setenv("FINANCE_SYS_ENV", "")
 
 	snapshot, loader, err := LoadInitialSnapshot(context.Background(), nil)
 	require.NoError(t, err)
@@ -55,10 +56,25 @@ func TestLoadInitialSnapshotUsesLocalExampleWithoutNacosAddress(t *testing.T) {
 	require.Equal(t, "local_example", snapshot.Source)
 	require.NotNil(t, snapshot.Config)
 	require.Equal(t, "finance-sys", snapshot.Config.Meta.AppName)
+	require.Equal(t, "test", string(snapshot.Config.SelectedDatabaseProfile))
+	require.Contains(t, snapshot.Config.Database.DSN, "/expert_trade_test?")
+}
+
+func TestLoadInitialSnapshotUsesLocalProductionDatabaseOnlyForExactPROD(t *testing.T) {
+	t.Setenv("NACOS_SERVER_ADDR", "")
+	t.Setenv("FINANCE_SYS_ENV", "PROD")
+
+	snapshot, loader, err := LoadInitialSnapshot(context.Background(), nil)
+	require.NoError(t, err)
+	require.Nil(t, loader)
+	require.Equal(t, "production", string(snapshot.Config.SelectedDatabaseProfile))
+	require.Contains(t, snapshot.Config.Database.DSN, "/expert_trade?")
+	require.NotContains(t, snapshot.Config.Database.DSN, "/expert_trade_test?")
 }
 
 func TestLoadInitialSnapshotFallsBackWhenNacosCannotBeRead(t *testing.T) {
 	t.Setenv("NACOS_SERVER_ADDR", "invalid-address-without-port")
+	t.Setenv("FINANCE_SYS_ENV", "")
 
 	snapshot, loader, err := LoadInitialSnapshot(context.Background(), nil)
 	require.NoError(t, err)

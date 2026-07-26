@@ -3,7 +3,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 6
+    "config_version": 7
   },
   "service": {
     "http": {
@@ -45,6 +45,14 @@
   "database": {
     "driver": "mysql",
     "dsn": "expert_trade:change_me@tcp(localhost:3306)/expert_trade?parseTime=true&multiStatements=true&charset=utf8mb4",
+    "max_open_conns": 20,
+    "max_idle_conns": 10,
+    "conn_max_lifetime_minutes": 30,
+    "conn_max_idle_time_minutes": 10
+  },
+  "database_test": {
+    "driver": "mysql",
+    "dsn": "expert_trade:change_me@tcp(localhost:3306)/expert_trade_test?parseTime=true&multiStatements=true&charset=utf8mb4",
     "max_open_conns": 20,
     "max_idle_conns": 10,
     "conn_max_lifetime_minutes": 30,

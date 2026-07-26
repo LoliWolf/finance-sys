@@ -73,7 +73,7 @@ func Build(ctx context.Context) (*App, error) {
 		logger.Error("bootstrap open db failed", "error", err.Error())
 		return nil, err
 	}
-	logger.Info("bootstrap db connected")
+	logger.Info("bootstrap db connected", "database_profile", snapshot.Config.SelectedDatabaseProfile)
 
 	if snapshot.Config.NacosClient.WriteConfigSnapshotToDB {
 		_ = dal.ConfigSnapshots.Create(ctx, db, &db_model.ConfigSnapshot{
@@ -170,6 +170,7 @@ func loadLocalExampleSnapshot() (*config.Snapshot, error) {
 	if err := config.Validate(&cfg); err != nil {
 		return nil, err
 	}
+	config.SelectDatabaseForEnvironment(&cfg, os.Getenv(config.FinanceSysEnvironmentVariable))
 	return config.NewSnapshot(&cfg, raw, "local_example", time.Now())
 }
 

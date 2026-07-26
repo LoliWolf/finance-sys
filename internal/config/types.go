@@ -1,18 +1,21 @@
 package config
 
 type Config struct {
-	Meta        MetaConfig        `json:"meta"`
-	Service     ServiceConfig     `json:"service"`
-	NacosClient NacosClientConfig `json:"nacos_client"`
-	Security    SecurityConfig    `json:"security"`
-	Logging     LoggingConfig     `json:"logging"`
-	Database    DatabaseConfig    `json:"database"`
-	Document    DocumentConfig    `json:"document"`
-	LLM         LLMConfig         `json:"llm"`
-	Agent       AgentConfig       `json:"agent"`
-	MarketData  MarketDataConfig  `json:"market_data"`
-	Evaluation  EvaluationConfig  `json:"evaluation"`
-	Rules       RulesConfig       `json:"rules"`
+	Meta                    MetaConfig        `json:"meta"`
+	Service                 ServiceConfig     `json:"service"`
+	NacosClient             NacosClientConfig `json:"nacos_client"`
+	Security                SecurityConfig    `json:"security"`
+	Logging                 LoggingConfig     `json:"logging"`
+	DatabaseProduction      DatabaseConfig    `json:"database"`
+	DatabaseTest            DatabaseConfig    `json:"database_test"`
+	Database                DatabaseConfig    `json:"-"`
+	SelectedDatabaseProfile DatabaseProfile   `json:"-"`
+	Document                DocumentConfig    `json:"document"`
+	LLM                     LLMConfig         `json:"llm"`
+	Agent                   AgentConfig       `json:"agent"`
+	MarketData              MarketDataConfig  `json:"market_data"`
+	Evaluation              EvaluationConfig  `json:"evaluation"`
+	Rules                   RulesConfig       `json:"rules"`
 }
 
 type MetaConfig struct {

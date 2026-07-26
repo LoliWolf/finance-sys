@@ -131,7 +131,7 @@ Windows：
 
 ## Nacos 配置
 
-线上运行通过环境变量 `NACOS_SERVER_ADDR` 读取 Nacos 中的单个 JSON 配置文档。MySQL DSN、HTTP 端口、LLM Key、Tushare token 和业务开关都在 Nacos，不在本地 bootstrap 文件中重复维护。没有设置 Nacos 地址，或 Nacos 配置读取失败时，Go 主程序会降级读取 `configs/example_nacos_config.json`，方便本地开发调试。
+运行时通过环境变量 `NACOS_SERVER_ADDR` 读取 Nacos 中的单个 JSON 配置文档。生产 MySQL 完整配置位于 `database`，同构开发测试库完整配置位于 `database_test`。只有进程环境变量 `FINANCE_SYS_ENV` 精确等于 `PROD` 才使用 `database`；变量缺失、为空、大小写不符或其他值均使用 `database_test`。HTTP 端口、LLM Key、Tushare token 和业务开关也都在 Nacos，不在本地 bootstrap 文件中重复维护。没有设置 Nacos 地址，或 Nacos 配置读取失败时，Go 主程序会降级读取 `configs/example_nacos_config.json`，并应用同一数据库选择规则。
 
 复制 bootstrap 示例：
 
@@ -145,7 +145,21 @@ rem Windows cmd.exe
 copy bootstrap_go122.env.example bootstrap_go122.env
 ```
 
-`bootstrap_go122.env` 已被 Git 忽略。项目当前 Nacos 地址已写入示例；只有切换网络或环境时才需要改 `NACOS_SERVER_ADDR`。用于定位配置文档的 `public / DEFAULT_GROUP / expert_trade` 固定在代码中。程序不会读取本地的 namespace、group、dataId、Nacos 凭据或业务配置覆盖值；bootstrap 文件若出现地址以外的配置键，启动脚本会直接报错。
+`bootstrap_go122.env` 已被 Git 忽略。项目当前 Nacos 地址已写入示例；只有切换网络或环境时才需要改 `NACOS_SERVER_ADDR`。用于定位配置文档的 `public / DEFAULT_GROUP / expert_trade` 固定在代码中。程序不会读取本地的 namespace、group、dataId、Nacos 凭据或业务配置覆盖值；bootstrap 文件若出现地址以外的配置键，启动脚本会直接报错。`FINANCE_SYS_ENV` 是进程级安全开关，不写入 bootstrap 文件。
+
+本地开发、调试、模型生成和测试无需设置 `FINANCE_SYS_ENV`，默认连接 `database_test`。线上服务必须显式设置：
+
+```bash
+export FINANCE_SYS_ENV=PROD
+./start_api_nacos.sh
+```
+
+Windows PowerShell：
+
+```powershell
+$env:FINANCE_SYS_ENV = "PROD"
+.\start_api_nacos.bat
+```
 
 `config_snapshots.raw_json` 会把实际加载的配置 JSON 原文写入数据库，供内部审计和版本追踪；该内容不会写入仓库。
 
@@ -157,7 +171,7 @@ copy bootstrap_go122.env.example bootstrap_go122.env
 go run generate.go
 ```
 
-该命令会按启动路径读取配置中的 MySQL DSN，并基于当前数据库结构同步 `internal/domain/db_model`。
+该命令会按启动路径和 `FINANCE_SYS_ENV` 选择 MySQL DSN，并基于当前数据库结构同步 `internal/domain/db_model`；默认使用测试 Schema。
 
 ## 运行 API
 

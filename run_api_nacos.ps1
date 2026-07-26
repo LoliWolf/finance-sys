@@ -145,7 +145,12 @@ if ($listeners) {
   throw "Port $AppPort is already in use by PID(s): $owners. Stop that process or update service.http.port in Nacos."
 }
 
+$DatabaseProfile = "test"
+if ($env:FINANCE_SYS_ENV -ceq "PROD") {
+  $DatabaseProfile = "production"
+}
 Write-Host "[INFO] Nacos: $($env:NACOS_SERVER_ADDR) dataId=$NacosDataId group=$NacosGroup namespace=$NacosNamespace"
+Write-Host "[INFO] Database profile: $DatabaseProfile (FINANCE_SYS_ENV=$($env:FINANCE_SYS_ENV))"
 
 if ($Mode -eq "debug") {
   Write-Host "[DEBUG] Starting API in the foreground. Press Ctrl+C to stop."

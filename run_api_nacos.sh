@@ -178,7 +178,12 @@ if command -v lsof >/dev/null 2>&1; then
   fi
 fi
 
+database_profile=test
+if [ "${FINANCE_SYS_ENV:-}" = PROD ]; then
+  database_profile=production
+fi
 echo "[INFO] Nacos: $NACOS_SERVER_ADDR dataId=$nacos_data_id group=$nacos_group namespace=$nacos_namespace"
+echo "[INFO] Database profile: $database_profile (FINANCE_SYS_ENV=${FINANCE_SYS_ENV:-unset})"
 
 if [ "$mode" = debug ]; then
   echo "[DEBUG] Starting API in the foreground. Press Ctrl+C to stop."

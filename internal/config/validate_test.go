@@ -19,6 +19,19 @@ func TestValidateExampleConfig(t *testing.T) {
 	require.NoError(t, config.Validate(&cfg))
 }
 
+func TestValidateRequiresCompleteTestDatabaseConfig(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.DatabaseTest = config.DatabaseConfig{}
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "database_test.dsn is required")
+	require.ErrorContains(t, err, "database_test.driver must be mysql")
+}
+
 func TestValidateRequiresPDFOCRCommand(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)

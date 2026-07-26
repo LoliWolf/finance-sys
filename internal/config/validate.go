@@ -23,8 +23,8 @@ func Validate(cfg *Config) error {
 	require(cfg.Meta.Timezone != "", "meta.timezone is required")
 	require(cfg.Service.HTTP.Port > 0, "service.http.port must be positive")
 	require(strings.HasPrefix(cfg.Service.HTTP.APIPrefix, "/"), "service.http.api_prefix must start with /")
-	require(cfg.Database.DSN != "", "database.dsn is required")
-	require(cfg.Database.Driver == DatabaseDriverMySQL, "database.driver must be mysql")
+	validateDatabase("database", cfg.DatabaseProduction, require)
+	validateDatabase("database_test", cfg.DatabaseTest, require)
 	require(cfg.NacosClient.PollIntervalSeconds > 0, "nacos_client.poll_interval_seconds must be positive")
 	require(cfg.Document.MaxFileSizeMB > 0, "document.max_file_size_mb must be positive")
 	require(len(cfg.Document.AllowedExtensions) > 0, "document.allowed_extensions must not be empty")
@@ -125,6 +125,16 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func validateDatabase(name string, cfg DatabaseConfig, require func(bool, string)) {
+	require(cfg.DSN != "", name+".dsn is required")
+	require(cfg.Driver == DatabaseDriverMySQL, name+".driver must be mysql")
+	require(cfg.MaxOpenConns > 0, name+".max_open_conns must be positive")
+	require(cfg.MaxIdleConns >= 0, name+".max_idle_conns must be zero or positive")
+	require(cfg.MaxIdleConns <= cfg.MaxOpenConns, name+".max_idle_conns must not exceed max_open_conns")
+	require(cfg.ConnMaxLifetimeMinutes > 0, name+".conn_max_lifetime_minutes must be positive")
+	require(cfg.ConnMaxIdleTimeMinutes > 0, name+".conn_max_idle_time_minutes must be positive")
 }
 
 func validateMarketDataTushare(cfg MarketDataTushareConfig, require func(bool, string)) {

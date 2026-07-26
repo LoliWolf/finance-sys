@@ -286,9 +286,11 @@ cp bootstrap_go122.env.example bootstrap_go122.env
 # 必要时仅修改 NACOS_SERVER_ADDR=<reachable-host>:8848
 ```
 
-代码固定使用 `public / DEFAULT_GROUP / expert_trade` 定位配置文档，bootstrap 文件只保留 Nacos 地址。MySQL DSN、HTTP 端口、LLM Key、Tushare Token 和业务开关只维护在 Nacos JSON，不要写入 Git。非地址 bootstrap 键会被启动脚本拒绝；启动脚本会从 Nacos 动态读取 HTTP 端口做健康检查。
+代码固定使用 `public / DEFAULT_GROUP / expert_trade` 定位配置文档，bootstrap 文件只保留 Nacos 地址。生产 MySQL 完整配置维护在 Nacos 的 `database`，同构开发测试库完整配置维护在 `database_test`；两者只应有 Schema 差异。HTTP 端口、LLM Key、Tushare Token 和业务开关也只维护在 Nacos JSON，不要写入 Git。非地址 bootstrap 键会被启动脚本拒绝；启动脚本会从 Nacos 动态读取 HTTP 端口做健康检查。
 
 Go 主程序优先通过环境变量中的 Nacos 地址读取配置；地址缺失或 Nacos 读取失败时，降级读取 `configs/example_nacos_config.json`，用于本地开发调试。
+
+数据库选择采用安全默认值：只有进程环境变量 `FINANCE_SYS_ENV=PROD` 才连接生产 Schema；缺失、空值或任何其他值都连接测试 Schema。开发调试和测试不要设置该变量，线上进程必须显式设置。该变量不放入 bootstrap 文件。
 
 ### 6.4 验证 Go 服务
 
@@ -330,10 +332,10 @@ Python Agent 不是行情同步的依赖；只有文档分析配置为 Agent 路
 
 ### 6.6 数据库注意事项
 
-- 优先连接已经执行过 DDL 和历史回填的现有 MySQL。
-- 先确认 Nacos 中的 DSN 指向正确环境，再运行 API 或集成测试。
-- `go run generate.go` 会连接配置中的真实数据库并更新生成模型，仅在表结构变更后运行。
-- 带 `FINANCE_SYS_*_INTEGRATION`、`DML_ACK` 或真实回填开关的测试可能写库，不要在不了解目标数据库时启用。
+- Nacos 同时维护 `database`（生产）和 `database_test`（开发测试）两份完整连接配置。
+- API、`go run generate.go`、初始化工具及 Nacos 集成测试默认连接测试 Schema；仅 `FINANCE_SYS_ENV=PROD` 连接生产 Schema。
+- `go run generate.go` 会连接所选数据库并更新生成模型，仅在表结构变更后运行。
+- 带 `FINANCE_SYS_*_INTEGRATION`、`DML_ACK` 或真实回填开关的测试可能写入所选数据库；正常开发保持 `FINANCE_SYS_ENV` 未设置。
 
 建议首次启动后检查：
 
