@@ -459,6 +459,30 @@ CREATE TABLE `recommendation_evaluation_runs` (
   KEY `idx_rec_eval_runs_type_created` (`run_type`,`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+-- scheduled_task_runs: generic automatic scheduler execution journal.
+-- task_type stores the numeric value of domain.ScheduledTaskType.
+CREATE TABLE `scheduled_task_runs` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `task_type` smallint unsigned NOT NULL,
+  `task_key` varchar(128) NOT NULL,
+  `status` varchar(32) NOT NULL DEFAULT 'QUEUED',
+  `scheduled_at` timestamp(3) NOT NULL,
+  `input_json` json NOT NULL,
+  `output_json` json DEFAULT NULL,
+  `error_message` text NOT NULL,
+  `worker_id` varchar(128) NOT NULL DEFAULT '',
+  `attempt_count` int NOT NULL DEFAULT 0,
+  `started_at` timestamp(3) NULL DEFAULT NULL,
+  `finished_at` timestamp(3) NULL DEFAULT NULL,
+  `config_version` bigint NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_scheduled_task_runs_type_key` (`task_type`,`task_key`),
+  KEY `idx_scheduled_task_runs_claim` (`status`,`scheduled_at`),
+  KEY `idx_scheduled_task_runs_type_created` (`task_type`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 -- recommendation_event_window_metrics: table
 CREATE TABLE `recommendation_event_window_metrics` (
   `id` bigint NOT NULL AUTO_INCREMENT,

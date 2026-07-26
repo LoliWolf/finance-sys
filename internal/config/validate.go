@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func Validate(cfg *Config) error {
@@ -21,6 +22,8 @@ func Validate(cfg *Config) error {
 
 	require(cfg.Meta.ConfigVersion > 0, "meta.config_version must be positive")
 	require(cfg.Meta.Timezone != "", "meta.timezone is required")
+	_, timezoneErr := time.LoadLocation(cfg.Meta.Timezone)
+	require(timezoneErr == nil, "meta.timezone must be a valid IANA timezone")
 	require(cfg.Service.HTTP.Port > 0, "service.http.port must be positive")
 	require(strings.HasPrefix(cfg.Service.HTTP.APIPrefix, "/"), "service.http.api_prefix must start with /")
 	validateDatabase("database", cfg.DatabaseProduction, require)
@@ -107,6 +110,21 @@ func Validate(cfg *Config) error {
 			validateRecommendationPerformance(cfg.Evaluation.RecommendationPerformance, require)
 		}
 	}
+	if cfg.Scheduler.Enabled {
+		require(cfg.Scheduler.PollIntervalMS > 0, "scheduler.poll_interval_ms must be positive when enabled")
+		require(cfg.Scheduler.ClaimTimeoutMS > 0, "scheduler.claim_timeout_ms must be positive when enabled")
+		if cfg.Scheduler.StockDailyPreviousDay.Enabled {
+			validateDailySchedule("scheduler.stock_daily_previous_day", cfg.Scheduler.StockDailyPreviousDay, require)
+			require(cfg.MarketData.Enabled && cfg.MarketData.StockDaily.Enabled, "market_data.stock_daily must be enabled when scheduler.stock_daily_previous_day is enabled")
+			require(cfg.MarketData.AsyncWorker.Enabled, "market_data.async_worker must be enabled when scheduler.stock_daily_previous_day is enabled")
+		}
+		if cfg.Scheduler.RecommendationEvaluationRecent.Enabled {
+			validateDailySchedule("scheduler.recommendation_evaluation_recent", cfg.Scheduler.RecommendationEvaluationRecent.DailyTaskScheduleConfig, require)
+			require(cfg.Scheduler.RecommendationEvaluationRecent.LookbackDays > 0, "scheduler.recommendation_evaluation_recent.lookback_days must be positive when enabled")
+			require(cfg.Evaluation.Enabled && cfg.Evaluation.RecommendationPerformance.Enabled, "evaluation.recommendation_performance must be enabled when scheduler.recommendation_evaluation_recent is enabled")
+			require(cfg.Evaluation.RecommendationPerformance.AsyncWorker.Enabled, "evaluation.recommendation_performance.async_worker must be enabled when scheduler.recommendation_evaluation_recent is enabled")
+		}
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},
@@ -125,6 +143,11 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func validateDailySchedule(name string, cfg DailyTaskScheduleConfig, require func(bool, string)) {
+	require(cfg.Hour >= 0 && cfg.Hour <= 23, name+".hour must be in [0,23]")
+	require(cfg.Minute >= 0 && cfg.Minute <= 59, name+".minute must be in [0,59]")
 }
 
 func validateDatabase(name string, cfg DatabaseConfig, require func(bool, string)) {

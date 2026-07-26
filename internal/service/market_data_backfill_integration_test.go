@@ -22,6 +22,8 @@ import (
 const (
 	runRealStockDailyBackfillEnv = "FINANCE_SYS_RUN_REAL_STOCK_DAILY_BACKFILL"
 	backfillDateConcurrencyEnv   = "FINANCE_SYS_STOCK_DAILY_BACKFILL_CONCURRENCY"
+	backfillStartDateEnv         = "FINANCE_SYS_STOCK_DAILY_BACKFILL_START_DATE"
+	backfillEndDateEnv           = "FINANCE_SYS_STOCK_DAILY_BACKFILL_END_DATE"
 	backfillDateConcurrency      = 10
 )
 
@@ -42,9 +44,10 @@ func TestRealBackfillStockDailyFrom20260101ToToday(t *testing.T) {
 		t.Skip("real DB/Tushare stock daily backfill is disabled in short mode")
 	}
 
-	location := time.FixedZone("Asia/Hong_Kong", 8*60*60)
-	start := time.Date(2026, 1, 1, 0, 0, 0, 0, location)
-	end := dateOnlyInLocation(time.Now().In(location), location)
+	location, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	start, end, err := backfillDateRange(location, time.Now())
+	require.NoError(t, err)
 	dates := calendarDatesInclusive(start, end)
 	require.NotEmpty(t, dates)
 
@@ -132,6 +135,39 @@ feedDates:
 	t.Logf("stock daily backfill completed, dates=%d", completed)
 	logCreatedRunStatusCounts(t, ctx, app, maxRunIDBefore)
 	requireNoDuplicateStockDailyQuotes(t, ctx, app)
+}
+
+func TestBackfillDateRangeCanBeOverriddenByEnv(t *testing.T) {
+	t.Setenv(backfillStartDateEnv, "2026-06-26")
+	t.Setenv(backfillEndDateEnv, "2026-07-26")
+	location, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	start, end, err := backfillDateRange(location, time.Date(2026, 8, 1, 0, 0, 0, 0, location))
+	require.NoError(t, err)
+	require.Equal(t, "2026-06-26", start.Format(time.DateOnly))
+	require.Equal(t, "2026-07-26", end.Format(time.DateOnly))
+}
+
+func backfillDateRange(location *time.Location, now time.Time) (time.Time, time.Time, error) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, location)
+	end := dateOnlyInLocation(now, location)
+	var err error
+	if value := strings.TrimSpace(os.Getenv(backfillStartDateEnv)); value != "" {
+		start, err = time.ParseInLocation(time.DateOnly, value, location)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("parse %s: %w", backfillStartDateEnv, err)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(backfillEndDateEnv)); value != "" {
+		end, err = time.ParseInLocation(time.DateOnly, value, location)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("parse %s: %w", backfillEndDateEnv, err)
+		}
+	}
+	if end.Before(start) {
+		return time.Time{}, time.Time{}, fmt.Errorf("backfill end date %s is before start date %s", end.Format(time.DateOnly), start.Format(time.DateOnly))
+	}
+	return start, end, nil
 }
 
 func calendarDatesInclusive(start time.Time, end time.Time) []time.Time {

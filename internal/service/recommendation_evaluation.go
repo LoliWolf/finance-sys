@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	RecommendationEvaluationRunTypeManual = "MANUAL"
+	RecommendationEvaluationRunTypeManual    = "MANUAL"
+	RecommendationEvaluationRunTypeScheduled = "SCHEDULED"
 
 	RecommendationEvaluationRunStatusQueued        = "QUEUED"
 	RecommendationEvaluationRunStatusRunning       = "RUNNING"
@@ -104,6 +105,14 @@ func NewRecommendationEvaluationService(db *gorm.DB, runtime *config.Runtime, lo
 }
 
 func (s *RecommendationEvaluationService) CreateRun(ctx context.Context, request RecommendationEvaluationRequest) (*RecommendationEvaluationRunResponse, error) {
+	return s.createRun(ctx, RecommendationEvaluationRunTypeManual, request)
+}
+
+func (s *RecommendationEvaluationService) CreateScheduledRun(ctx context.Context, request RecommendationEvaluationRequest) (*RecommendationEvaluationRunResponse, error) {
+	return s.createRun(ctx, RecommendationEvaluationRunTypeScheduled, request)
+}
+
+func (s *RecommendationEvaluationService) createRun(ctx context.Context, runType string, request RecommendationEvaluationRequest) (*RecommendationEvaluationRunResponse, error) {
 	performanceConfig, configVersion, err := s.currentPerformanceConfig()
 	if err != nil {
 		return nil, err
@@ -117,7 +126,7 @@ func (s *RecommendationEvaluationService) CreateRun(ctx context.Context, request
 		return nil, err
 	}
 	model := &db_model.RecommendationEvaluationRun{
-		RunType:           RecommendationEvaluationRunTypeManual,
+		RunType:           runType,
 		Status:            RecommendationEvaluationRunStatusQueued,
 		RequestParamsJSON: rawParams,
 		QueuedAt:          time.Now().UTC(),

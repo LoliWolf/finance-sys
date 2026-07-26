@@ -15,6 +15,7 @@ type Config struct {
 	Agent                   AgentConfig       `json:"agent"`
 	MarketData              MarketDataConfig  `json:"market_data"`
 	Evaluation              EvaluationConfig  `json:"evaluation"`
+	Scheduler               SchedulerConfig   `json:"scheduler"`
 	Rules                   RulesConfig       `json:"rules"`
 }
 
@@ -229,6 +230,25 @@ type EvaluationRankingConfig struct {
 	DefaultWindowDays     int    `json:"default_window_days"`
 	DefaultMinSampleCount int    `json:"default_min_sample_count"`
 	DefaultSort           string `json:"default_sort"`
+}
+
+type SchedulerConfig struct {
+	Enabled                        bool                                   `json:"enabled"`
+	PollIntervalMS                 int                                    `json:"poll_interval_ms"`
+	ClaimTimeoutMS                 int                                    `json:"claim_timeout_ms"`
+	StockDailyPreviousDay          DailyTaskScheduleConfig                `json:"stock_daily_previous_day"`
+	RecommendationEvaluationRecent RecommendationEvaluationScheduleConfig `json:"recommendation_evaluation_recent"`
+}
+
+type DailyTaskScheduleConfig struct {
+	Enabled bool `json:"enabled"`
+	Hour    int  `json:"hour"`
+	Minute  int  `json:"minute"`
+}
+
+type RecommendationEvaluationScheduleConfig struct {
+	DailyTaskScheduleConfig
+	LookbackDays int `json:"lookback_days"`
 }
 
 type RulesConfig struct {

@@ -38,6 +38,8 @@ type App struct {
 	MarketDataWorker  *service.MarketDataWorker
 	EvaluationService *service.RecommendationEvaluationService
 	EvaluationWorker  *service.RecommendationEvaluationWorker
+	ScheduledTasks    *service.ScheduledTaskService
+	Scheduler         *service.AutomaticScheduler
 	StatsService      *stats.Service
 	HTTPServer        *httpapi.Server
 	Watcher           *nacoscfg.Watcher
@@ -101,6 +103,12 @@ func Build(ctx context.Context) (*App, error) {
 	marketDataWorker := service.NewMarketDataWorker(marketDataService, runtime, logger)
 	evaluationService := service.NewRecommendationEvaluationService(db, runtime, logger)
 	evaluationWorker := service.NewRecommendationEvaluationWorker(evaluationService, runtime, logger)
+	scheduledTasks := service.NewScheduledTaskService(db, runtime, logger)
+	automaticScheduler, err := service.NewAutomaticScheduler(scheduledTasks, marketDataService, evaluationService, runtime, logger)
+	if err != nil {
+		_ = dbConnectionClose(db)
+		return nil, err
+	}
 	statsService := stats.NewService(db, runtime)
 
 	var watcher *nacoscfg.Watcher
@@ -122,11 +130,24 @@ func Build(ctx context.Context) (*App, error) {
 		MarketDataWorker:  marketDataWorker,
 		EvaluationService: evaluationService,
 		EvaluationWorker:  evaluationWorker,
+		ScheduledTasks:    scheduledTasks,
+		Scheduler:         automaticScheduler,
 		StatsService:      statsService,
 		HTTPServer:        httpServer,
 		Watcher:           watcher,
 		Reloader:          reloader,
 	}, nil
+}
+
+func dbConnectionClose(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 func LoadInitialSnapshot(ctx context.Context, logger *slog.Logger) (*config.Snapshot, *nacoscfg.Loader, error) {

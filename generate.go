@@ -87,6 +87,8 @@ func main() {
 			return "recommendation_evaluation_run"
 		case "recommendation_event_window_metrics":
 			return "recommendation_event_window_metric"
+		case "scheduled_task_runs":
+			return "scheduled_task_run"
 		default:
 			return tableName
 		}
@@ -182,6 +184,15 @@ func main() {
 			gen.FieldType("win_flag", "*bool"),
 			gen.FieldType("best_trade_date", "*time.Time"),
 			gen.FieldType("worst_trade_date", "*time.Time"),
+		),
+		g.GenerateModelAs("scheduled_task_runs", "ScheduledTaskRun",
+			gen.FieldType("task_type", "uint16"),
+			gen.FieldRename("input_json", "InputJSON"),
+			gen.FieldRename("output_json", "OutputJSON"),
+			gen.FieldType("input_json", "[]byte"),
+			gen.FieldType("output_json", "[]byte"),
+			gen.FieldType("started_at", "*time.Time"),
+			gen.FieldType("finished_at", "*time.Time"),
 		),
 	)
 	g.Execute()

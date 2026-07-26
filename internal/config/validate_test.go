@@ -179,3 +179,50 @@ func TestValidateRecommendationPerformanceRejectsDuplicateAndUnknownDefaultWindo
 	require.ErrorContains(t, err, "windows must not contain duplicates")
 	require.ErrorContains(t, err, "ranking.default_window_days must be present in windows")
 }
+
+func TestValidateSchedulerRequiresEnabledWorkersAndValidSchedules(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.MarketData.Enabled = true
+	cfg.MarketData.Tushare.Enabled = true
+	cfg.MarketData.Tushare.Tokens = []config.TushareTokenConfig{
+		{Alias: "primary", Token: "test-token", Enabled: true, Weight: 1},
+	}
+	cfg.MarketData.StockDaily.Enabled = true
+	cfg.Evaluation.Enabled = true
+	cfg.Evaluation.RecommendationPerformance.Enabled = true
+	cfg.Scheduler = config.SchedulerConfig{
+		Enabled:        true,
+		PollIntervalMS: 1000,
+		ClaimTimeoutMS: 8 * 60 * 60 * 1000,
+		StockDailyPreviousDay: config.DailyTaskScheduleConfig{
+			Enabled: true,
+			Hour:    2,
+			Minute:  0,
+		},
+		RecommendationEvaluationRecent: config.RecommendationEvaluationScheduleConfig{
+			DailyTaskScheduleConfig: config.DailyTaskScheduleConfig{
+				Enabled: true,
+				Hour:    4,
+				Minute:  0,
+			},
+			LookbackDays: 90,
+		},
+	}
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "market_data.async_worker must be enabled")
+	require.ErrorContains(t, err, "evaluation.recommendation_performance.async_worker must be enabled")
+
+	cfg.MarketData.AsyncWorker.Enabled = true
+	cfg.Evaluation.RecommendationPerformance.AsyncWorker.Enabled = true
+	cfg.Scheduler.RecommendationEvaluationRecent.Hour = 24
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "scheduler.recommendation_evaluation_recent.hour must be in [0,23]")
+
+	cfg.Scheduler.RecommendationEvaluationRecent.Hour = 4
+	require.NoError(t, config.Validate(&cfg))
+}

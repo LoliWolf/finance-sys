@@ -207,6 +207,26 @@
       }
     }
   },
+  "scheduler": {
+    // API 进程内的通用自动调度器。每次触发都会写入 scheduled_task_runs，业务任务继续由各自 worker 执行。
+    "enabled": false,
+    "poll_interval_ms": 1000,
+    // RUNNING 超过该时间可被其他实例重新认领；需覆盖最长的正常调度处理时间。
+    "claim_timeout_ms": 28800000,
+    "stock_daily_previous_day": {
+      // 每天 02:00 创建前一自然日的行情同步任务；非交易日由行情同步结果明确记录为空。
+      "enabled": false,
+      "hour": 2,
+      "minute": 0
+    },
+    "recommendation_evaluation_recent": {
+      // 每天 04:00 扫描最近 90 天推荐；READY 且版本未变化的指标会复用，未成熟窗口会重算。
+      "enabled": false,
+      "hour": 4,
+      "minute": 0,
+      "lookback_days": 90
+    }
+  },
   "rules": {
     "version": "rules-v2",
     "strategy": "TEXT_REFERENCE_PRICE",

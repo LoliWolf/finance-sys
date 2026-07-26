@@ -141,7 +141,12 @@ func (s *MarketDataService) ListSyncRuns(ctx context.Context, query MarketDataSy
 }
 
 func (s *MarketDataService) ClaimAndExecuteNextStockDailyRun(ctx context.Context, workerID string) (bool, error) {
-	run, err := dal.MarketDataSyncRuns.ClaimNextQueued(ctx, s.db, MarketDataSyncTypeStockDaily, workerID, time.Now().UTC())
+	cfg, err := s.currentMarketDataConfig()
+	if err != nil {
+		return false, err
+	}
+	claimTimeout := time.Duration(cfg.AsyncWorker.ClaimTimeoutMS) * time.Millisecond
+	run, err := dal.MarketDataSyncRuns.ClaimNextQueued(ctx, s.db, MarketDataSyncTypeStockDaily, workerID, time.Now().UTC(), claimTimeout)
 	if errors.Is(err, dal.ErrNotFound) {
 		return false, nil
 	}

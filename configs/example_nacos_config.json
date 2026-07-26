@@ -221,6 +221,22 @@
       }
     }
   },
+  "scheduler": {
+    "enabled": false,
+    "poll_interval_ms": 1000,
+    "claim_timeout_ms": 28800000,
+    "stock_daily_previous_day": {
+      "enabled": false,
+      "hour": 2,
+      "minute": 0
+    },
+    "recommendation_evaluation_recent": {
+      "enabled": false,
+      "hour": 4,
+      "minute": 0,
+      "lookback_days": 90
+    }
+  },
   "rules": {
     "version": "rules-v2",
     "strategy": "TEXT_REFERENCE_PRICE",

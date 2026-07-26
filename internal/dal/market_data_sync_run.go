@@ -57,29 +57,39 @@ func (*MarketDataSyncRunDML) QueryByParam(ctx context.Context, db *gorm.DB, para
 	return models, nil
 }
 
-func (*MarketDataSyncRunDML) ClaimNextQueued(ctx context.Context, db *gorm.DB, syncType string, workerID string, now time.Time) (*db_model.MarketDataSyncRun, error) {
+func (*MarketDataSyncRunDML) ClaimNextQueued(ctx context.Context, db *gorm.DB, syncType string, workerID string, now time.Time, claimTimeout time.Duration) (*db_model.MarketDataSyncRun, error) {
 	var model db_model.MarketDataSyncRun
+	staleBefore := now.Add(-claimTimeout)
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.
-			Where("sync_type = ?", syncType).
-			Where("status = ?", "QUEUED").
-			Order("queued_at ASC, id ASC").
-			First(&model).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
-			return err
+		query := tx.Where("sync_type = ?", syncType).Where("status = ?", "QUEUED")
+		if claimTimeout > 0 {
+			query = tx.Where("sync_type = ?", syncType).
+				Where("status = ? OR (status = ? AND started_at < ?)", "QUEUED", "RUNNING", staleBefore)
 		}
-		result := tx.Model(&db_model.MarketDataSyncRun{}).
-			Where("id = ?", model.ID).
-			Where("status = ?", "QUEUED").
-			Updates(map[string]any{
-				"status":     "RUNNING",
-				"started_at": now,
-				"claimed_by": workerID,
-				"claimed_at": now,
-				"updated_at": gorm.Expr("CURRENT_TIMESTAMP"),
-			})
+		result := query.Order("queued_at ASC, id ASC").Limit(1).Find(&model)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+
+		condition := tx.Model(&db_model.MarketDataSyncRun{}).Where("id = ?", model.ID)
+		if model.Status == "QUEUED" {
+			condition = condition.Where("status = ?", "QUEUED")
+		} else {
+			condition = condition.Where("status = ? AND started_at < ?", "RUNNING", staleBefore)
+		}
+		result = condition.Updates(map[string]any{
+			"status":        "RUNNING",
+			"started_at":    now,
+			"finished_at":   nil,
+			"claimed_by":    workerID,
+			"claimed_at":    now,
+			"error_code":    "",
+			"error_message": "",
+			"updated_at":    gorm.Expr("CURRENT_TIMESTAMP"),
+		})
 		if result.Error != nil {
 			return result.Error
 		}
