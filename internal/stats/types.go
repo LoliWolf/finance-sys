@@ -15,6 +15,7 @@ type Filter struct {
 	Direction      string
 	Status         string
 	BloggerID      int64
+	BloggerName    string
 	TSCode         string
 	Symbol         string
 	MinSampleCount int
@@ -136,6 +137,38 @@ type RecommendationPerformanceList struct {
 	Total      int64                           `json:"total"`
 	WindowDays int                             `json:"window_days"`
 	Items      []RecommendationPerformanceItem `json:"items"`
+}
+
+type RecommendationWindowReturn struct {
+	WindowDays    int      `json:"window_days"`
+	Status        string   `json:"status"`
+	ReasonCode    string   `json:"reason_code"`
+	ReasonMessage string   `json:"reason_message"`
+	ReturnRatio   *float64 `json:"return_ratio"`
+}
+
+type RecommendationLedgerItem struct {
+	RecommendationEventID int64                        `json:"recommendation_event_id"`
+	BloggerID             int64                        `json:"blogger_id"`
+	BloggerName           string                       `json:"blogger_name"`
+	Institution           string                       `json:"institution"`
+	TSCode                string                       `json:"ts_code"`
+	Symbol                string                       `json:"symbol"`
+	SecurityName          string                       `json:"security_name"`
+	AssetType             string                       `json:"asset_type"`
+	Market                string                       `json:"market"`
+	Direction             string                       `json:"direction"`
+	RecommendDate         time.Time                    `json:"recommend_date"`
+	Thesis                string                       `json:"thesis"`
+	Windows               []RecommendationWindowReturn `gorm:"-" json:"windows"`
+}
+
+type RecommendationLedgerList struct {
+	Total      int64                      `json:"total"`
+	Page       int                        `json:"page"`
+	PageSize   int                        `json:"page_size"`
+	TotalPages int                        `json:"total_pages"`
+	Items      []RecommendationLedgerItem `json:"items"`
 }
 
 type Evidence struct {

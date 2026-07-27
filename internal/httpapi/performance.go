@@ -95,7 +95,7 @@ func (s *Server) handleListRecommendationPerformance(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	response, err := s.performanceStats().RecommendationPerformanceList(r.Context(), filter)
+	response, err := s.performanceStats().RecommendationLedger(r.Context(), filter)
 	writeStatsResponse(w, response, err)
 }
 
@@ -146,13 +146,14 @@ func parseBloggerPerformanceRequest(r *http.Request) (int64, stats.Filter, error
 func parsePerformanceFilter(r *http.Request) (stats.Filter, error) {
 	values := r.URL.Query()
 	filter := stats.Filter{
-		Market:    strings.TrimSpace(values.Get("market")),
-		AssetType: strings.TrimSpace(values.Get("asset_type")),
-		Direction: strings.TrimSpace(values.Get("direction")),
-		Status:    strings.TrimSpace(values.Get("status")),
-		TSCode:    strings.TrimSpace(values.Get("ts_code")),
-		Symbol:    strings.TrimSpace(values.Get("symbol")),
-		Sort:      strings.TrimSpace(values.Get("sort")),
+		Market:      strings.TrimSpace(values.Get("market")),
+		AssetType:   strings.TrimSpace(values.Get("asset_type")),
+		Direction:   strings.TrimSpace(values.Get("direction")),
+		Status:      strings.TrimSpace(values.Get("status")),
+		BloggerName: strings.TrimSpace(values.Get("blogger_name")),
+		TSCode:      strings.TrimSpace(values.Get("ts_code")),
+		Symbol:      strings.TrimSpace(values.Get("symbol")),
+		Sort:        strings.TrimSpace(values.Get("sort")),
 	}
 	var err error
 	if filter.WindowDays, err = queryInt(r, "window_days", 0); err != nil {
