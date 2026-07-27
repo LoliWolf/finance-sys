@@ -35,3 +35,4 @@ cmd/api/.ocr_work
 .ocr_work/
 /guziyuan_pdf_ocr_tool/
 testdata/guziyuanpdf
+fast_start_prod.sh
