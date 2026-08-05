@@ -44,6 +44,20 @@ type metricRow struct {
 	WinFlag                 *bool
 }
 
+type recommendationLedgerMetricRow struct {
+	RecommendationEventID int64
+	TSCode                string
+	Symbol                string
+	SecurityName          string
+	AssetType             string
+	Market                string
+	WindowDays            int
+	Status                string
+	ReasonCode            string
+	ReasonMessage         string
+	RawReturnRatio        *float64
+}
+
 type aggregate struct {
 	sampleCount     int
 	evaluatedCount  int
@@ -216,6 +230,69 @@ func (s *Service) RecommendationPerformanceList(ctx context.Context, filter Filt
 		return nil, err
 	}
 	return &RecommendationPerformanceList{Total: total, WindowDays: filter.WindowDays, Items: items}, nil
+}
+
+// RecommendationLedger returns one row per recommendation event and attaches
+// every configured evaluation window to that row. The event table is the
+// pagination source so a missing or not-yet-created metric never removes the
+// underlying recommendation from the ledger.
+func (s *Service) RecommendationLedger(ctx context.Context, filter Filter) (*RecommendationLedgerList, error) {
+	filter = normalizePagination(filter)
+	quoteSource := configuredQuoteSource(s.runtime)
+	base := s.db.WithContext(ctx).
+		Table("recommendation_events AS re").
+		Joins("JOIN bloggers AS b ON b.id = re.blogger_id").
+		Joins("LEFT JOIN security_master AS sm ON sm.ts_code = CASE WHEN re.symbol LIKE '%.%' THEN re.symbol ELSE CONCAT(re.symbol, '.', re.market) END")
+	base = applyRecommendationLedgerFilters(base, filter, quoteSource)
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, err
+	}
+
+	items := make([]RecommendationLedgerItem, 0, filter.Limit)
+	selectSQL := `
+		re.id AS recommendation_event_id, re.blogger_id, b.name AS blogger_name, b.institution,
+		COALESCE(sm.ts_code, '') AS ts_code, re.symbol, COALESCE(sm.name, '') AS security_name,
+		re.asset_type, re.market, re.direction, re.recommend_date, re.thesis`
+	if err := base.Select(selectSQL).
+		Order("re.recommend_date DESC, re.id DESC").
+		Limit(filter.Limit).
+		Offset(filter.Offset).
+		Scan(&items).Error; err != nil {
+		return nil, err
+	}
+
+	windows := configuredWindows(s.runtime)
+	if len(items) > 0 {
+		eventIDs := make([]int64, 0, len(items))
+		for _, item := range items {
+			eventIDs = append(eventIDs, item.RecommendationEventID)
+		}
+		var metrics []recommendationLedgerMetricRow
+		err := s.db.WithContext(ctx).
+			Table("recommendation_event_window_metrics AS m").
+			Select(`m.recommendation_event_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market,
+				m.window_days, m.status, m.reason_code, m.reason_message, m.raw_return_ratio`).
+			Where("m.recommendation_event_id IN ?", eventIDs).
+			Where("m.window_days IN ?", windows).
+			Where("m.quote_source = ?", quoteSource).
+			Order("m.recommendation_event_id ASC, m.window_days ASC").
+			Scan(&metrics).Error
+		if err != nil {
+			return nil, err
+		}
+		mergeRecommendationLedgerMetrics(items, metrics, windows)
+	}
+
+	page, totalPages := paginationMetadata(total, filter.Offset, filter.Limit)
+	return &RecommendationLedgerList{
+		Total:      total,
+		Page:       page,
+		PageSize:   filter.Limit,
+		TotalPages: totalPages,
+		Items:      items,
+	}, nil
 }
 
 func (s *Service) RecommendationDetail(ctx context.Context, eventID int64) (*RecommendationDetail, error) {
@@ -499,6 +576,52 @@ func applyMetricFilters(tx *gorm.DB, filter Filter) *gorm.DB {
 	return tx
 }
 
+func applyRecommendationLedgerFilters(tx *gorm.DB, filter Filter, quoteSource string) *gorm.DB {
+	if filter.DateFrom != nil {
+		tx = tx.Where("re.recommend_date >= ?", *filter.DateFrom)
+	}
+	if filter.DateTo != nil {
+		tx = tx.Where("re.recommend_date <= ?", *filter.DateTo)
+	}
+	if filter.Market != "" {
+		tx = tx.Where("re.market = ?", strings.ToUpper(filter.Market))
+	}
+	if filter.AssetType != "" {
+		tx = tx.Where("re.asset_type = ?", strings.ToUpper(filter.AssetType))
+	}
+	if filter.Direction != "" {
+		tx = tx.Where("re.direction = ?", strings.ToUpper(filter.Direction))
+	}
+	if filter.BloggerID > 0 {
+		tx = tx.Where("re.blogger_id = ?", filter.BloggerID)
+	}
+	if filter.BloggerName != "" {
+		search := "%" + filter.BloggerName + "%"
+		tx = tx.Where("b.name LIKE ? OR b.normalized_name LIKE ?", search, search)
+	}
+	if filter.Status != "" {
+		tx = tx.Where(`EXISTS (
+			SELECT 1 FROM recommendation_event_window_metrics AS fm
+			WHERE fm.recommendation_event_id = re.id AND fm.quote_source = ? AND fm.status = ?
+		)`, quoteSource, strings.ToUpper(filter.Status))
+	}
+	if filter.TSCode != "" {
+		tx = tx.Where(`EXISTS (
+			SELECT 1 FROM recommendation_event_window_metrics AS fm
+			WHERE fm.recommendation_event_id = re.id AND fm.quote_source = ? AND fm.ts_code = ?
+		)`, quoteSource, strings.ToUpper(filter.TSCode))
+	}
+	if filter.Symbol != "" {
+		value := strings.ToUpper(filter.Symbol)
+		tx = tx.Where(`re.symbol = ? OR EXISTS (
+			SELECT 1 FROM recommendation_event_window_metrics AS fm
+			WHERE fm.recommendation_event_id = re.id AND fm.quote_source = ?
+				AND (fm.symbol = ? OR fm.ts_code = ?)
+		)`, value, quoteSource, value, value)
+	}
+	return tx
+}
+
 func (s *Service) normalizeFilter(filter Filter) Filter {
 	cfg := s.runtime.Config()
 	if filter.WindowDays <= 0 {
@@ -518,6 +641,10 @@ func (s *Service) normalizeFilter(filter Filter) Filter {
 			filter.Sort = cfg.Evaluation.RecommendationPerformance.Ranking.DefaultSort
 		}
 	}
+	return normalizePagination(filter)
+}
+
+func normalizePagination(filter Filter) Filter {
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
@@ -644,6 +771,75 @@ func configuredWindows(runtime *config.Runtime) []int {
 		}
 	}
 	return []int{5, 10, 30, 90}
+}
+
+func configuredQuoteSource(runtime *config.Runtime) string {
+	if runtime != nil {
+		if cfg := runtime.Config(); cfg != nil {
+			if value := strings.TrimSpace(cfg.Evaluation.RecommendationPerformance.QuoteSource); value != "" {
+				return strings.ToUpper(value)
+			}
+		}
+	}
+	return "TUSHARE"
+}
+
+func mergeRecommendationLedgerMetrics(items []RecommendationLedgerItem, metrics []recommendationLedgerMetricRow, windows []int) {
+	metricsByEvent := make(map[int64]map[int]recommendationLedgerMetricRow, len(items))
+	for _, metric := range metrics {
+		byWindow := metricsByEvent[metric.RecommendationEventID]
+		if byWindow == nil {
+			byWindow = make(map[int]recommendationLedgerMetricRow, len(windows))
+			metricsByEvent[metric.RecommendationEventID] = byWindow
+		}
+		byWindow[metric.WindowDays] = metric
+	}
+
+	for index := range items {
+		item := &items[index]
+		byWindow := metricsByEvent[item.RecommendationEventID]
+		item.Windows = make([]RecommendationWindowReturn, 0, len(windows))
+		for _, window := range windows {
+			metric, ok := byWindow[window]
+			if !ok {
+				item.Windows = append(item.Windows, RecommendationWindowReturn{WindowDays: window})
+				continue
+			}
+			if item.TSCode == "" && metric.TSCode != "" {
+				item.TSCode = metric.TSCode
+			}
+			if item.SecurityName == "" && metric.SecurityName != "" {
+				item.SecurityName = metric.SecurityName
+			}
+			if item.AssetType == "" && metric.AssetType != "" {
+				item.AssetType = metric.AssetType
+			}
+			if item.Market == "" && metric.Market != "" {
+				item.Market = metric.Market
+			}
+			if item.Symbol == "" && metric.Symbol != "" {
+				item.Symbol = metric.Symbol
+			}
+			item.Windows = append(item.Windows, RecommendationWindowReturn{
+				WindowDays:    window,
+				Status:        metric.Status,
+				ReasonCode:    metric.ReasonCode,
+				ReasonMessage: metric.ReasonMessage,
+				ReturnRatio:   metric.RawReturnRatio,
+			})
+		}
+	}
+}
+
+func paginationMetadata(total int64, offset int, limit int) (int, int) {
+	if limit <= 0 {
+		limit = 50
+	}
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(limit) - 1) / int64(limit))
+	}
+	return offset/limit + 1, totalPages
 }
 
 func applyRankingLimit(items []BloggerRankingItem, offset int, limit int) []BloggerRankingItem {

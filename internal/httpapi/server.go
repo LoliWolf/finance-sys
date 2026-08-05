@@ -56,6 +56,7 @@ type performanceStatsService interface {
 	BloggerSummary(context.Context, int64, stats.Filter) (*stats.BloggerSummaryResponse, error)
 	BloggerTimeseries(context.Context, int64, stats.Filter) (*stats.BloggerTimeseriesResponse, error)
 	RecommendationPerformanceList(context.Context, stats.Filter) (*stats.RecommendationPerformanceList, error)
+	RecommendationLedger(context.Context, stats.Filter) (*stats.RecommendationLedgerList, error)
 	RecommendationDetail(context.Context, int64) (*stats.RecommendationDetail, error)
 	PriceSeries(context.Context, int64, int, int) (*stats.PriceSeriesResponse, error)
 	SecurityRankings(context.Context, stats.Filter) (*stats.SecurityRankingResponse, error)

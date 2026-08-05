@@ -113,6 +113,38 @@ export interface RecommendationPerformanceList {
   items: RecommendationPerformanceItem[]
 }
 
+export interface RecommendationWindowReturn {
+  window_days: number
+  status: MetricStatus | ''
+  reason_code: string
+  reason_message: string
+  return_ratio: number | null
+}
+
+export interface RecommendationLedgerItem {
+  recommendation_event_id: number
+  blogger_id: number
+  blogger_name: string
+  institution: string
+  ts_code: string
+  symbol: string
+  security_name: string
+  asset_type: string
+  market: string
+  direction: string
+  recommend_date: string
+  thesis: string
+  windows: RecommendationWindowReturn[]
+}
+
+export interface RecommendationLedgerList {
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  items: RecommendationLedgerItem[]
+}
+
 export type MetricStatus = 'READY' | 'PENDING' | 'INCOMPLETE' | 'NO_SECURITY' | 'UNSUPPORTED' | 'FAILED'
 
 export interface WindowMetric {
