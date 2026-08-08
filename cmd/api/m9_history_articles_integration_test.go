@@ -361,6 +361,13 @@ func TestM9DocumentStatusNeedsAnalyzeReprocessesMismatchedPlanDates(t *testing.T
 	))
 }
 
+func TestM9ExpectedTradeDateUsesArticleDate(t *testing.T) {
+	articleDate := time.Date(2026, 7, 29, 16, 30, 0, 0, time.FixedZone("CST", 8*60*60))
+	expected := time.Date(2026, 7, 29, 0, 0, 0, 0, articleDate.Location())
+
+	require.Equal(t, expected, m9ExpectedTradeDate(articleDate))
+}
+
 func TestM9AnalyzeNonOKAcceptsTerminalDocumentStatuses(t *testing.T) {
 	require.True(t, m9AnalyzeNonOKAcceptsDocumentStatus(domain.DocumentStatusPlanned))
 	require.True(t, m9AnalyzeNonOKAcceptsDocumentStatus(domain.DocumentStatusInvalid))
@@ -1152,7 +1159,7 @@ func m9TradeDateOffsetFor(t *testing.T, cfg *config.Config, expectedTradeDate ti
 }
 
 func m9ExpectedTradeDate(articleDate time.Time) time.Time {
-	return articleDate.AddDate(0, 0, 1)
+	return domain.RecommendationDateForArticle(articleDate)
 }
 
 func m9VerifyRealHistoryDocument(ctx context.Context, app *bootstrap.App, documentID int64, article m9HistoryArticle, expectedTradeDate time.Time) (m9HistoryArticleResult, error) {

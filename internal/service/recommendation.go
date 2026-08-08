@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"time"
 
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
@@ -19,12 +20,24 @@ func normalizeBloggerName(name string) string {
 }
 
 func recommendationEventDedupeKey(blogger db_model.Blogger, plan domain.CandidatePlan) string {
-	raw := strings.Join([]string{
+	return BuildRecommendationEventDedupeKey(
 		blogger.NormalizedName,
 		blogger.Institution,
 		plan.Symbol,
 		string(plan.Direction),
-		plan.TradeDate.Format("2006-01-02"),
+		plan.TradeDate,
+	)
+}
+
+// BuildRecommendationEventDedupeKey is shared with audited data-repair tools
+// so online writes and repairs use the exact same business key.
+func BuildRecommendationEventDedupeKey(normalizedName string, institution string, symbol string, direction string, recommendDate time.Time) string {
+	raw := strings.Join([]string{
+		normalizedName,
+		institution,
+		symbol,
+		direction,
+		recommendDate.Format(time.DateOnly),
 	}, "|")
 	return utils.SHA256Hex([]byte(raw))
 }
