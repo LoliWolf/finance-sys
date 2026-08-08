@@ -20,12 +20,14 @@ const (
 )
 
 const (
-	ReasonWindowNotMatured = "WINDOW_NOT_MATURED"
-	ReasonQuoteGap         = "QUOTE_GAP"
-	ReasonNoQuote          = "NO_QUOTE"
-	ReasonInvalidPrice     = "INVALID_PRICE"
-	ReasonInvalidWindow    = "INVALID_WINDOW"
-	ReasonUnsupported      = "UNSUPPORTED_DIRECTION"
+	ReasonWindowNotMatured  = "WINDOW_NOT_MATURED"
+	ReasonQuoteGap          = "QUOTE_GAP"
+	ReasonEntryQuoteMissing = "ENTRY_QUOTE_MISSING"
+	ReasonExitQuoteMissing  = "EXIT_QUOTE_MISSING"
+	ReasonNoQuote           = "NO_QUOTE"
+	ReasonInvalidPrice      = "INVALID_PRICE"
+	ReasonInvalidWindow     = "INVALID_WINDOW"
+	ReasonUnsupported       = "UNSUPPORTED_DIRECTION"
 )
 
 type Quote struct {
@@ -71,9 +73,8 @@ type Result struct {
 }
 
 // EvaluateWindow calculates a single recommendation window without external IO.
-// Trading-day counting follows the target security's actual quote sequence, as
-// required by the evaluation specification. MarketTradingDates are used only to
-// distinguish a not-yet-matured window from a quote gap after the market matured.
+// MarketTradingDates define the fixed trading-day boundary. Quotes missing because
+// of suspension or incomplete data never extend the window to a later date.
 func EvaluateWindow(input Input) Result {
 	result := Result{ExpectedQuoteCount: input.WindowDays}
 	if input.WindowDays <= 0 {
@@ -90,47 +91,67 @@ func EvaluateWindow(input Input) Result {
 
 	recommendDate := dateOnly(input.RecommendDate)
 	quotes := normalizeQuotes(input.Quotes)
+	quotesByDate := indexQuotesByDate(quotes)
+	tradingDates := tradingDatesAfter(input.MarketTradingDates, recommendDate)
 	baseIndex := firstQuoteOnOrAfter(quotes, recommendDate)
-	entryIndex := firstQuoteAfter(quotes, recommendDate)
-	if baseIndex < 0 || entryIndex < 0 {
-		if marketMatured(input, recommendDate, input.WindowDays) {
-			result.Status = StatusIncomplete
-			result.ReasonCode = ReasonNoQuote
-			result.ReasonMessage = "no usable quote exists after the recommendation date"
-		} else {
-			result.Status = StatusPending
-			result.ReasonCode = ReasonWindowNotMatured
-			result.ReasonMessage = "the recommendation window has not matured"
+	if baseIndex >= 0 {
+		base := quotes[baseIndex]
+		result.BaseDate = timePtr(base.TradeDate)
+		result.BaseClosePrice = floatPtr(base.Close)
+	}
+
+	elapsedTradingDayCount := min(len(tradingDates), input.WindowDays)
+	elapsedTradingDates := tradingDates[:elapsedTradingDayCount]
+	result.ActualQuoteCount = countQuotesOnDates(quotesByDate, elapsedTradingDates)
+	result.MissingQuoteCount = max(input.WindowDays-result.ActualQuoteCount, 0)
+	if len(tradingDates) > 0 {
+		entryDate := tradingDates[0]
+		result.EntryDate = timePtr(entryDate)
+		if entry, exists := quotesByDate[entryDate]; exists {
+			result.EntryPrice = floatPtr(entry.Open)
 		}
+	}
+	if len(tradingDates) < input.WindowDays {
+		result.Status = StatusPending
+		result.ReasonCode = ReasonWindowNotMatured
+		result.ReasonMessage = fmt.Sprintf("only %d of %d market trading days have elapsed", len(tradingDates), input.WindowDays)
 		return result
 	}
 
-	base := quotes[baseIndex]
-	entry := quotes[entryIndex]
-	result.BaseDate = timePtr(base.TradeDate)
-	result.BaseClosePrice = floatPtr(base.Close)
-	result.EntryDate = timePtr(entry.TradeDate)
+	windowTradingDates := tradingDates[:input.WindowDays]
+	entryDate := windowTradingDates[0]
+	exitDate := windowTradingDates[len(windowTradingDates)-1]
+	result.EntryDate = timePtr(entryDate)
+	result.ExitDate = timePtr(exitDate)
+
+	entry, entryExists := quotesByDate[entryDate]
+	if !entryExists {
+		result.Status = StatusIncomplete
+		result.ReasonCode = ReasonEntryQuoteMissing
+		result.ReasonMessage = fmt.Sprintf("entry quote is missing on fixed market trading date %s", entryDate.Format(time.DateOnly))
+		return result
+	}
 	result.EntryPrice = floatPtr(entry.Open)
 
-	available := len(quotes) - entryIndex
-	result.ActualQuoteCount = min(available, input.WindowDays)
-	result.MissingQuoteCount = max(input.WindowDays-result.ActualQuoteCount, 0)
-	if available < input.WindowDays {
-		if marketMatured(input, entry.TradeDate, input.WindowDays) {
-			coverage := float64(result.ActualQuoteCount) / float64(input.WindowDays)
-			result.Status = StatusIncomplete
-			result.ReasonCode = ReasonQuoteGap
-			result.ReasonMessage = fmt.Sprintf("quote coverage %.4f is below required %.4f", coverage, normalizedCoverage(input.MinQuoteCoverageRatio))
-		} else {
-			result.Status = StatusPending
-			result.ReasonCode = ReasonWindowNotMatured
-			result.ReasonMessage = fmt.Sprintf("only %d of %d trading-day quotes are available", result.ActualQuoteCount, input.WindowDays)
-		}
+	exit, exitExists := quotesByDate[exitDate]
+	if !exitExists {
+		result.Status = StatusIncomplete
+		result.ReasonCode = ReasonExitQuoteMissing
+		result.ReasonMessage = fmt.Sprintf("exit quote is missing on fixed market trading date %s", exitDate.Format(time.DateOnly))
+		return result
+	}
+	result.ExitClosePrice = floatPtr(exit.Close)
+
+	windowQuotes := quotesOnDates(quotesByDate, windowTradingDates)
+	coverage := float64(result.ActualQuoteCount) / float64(input.WindowDays)
+	if coverage < normalizedCoverage(input.MinQuoteCoverageRatio) {
+		result.Status = StatusIncomplete
+		result.ReasonCode = ReasonQuoteGap
+		result.ReasonMessage = fmt.Sprintf("quote coverage %.4f is below required %.4f within fixed market window", coverage, normalizedCoverage(input.MinQuoteCoverageRatio))
 		return result
 	}
 
-	windowQuotes := quotes[entryIndex : entryIndex+input.WindowDays]
-	if !validPrice(base.Close) || !validPrice(entry.Open) {
+	if baseIndex < 0 || !validPrice(quotes[baseIndex].Close) || !validPrice(entry.Open) {
 		return failed(result, ReasonInvalidPrice, "base close price and entry open price must be positive finite values")
 	}
 	for _, quote := range windowQuotes {
@@ -139,7 +160,6 @@ func EvaluateWindow(input Input) Result {
 		}
 	}
 
-	exit := windowQuotes[len(windowQuotes)-1]
 	rawReturn := exit.Close/entry.Open - 1
 	directionReturn := rawReturn
 	if direction == "SHORT" {
@@ -151,8 +171,6 @@ func EvaluateWindow(input Input) Result {
 	win := directionReturn > input.WinThresholdRatio
 
 	result.Status = StatusReady
-	result.ExitDate = timePtr(exit.TradeDate)
-	result.ExitClosePrice = floatPtr(exit.Close)
 	result.RawReturnRatio = floatPtr(rawReturn)
 	result.DirectionReturnRatio = floatPtr(directionReturn)
 	result.MaxFavorableReturnRatio = floatPtr(bestRatio)
@@ -161,6 +179,54 @@ func EvaluateWindow(input Input) Result {
 	result.WinFlag = boolPtr(win)
 	result.BestTradeDate = timePtr(bestDate)
 	result.WorstTradeDate = timePtr(worstDate)
+	return result
+}
+
+func indexQuotesByDate(quotes []Quote) map[time.Time]Quote {
+	result := make(map[time.Time]Quote, len(quotes))
+	for _, quote := range quotes {
+		result[quote.TradeDate] = quote
+	}
+	return result
+}
+
+func tradingDatesAfter(values []time.Time, date time.Time) []time.Time {
+	seen := make(map[time.Time]struct{}, len(values))
+	result := make([]time.Time, 0, len(values))
+	for _, value := range values {
+		tradingDate := dateOnly(value)
+		if tradingDate.IsZero() || !tradingDate.After(date) {
+			continue
+		}
+		if _, exists := seen[tradingDate]; exists {
+			continue
+		}
+		seen[tradingDate] = struct{}{}
+		result = append(result, tradingDate)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Before(result[j])
+	})
+	return result
+}
+
+func countQuotesOnDates(quotesByDate map[time.Time]Quote, dates []time.Time) int {
+	count := 0
+	for _, date := range dates {
+		if _, exists := quotesByDate[date]; exists {
+			count++
+		}
+	}
+	return count
+}
+
+func quotesOnDates(quotesByDate map[time.Time]Quote, dates []time.Time) []Quote {
+	result := make([]Quote, 0, len(dates))
+	for _, date := range dates {
+		if quote, exists := quotesByDate[date]; exists {
+			result = append(result, quote)
+		}
+	}
 	return result
 }
 
@@ -183,40 +249,9 @@ func normalizeQuotes(quotes []Quote) []Quote {
 	return result
 }
 
-func marketMatured(input Input, startDate time.Time, windowDays int) bool {
-	startDate = dateOnly(startDate)
-	count := 0
-	seen := make(map[time.Time]struct{}, len(input.MarketTradingDates))
-	for _, value := range input.MarketTradingDates {
-		date := dateOnly(value)
-		if date.Before(startDate) {
-			continue
-		}
-		if _, exists := seen[date]; exists {
-			continue
-		}
-		seen[date] = struct{}{}
-		count++
-	}
-	if count >= windowDays {
-		return true
-	}
-	latest := dateOnly(input.LatestMarketDate)
-	return len(input.MarketTradingDates) == 0 && !latest.IsZero() && !latest.Before(startDate.AddDate(0, 0, windowDays*2))
-}
-
 func firstQuoteOnOrAfter(quotes []Quote, date time.Time) int {
 	for index, quote := range quotes {
 		if !quote.TradeDate.Before(date) {
-			return index
-		}
-	}
-	return -1
-}
-
-func firstQuoteAfter(quotes []Quote, date time.Time) int {
-	for index, quote := range quotes {
-		if quote.TradeDate.After(date) {
 			return index
 		}
 	}
