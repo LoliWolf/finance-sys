@@ -1,4 +1,9 @@
 #!/bin/zsh
+
+if [ -z "${ZSH_VERSION:-}" ]; then
+  exec /bin/zsh "$0" "$@"
+fi
+
 set -euo pipefail
 
 ROOT_DIR="${0:A:h}"
