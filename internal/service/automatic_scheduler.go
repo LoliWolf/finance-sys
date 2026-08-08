@@ -59,6 +59,9 @@ func NewAutomaticScheduler(
 	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeOpenListDocuments, scheduler.handleOpenListDocuments); err != nil {
 		return nil, err
 	}
+	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeSecurityMasterRefresh, scheduler.handleSecurityMasterRefresh); err != nil {
+		return nil, err
+	}
 	return scheduler, nil
 }
 
@@ -110,6 +113,22 @@ func (s *AutomaticScheduler) tick(ctx context.Context, cfg *config.Config) error
 }
 
 func (s *AutomaticScheduler) enqueueDueTasks(ctx context.Context, cfg *config.Config, now time.Time) error {
+	masterSchedule := cfg.Scheduler.SecurityMasterRefresh
+	if masterSchedule.Enabled {
+		scheduledAt := dailyScheduledAt(now, masterSchedule.Hour, masterSchedule.Minute)
+		if !now.Before(scheduledAt) {
+			if _, _, err := s.tasks.Enqueue(
+				ctx,
+				domain.ScheduledTaskTypeSecurityMasterRefresh,
+				scheduledAt.Format(time.DateOnly),
+				scheduledAt,
+				SecurityMasterRefreshRequest{AsOfDate: scheduledAt.Format(time.DateOnly)},
+			); err != nil {
+				return fmt.Errorf("enqueue security master refresh task: %w", err)
+			}
+		}
+	}
+
 	stockSchedule := cfg.Scheduler.StockDailyPreviousDay
 	if stockSchedule.Enabled {
 		scheduledAt := dailyScheduledAt(now, stockSchedule.Hour, stockSchedule.Minute)
@@ -187,6 +206,17 @@ func (s *AutomaticScheduler) handleStockDailyPreviousDay(ctx context.Context, ra
 		return nil, fmt.Errorf("decode stock daily scheduled task input: %w", err)
 	}
 	return s.marketData.CreateStockDailySyncRun(ctx, request)
+}
+
+func (s *AutomaticScheduler) handleSecurityMasterRefresh(ctx context.Context, rawInput json.RawMessage) (any, error) {
+	if s.marketData == nil {
+		return nil, fmt.Errorf("market data service is unavailable")
+	}
+	var request SecurityMasterRefreshRequest
+	if err := json.Unmarshal(rawInput, &request); err != nil {
+		return nil, fmt.Errorf("decode security master refresh scheduled task input: %w", err)
+	}
+	return s.marketData.RefreshSecurityMaster(ctx, request)
 }
 
 func (s *AutomaticScheduler) handleEvaluationRecent(ctx context.Context, rawInput json.RawMessage) (any, error) {

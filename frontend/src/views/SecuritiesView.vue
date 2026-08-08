@@ -9,7 +9,7 @@ import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatePanel from '../components/StatePanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
-import { formatDate, formatNumber, formatPercent, returnTone, truncate } from '../utils/format'
+import { formatDate, formatNumber, formatPercent, returnTone, sectorTypeLabel, truncate } from '../utils/format'
 
 const router = useRouter()
 const loading = ref(true)
@@ -61,7 +61,7 @@ async function selectSecurity(item: SecurityRankingItem) {
 const filteredItems = computed(() => {
   const keyword = search.value.trim().toLowerCase()
   if (!keyword) return data.value?.items || []
-  return (data.value?.items || []).filter((item) => `${item.security_name}${item.ts_code}${item.industry}`.toLowerCase().includes(keyword))
+	return (data.value?.items || []).filter((item) => `${item.security_name}${item.ts_code}${item.industry}${item.sector_type}`.toLowerCase().includes(keyword))
 })
 
 const topItems = computed(() => filteredItems.value.slice(0, 12))
@@ -98,8 +98,8 @@ onMounted(load)
     <section class="filter-bar">
       <div class="field"><label>观察窗口</label><div class="segmented"><button v-for="value in [5, 10, 30, 90]" :key="value" type="button" :class="{ active: windowDays === value }" @click="windowDays = value">{{ value }} 日</button></div></div>
       <div class="field grow"><label>页内搜索</label><div style="position:relative"><Search :size="15" style="position:absolute;left:11px;top:12px;color:#8e867c"/><input v-model="search" style="padding-left:34px" placeholder="名称、代码或行业" /></div></div>
-      <div class="field"><label>市场</label><select v-model="market"><option value="">全部</option><option value="SH">沪市</option><option value="SZ">深市</option><option value="BJ">北交所</option></select></div>
-      <div class="field"><label>资产</label><select v-model="assetType"><option value="">全部</option><option value="STOCK">A 股</option><option value="ETF">ETF</option></select></div>
+		<div class="field"><label>市场</label><select v-model="market"><option value="">全部</option><option value="SH">沪市</option><option value="SZ">深市</option><option value="BJ">北交所</option><option value="DC">东方财富板块</option></select></div>
+		<div class="field"><label>资产</label><select v-model="assetType"><option value="">全部</option><option value="A_SHARE">A 股</option><option value="ETF">ETF</option><option value="SECTOR">板块指数</option></select></div>
       <div class="field"><label>最少样本</label><input v-model.number="minSampleCount" type="number" min="0" /></div>
       <div class="field"><label>排序</label><select v-model="sort"><option value="sample_count">热度</option><option value="win_rate">胜率</option><option value="avg_return">平均收益</option></select></div>
       <button class="button primary" type="button" @click="load">应用筛选</button>
@@ -127,7 +127,7 @@ onMounted(load)
               <tbody>
                 <tr v-for="item in filteredItems" :key="item.ts_code" class="clickable" :style="selected?.ts_code === item.ts_code ? 'background:rgba(207,107,77,.07)' : ''" @click="selectSecurity(item)">
                   <td><span class="rank-number" :class="{ top: item.rank <= 3 }">{{ item.rank }}</span></td>
-                  <td><div class="identity-cell"><span class="avatar">{{ item.security_name?.slice(0, 1) || '?' }}</span><span><strong>{{ item.security_name || item.symbol }}</strong><small>{{ item.ts_code }} · {{ item.industry || '未分类' }}</small></span></div></td>
+				  <td><div class="identity-cell"><span class="avatar">{{ item.security_name?.slice(0, 1) || '?' }}</span><span><strong>{{ item.security_name || item.symbol }}</strong><small>{{ item.ts_code }} · {{ item.asset_type === 'SECTOR' ? sectorTypeLabel(item.sector_type) : (item.industry || '未分类') }}</small></span></div></td>
                   <td>{{ item.recommendation_count }}</td><td>{{ item.blogger_count }}</td>
                   <td><span class="return-value" :class="item.win_rate >= .5 ? 'positive' : 'negative'">{{ formatPercent(item.win_rate) }}</span></td>
                   <td><span class="return-value" :class="returnTone(item.avg_return_ratio)">{{ formatPercent(item.avg_return_ratio) }}</span></td>
@@ -139,7 +139,7 @@ onMounted(load)
         </article>
 
         <article class="panel span-5">
-          <header class="panel-header"><div><h2>{{ selected?.security_name || '选择标的' }}</h2><p class="mono">{{ selected?.ts_code || '—' }} · {{ selected?.industry || '—' }}</p></div><StatusBadge v-if="selected" status="READY" /></header>
+		  <header class="panel-header"><div><h2>{{ selected?.security_name || '选择标的' }}</h2><p class="mono">{{ selected?.ts_code || '—' }} · {{ selected?.asset_type === 'SECTOR' ? sectorTypeLabel(selected?.sector_type) : (selected?.industry || '—') }}</p></div><StatusBadge v-if="selected" status="READY" /></header>
           <StatePanel v-if="detailLoading" loading />
           <div v-else-if="selectedRecommendations?.items.length" style="max-height:640px;overflow:auto">
             <div v-for="item in selectedRecommendations.items" :key="item.recommendation_event_id" class="prose" style="border-bottom:1px solid rgba(56,48,39,.09);cursor:pointer" @click="router.push(`/recommendations/${item.recommendation_event_id}`)">

@@ -81,6 +81,34 @@ func TestCandidateAssemblerRejectsNotFound(t *testing.T) {
 	require.Equal(t, domain.InstrumentResolutionStatusNotFound, resolutions[0].Status)
 }
 
+func TestCandidateAssemblerResolvesEastmoneySectorWithoutTradingPlanSemantics(t *testing.T) {
+	assembler := service.NewCandidateAssembler(fakeSecurityLookup{
+		"CPO板块": {
+			Query:      "CPO板块",
+			Normalized: "cpo板块",
+			DirectMatches: []domain.SecurityMaster{{
+				TSCode:     "BK1128.DC",
+				Symbol:     "BK1128",
+				Name:       "CPO概念",
+				Market:     "DC",
+				AssetType:  "SECTOR",
+				SectorType: "CONCEPT",
+				ListStatus: "L",
+				IsActive:   true,
+			}},
+		},
+	}, nil)
+
+	trackable, resolutions, err := assembler.Assemble(context.Background(), []domain.PlanIntent{testIntent("CPO板块")})
+
+	require.NoError(t, err)
+	require.Len(t, trackable, 1)
+	require.Equal(t, domain.AssetTypeSector, trackable[0].AssetType)
+	require.Equal(t, domain.MarketDC, trackable[0].Market)
+	require.Equal(t, "BK1128.DC", trackable[0].TSCode)
+	require.Equal(t, domain.InstrumentTargetKindSector, resolutions[0].TargetKind)
+}
+
 func TestCandidateAssemblerKeepsResolvedTargetsWhenSomeTargetsAreNotFound(t *testing.T) {
 	assembler := service.NewCandidateAssembler(fakeSecurityLookup{
 		"ValidCo": {

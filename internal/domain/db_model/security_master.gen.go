@@ -24,6 +24,7 @@ type SecurityMaster struct {
 	ListDate   *time.Time `gorm:"column:list_date;type:date" json:"list_date"`
 	DelistDate *time.Time `gorm:"column:delist_date;type:date" json:"delist_date"`
 	Industry   string     `gorm:"column:industry;type:varchar(128);not null" json:"industry"`
+	SectorType string     `gorm:"column:sector_type;type:varchar(32);not null" json:"sector_type"`
 	IsActive   bool       `gorm:"column:is_active;type:tinyint(1);not null;index:idx_security_master_asset_status,priority:3;default:1" json:"is_active"`
 	Source     string     `gorm:"column:source;type:varchar(32);not null;default:MANUAL" json:"source"`
 	RawJSON    []byte     `gorm:"column:raw_json;type:json;not null" json:"raw_json"`

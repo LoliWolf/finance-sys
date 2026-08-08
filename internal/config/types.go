@@ -187,11 +187,12 @@ type AgentAuthConfig struct {
 }
 
 type MarketDataConfig struct {
-	Enabled     bool                    `json:"enabled"`
-	Provider    string                  `json:"provider"`
-	Tushare     MarketDataTushareConfig `json:"tushare"`
-	AsyncWorker MarketDataWorkerConfig  `json:"async_worker"`
-	StockDaily  StockDailySyncConfig    `json:"stock_daily"`
+	Enabled        bool                        `json:"enabled"`
+	Provider       string                      `json:"provider"`
+	Tushare        MarketDataTushareConfig     `json:"tushare"`
+	AsyncWorker    MarketDataWorkerConfig      `json:"async_worker"`
+	SecurityMaster SecurityMasterRefreshConfig `json:"security_master"`
+	StockDaily     StockDailySyncConfig        `json:"stock_daily"`
 }
 
 type MarketDataTushareConfig struct {
@@ -222,9 +223,17 @@ type StockDailySyncConfig struct {
 	Enabled                bool     `json:"enabled"`
 	SyncAssetTypes         []string `json:"sync_asset_types"`
 	Fields                 []string `json:"fields"`
+	SectorFields           []string `json:"sector_fields"`
 	PreserveRawUnits       bool     `json:"preserve_raw_units"`
 	StoreRawContent        bool     `json:"store_raw_content"`
 	MissingItemMarkEnabled bool     `json:"missing_item_mark_enabled"`
+}
+
+type SecurityMasterRefreshConfig struct {
+	Enabled      bool     `json:"enabled"`
+	StockFields  []string `json:"stock_fields"`
+	ETFFields    []string `json:"etf_fields"`
+	SectorFields []string `json:"sector_fields"`
 }
 
 type EvaluationConfig struct {
@@ -263,6 +272,7 @@ type SchedulerConfig struct {
 	Enabled                        bool                                   `json:"enabled"`
 	PollIntervalMS                 int                                    `json:"poll_interval_ms"`
 	ClaimTimeoutMS                 int                                    `json:"claim_timeout_ms"`
+	SecurityMasterRefresh          DailyTaskScheduleConfig                `json:"security_master_refresh"`
 	StockDailyPreviousDay          DailyTaskScheduleConfig                `json:"stock_daily_previous_day"`
 	RecommendationEvaluationRecent RecommendationEvaluationScheduleConfig `json:"recommendation_evaluation_recent"`
 	OpenListDocumentIngestion      HourlyTaskScheduleConfig               `json:"openlist_document_ingestion"`

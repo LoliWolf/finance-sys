@@ -114,8 +114,8 @@ onMounted(load)
       </div>
       <div class="field"><label>推荐开始</label><input v-model="dateFrom" type="date" /></div>
       <div class="field"><label>推荐结束</label><input v-model="dateTo" type="date" /></div>
-      <div class="field"><label>市场</label><select v-model="market"><option value="">全部</option><option value="SH">沪市</option><option value="SZ">深市</option><option value="BJ">北交所</option></select></div>
-      <div class="field"><label>资产</label><select v-model="assetType"><option value="">全部</option><option value="STOCK">A 股</option><option value="ETF">ETF</option></select></div>
+		<div class="field"><label>市场</label><select v-model="market"><option value="">全部</option><option value="SH">沪市</option><option value="SZ">深市</option><option value="BJ">北交所</option><option value="DC">东方财富板块</option></select></div>
+		<div class="field"><label>资产</label><select v-model="assetType"><option value="">全部</option><option value="A_SHARE">A 股</option><option value="ETF">ETF</option><option value="SECTOR">板块指数</option></select></div>
       <div class="field"><label>方向</label><select v-model="direction"><option value="">全部</option><option value="LONG">做多</option><option value="SHORT">做空</option></select></div>
       <div class="field"><label>最少样本</label><input v-model.number="minSampleCount" type="number" min="0" max="1000" /></div>
       <div class="field"><label>排序</label><select v-model="sort"><option value="win_rate">胜率</option><option value="avg_return">平均收益</option><option value="performance_score">综合分</option><option value="sample_count">样本数</option></select></div>

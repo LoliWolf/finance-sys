@@ -197,7 +197,10 @@ def test_llm_client_does_not_retry_provider_moderation_block():
         attempts += 1
         return httpx.Response(
             500,
-            text='{"error":{"message":"Smart moderation blocked by ai"}}',
+            text=(
+                '{"error":{"message":"Smart moderation blocked by hashlinear_model",'
+                '"code":"MODERATION_BLOCKED"}}'
+            ),
         )
 
     client = LLMClient(
@@ -205,7 +208,7 @@ def test_llm_client_does_not_retry_provider_moderation_block():
         httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
-    with pytest.raises(RuntimeError, match="Smart moderation blocked by ai"):
+    with pytest.raises(RuntimeError, match="Smart moderation blocked by hashlinear_model"):
         client.extract_raw_intents("text", max_intents=5)
 
     assert attempts == 1

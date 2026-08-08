@@ -21,6 +21,7 @@ type StockDailyQuote struct {
 	Market           string    `gorm:"column:market;type:varchar(16);not null;index:idx_stock_daily_quotes_market_date,priority:1" json:"market"`
 	AssetType        string    `gorm:"column:asset_type;type:varchar(32);not null;default:STOCK" json:"asset_type"`
 	Industry         string    `gorm:"column:industry;type:varchar(128);not null;index:idx_stock_daily_quotes_industry_date,priority:1" json:"industry"`
+	SectorType       string    `gorm:"column:sector_type;type:varchar(32);not null" json:"sector_type"`
 	ListStatus       string    `gorm:"column:list_status;type:varchar(8);not null;default:L" json:"list_status"`
 	TradeDate        time.Time `gorm:"column:trade_date;type:date;not null;uniqueIndex:uk_stock_daily_quotes_ts_date_source,priority:2;index:idx_stock_daily_quotes_industry_date,priority:2;index:idx_stock_daily_quotes_market_date,priority:2;index:idx_stock_daily_quotes_pct_chg,priority:1;index:idx_stock_daily_quotes_security_date,priority:2;index:idx_stock_daily_quotes_symbol_date,priority:2;index:idx_stock_daily_quotes_trade_date,priority:1" json:"trade_date"`
 	OpenPrice        float64   `gorm:"column:open_price;type:decimal(18,4)" json:"open_price"`

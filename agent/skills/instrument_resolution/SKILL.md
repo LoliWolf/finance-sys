@@ -1,7 +1,7 @@
 ---
 name: instrument_resolution
-version: instrument-resolution-m5-v1
-description: Rules for Chinese A-share instrument resolution.
+version: instrument-resolution-sector-v1
+description: Rules for Chinese A-share, ETF, and Eastmoney sector resolution.
 ---
 
 # Instrument Resolution Rules 标的解析规则
@@ -9,8 +9,8 @@ description: Rules for Chinese A-share instrument resolution.
 ## Hard Constraints 强约束
 
 1. 不允许编造 `ts_code`。
-2. 板块、主题、行业、指数、泛称不能进入 `candidate_plan_inputs`。
-3. 只有真实可追踪证券才能进入 `candidate_plan_inputs`。
+2. 只有本地主数据验证通过的 A 股、ETF 或 `BKxxxx.DC` 板块指数才能进入 `candidate_plan_inputs`。
+3. 板块只形成推荐事实和行情评估，不进入 Go 交易规则层，不生成交易参数。
 4. 交易价格和仓位只能由 Go `internal/rules` 生成。
 5. 原文没有价格时，`reference_price=0` 且 `reference_price_note="price_missing_in_text"`。
 6. 证据必须来自原文块，不允许凭空生成。
@@ -20,16 +20,15 @@ description: Rules for Chinese A-share instrument resolution.
 
 1. A 股股票。
 2. A 股 ETF。
-3. 明确证券代码，例如 `300502.SZ`。
-4. 明确公司简称或常用别名，例如 `新易盛`、`旭创`。
+3. 东方财富板块指数，例如 `BK1128.DC`、`CPO概念`。
+4. 明确证券代码，例如 `300502.SZ`。
+5. 明确公司、ETF 或板块简称及常用别名。
 
 ## Untrackable Targets 不可追踪目标
 
-1. 板块，例如 `CPO板块`。
-2. 行业，例如 `通信行业`。
-3. 指数，例如 `沪深300指数`。
-4. 主题或概念，例如 `AI算力主题`。
-5. 泛称，例如 `A股贵金属个股`、`龙头股`、`相关标的`。
+1. 无法唯一映射到本地 `BKxxxx.DC` 的板块、行业、主题或概念。
+2. 非东方财富 BK 体系且当前没有行情链路的指数，例如 `沪深300指数`。
+3. 泛称，例如 `A股贵金属个股`、`龙头股`、`相关标的`。
 
 ## Ambiguity 多候选和歧义
 

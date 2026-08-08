@@ -56,7 +56,8 @@ func TestRecommendationEventFromPlanMapsFields(t *testing.T) {
 
 	require.Equal(t, int64(3), event.BloggerID)
 	require.Equal(t, int64(7), event.SourceDocumentID)
-	require.Equal(t, int64(11), event.PlanID)
+	require.NotNil(t, event.PlanID)
+	require.Equal(t, int64(11), *event.PlanID)
 	require.Equal(t, int64(13), event.ParseRunID)
 	require.Equal(t, "300502.SZ", event.Symbol)
 	require.Equal(t, "A_SHARE", event.AssetType)
@@ -82,6 +83,38 @@ func TestRecommendationEventFromPlanNormalizesRecommendDateToDateOnlyUTC(t *test
 	event := recommendationEventFromPlan(document, plan, blogger)
 
 	require.Equal(t, time.Date(2026, 2, 3, 0, 0, 0, 0, time.UTC), event.RecommendDate)
+}
+
+func TestRecommendationEventFromSectorIntentUsesActualParseRun(t *testing.T) {
+	loc := time.FixedZone("Asia/Shanghai", 8*60*60)
+	document := domain.Document{ID: 7}
+	blogger := db_model.Blogger{ID: 3, NormalizedName: "alice", Institution: "Research"}
+	intent := domain.TrackablePlanIntent{
+		TSCode:     "BK1128.DC",
+		AssetType:  domain.AssetTypeSector,
+		Market:     domain.MarketDC,
+		Direction:  domain.TradeDirectionLong,
+		Confidence: 0.82,
+		Thesis:     "CPO 板块景气度提升",
+	}
+
+	event := recommendationEventFromSectorIntent(
+		document,
+		blogger,
+		913,
+		intent,
+		time.Date(2026, 8, 8, 15, 0, 0, 0, loc),
+		16,
+	)
+
+	require.Equal(t, int64(913), event.ParseRunID)
+	require.Equal(t, "BK1128.DC", event.Symbol)
+	require.Equal(t, "SECTOR", event.AssetType)
+	require.Equal(t, "DC", event.Market)
+	require.Nil(t, event.PlanID)
+	require.Equal(t, time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), event.RecommendDate)
+	require.Equal(t, int64(16), event.ConfigVersion)
+	require.Equal(t, sectorRecommendationRuleVersion, event.RuleVersion)
 }
 
 func recommendationTestPlan() domain.CandidatePlan {

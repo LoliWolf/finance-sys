@@ -42,6 +42,7 @@ type Server struct {
 
 type marketDataService interface {
 	CreateStockDailySyncRun(context.Context, service.StockDailySyncRequest) (*service.StockDailySyncResponse, error)
+	RefreshSecurityMaster(context.Context, service.SecurityMasterRefreshRequest) (*service.SecurityMasterRefreshResponse, error)
 	ListSyncRuns(context.Context, service.MarketDataSyncRunQuery) ([]db_model.MarketDataSyncRun, error)
 }
 
@@ -126,6 +127,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/securities/{tsCode}/recommendations/performance", s.handleSecurityRecommendationPerformance)
 		r.Get("/admin/security/lookup", s.handleLookupSecurity)
 		r.Post("/admin/market/stock-daily/sync", s.handleCreateStockDailySyncRun)
+		r.Post("/admin/market/security-master/refresh", s.handleRefreshSecurityMaster)
 		r.Get("/admin/market/sync-runs", s.handleListMarketDataSyncRuns)
 		r.Post("/admin/evaluations/recommendations/runs", s.handleCreateRecommendationEvaluationRun)
 		r.Get("/admin/evaluations/recommendations/runs", s.handleListRecommendationEvaluationRuns)

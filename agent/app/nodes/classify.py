@@ -27,13 +27,13 @@ def classify_untrackable_targets(
 
 def _classify(raw_symbol: str):
     if "板块" in raw_symbol:
-        return "SECTOR", "sector is not a single tradable security"
+        return "SECTOR", "sector was not resolved to a supported BKxxxx.DC index"
     if "行业" in raw_symbol:
-        return "INDUSTRY", "industry is not a single tradable security"
+        return "INDUSTRY", "industry was not resolved to a supported BKxxxx.DC index"
     if "指数" in raw_symbol:
         return "INDEX", "index is not a directly tradable security"
     if "主题" in raw_symbol or "概念" in raw_symbol:
-        return "THEME", "theme is not a single tradable security"
+        return "THEME", "theme was not resolved to a supported BKxxxx.DC index"
     if "个股" in raw_symbol or "相关标的" in raw_symbol or "龙头股" in raw_symbol:
         return "BROAD_PHRASE", "broad phrase is not a single tradable security"
     return None, None

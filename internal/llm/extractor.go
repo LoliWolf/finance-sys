@@ -28,7 +28,7 @@ Output shape:
 
 var (
 	jsonFenceRe = regexp.MustCompile("(?s)^```(?:json)?\\s*(.*?)\\s*```$")
-	tsCodeRe    = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
+	tsCodeRe    = regexp.MustCompile(`^(?:\d{6}\.(?:SH|SZ|BJ)|BK\d{4}\.DC)$`)
 	symbolRe    = regexp.MustCompile(`^\d{6}$`)
 )
 
@@ -407,6 +407,9 @@ func normalizeSymbol(value string) string {
 }
 
 func inferAssetType(symbol string) domain.AssetType {
+	if strings.HasPrefix(symbol, "BK") && strings.HasSuffix(symbol, ".DC") {
+		return domain.AssetTypeSector
+	}
 	if strings.HasPrefix(symbol, "159") || strings.HasPrefix(symbol, "510") || strings.HasPrefix(symbol, "512") || strings.HasPrefix(symbol, "513") {
 		return domain.AssetTypeETF
 	}
@@ -414,6 +417,9 @@ func inferAssetType(symbol string) domain.AssetType {
 }
 
 func inferMarket(symbol string) domain.Market {
+	if strings.HasSuffix(symbol, ".DC") {
+		return domain.MarketDC
+	}
 	if strings.HasSuffix(symbol, ".SH") {
 		return domain.MarketSH
 	}

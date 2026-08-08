@@ -34,15 +34,17 @@ const (
 	MissingReasonNotReturned   = "NOT_RETURNED"
 	MissingReasonProviderEmpty = "PROVIDER_EMPTY"
 	MissingReasonProviderError = "PROVIDER_ERROR"
+	MissingReasonUnknownSymbol = "UNKNOWN_PROVIDER_SYMBOL"
 
 	defaultStockDailyTaskConcurrency = 10
 )
 
 type MarketDataService struct {
-	db       *gorm.DB
-	runtime  *config.Runtime
-	provider marketdata.StockDailyProvider
-	logger   *slog.Logger
+	db             *gorm.DB
+	runtime        *config.Runtime
+	provider       marketdata.StockDailyProvider
+	masterProvider marketdata.SecurityMasterProvider
+	logger         *slog.Logger
 }
 
 type stockDailySyncRequest struct {
@@ -74,7 +76,8 @@ type stockDailyProviderRow struct {
 }
 
 func NewMarketDataService(db *gorm.DB, runtime *config.Runtime, provider marketdata.StockDailyProvider, logger *slog.Logger) *MarketDataService {
-	return &MarketDataService{db: db, runtime: runtime, provider: provider, logger: logger}
+	masterProvider, _ := provider.(marketdata.SecurityMasterProvider)
+	return &MarketDataService{db: db, runtime: runtime, provider: provider, masterProvider: masterProvider, logger: logger}
 }
 
 func (s *MarketDataService) CreateStockDailySyncRun(ctx context.Context, request StockDailySyncRequest) (*StockDailySyncResponse, error) {
@@ -188,6 +191,7 @@ func (s *MarketDataService) ExecuteStockDailyRun(ctx context.Context, syncRunID 
 	plans := []fetchPlan{
 		{assetType: "A_SHARE", fetch: s.provider.FetchStockDaily},
 		{assetType: "ETF", fetch: s.provider.FetchETFDaily},
+		{assetType: "SECTOR", fetch: s.provider.FetchSectorDaily},
 	}
 
 	var quotes []db_model.StockDailyQuote
@@ -200,7 +204,11 @@ func (s *MarketDataService) ExecuteStockDailyRun(ctx context.Context, syncRunID 
 		if !containsString(marketDataSecurityAssetTypes(cfg.StockDaily.SyncAssetTypes), plan.assetType) {
 			continue
 		}
-		rows, alias, fetchErr := fetchRowsWithTokens(ctx, tokens, run.TradeDate, cfg.StockDaily.Fields, plan.fetch)
+		fields := cfg.StockDaily.Fields
+		if plan.assetType == "SECTOR" {
+			fields = cfg.StockDaily.SectorFields
+		}
+		rows, alias, fetchErr := fetchRowsWithTokens(ctx, tokens, run.TradeDate, fields, plan.fetch)
 		if alias != "" {
 			tokenAlias = alias
 		}
@@ -308,7 +316,7 @@ func normalizeStockDailySyncRequest(request stockDailySyncRequest) (stockDailySy
 
 func marketDataSecurityAssetTypes(values []string) []string {
 	if len(values) == 0 {
-		values = []string{"STOCK", "ETF"}
+		values = []string{"STOCK", "ETF", "SECTOR"}
 	}
 	seen := map[string]struct{}{}
 	var result []string
@@ -327,6 +335,11 @@ func marketDataSecurityAssetTypes(values []string) []string {
 			if _, ok := seen["ETF"]; !ok {
 				result = append(result, "ETF")
 				seen["ETF"] = struct{}{}
+			}
+		case "SECTOR":
+			if _, ok := seen["SECTOR"]; !ok {
+				result = append(result, "SECTOR")
+				seen["SECTOR"] = struct{}{}
 			}
 		}
 	}
@@ -347,6 +360,7 @@ func stockDailyQuoteFromProviderRow(security db_model.SecurityMaster, tradeDate 
 		Market:           security.Market,
 		AssetType:        security.AssetType,
 		Industry:         security.Industry,
+		SectorType:       security.SectorType,
 		ListStatus:       security.ListStatus,
 		TradeDate:        dateOnlyUTC(tradeDate),
 		OpenPrice:        numberValue(row.Values["open"]),
@@ -355,7 +369,7 @@ func stockDailyQuoteFromProviderRow(security db_model.SecurityMaster, tradeDate 
 		ClosePrice:       numberValue(row.Values["close"]),
 		PreClosePrice:    numberValue(row.Values["pre_close"]),
 		ChangeAmount:     numberValue(row.Values["change"]),
-		PctChg:           numberValue(row.Values["pct_chg"]),
+		PctChg:           firstNumberValue(row.Values["pct_chg"], row.Values["pct_change"]),
 		Volume:           numberValue(row.Values["vol"]),
 		Amount:           numberValue(row.Values["amount"]),
 		Source:           MarketDataSourceTushare,
@@ -390,6 +404,10 @@ func associateStockDailyProviderRows(
 			tsCode := stringValue(item.row.Values["ts_code"])
 			security, ok := securityByTSCode[tsCode]
 			if !ok || !marketDataAssetTypeMatches(security.AssetType, item.assetType) {
+				resultMu.Lock()
+				providerErrors++
+				missing = append(missing, unknownProviderMissingItem(syncRunID, tsCode, item.assetType, tradeDate))
+				resultMu.Unlock()
 				return nil
 			}
 			quote, err := stockDailyQuoteFromProviderRow(security, tradeDate, item.row, configVersion)
@@ -576,15 +594,33 @@ func missingItemsForAssetType(syncRunID int64, securities []db_model.SecurityMas
 }
 
 func missingItem(syncRunID int64, security db_model.SecurityMaster, tradeDate time.Time, reason string, message string) db_model.MarketDataSyncMissingItem {
+	securityMasterID := security.ID
 	return db_model.MarketDataSyncMissingItem{
 		SyncRunID:        syncRunID,
-		SecurityMasterID: security.ID,
+		SecurityMasterID: &securityMasterID,
 		TSCode:           security.TSCode,
 		Symbol:           security.Symbol,
 		SecurityName:     security.Name,
 		TradeDate:        dateOnlyUTC(tradeDate),
 		Reason:           reason,
 		Message:          message,
+	}
+}
+
+func unknownProviderMissingItem(syncRunID int64, tsCode string, assetType string, tradeDate time.Time) db_model.MarketDataSyncMissingItem {
+	tsCode = strings.ToUpper(strings.TrimSpace(tsCode))
+	symbol := tsCode
+	if dot := strings.Index(symbol, "."); dot > 0 {
+		symbol = symbol[:dot]
+	}
+	return db_model.MarketDataSyncMissingItem{
+		SyncRunID:    syncRunID,
+		TSCode:       tsCode,
+		Symbol:       symbol,
+		TradeDate:    dateOnlyUTC(tradeDate),
+		Reason:       MissingReasonUnknownSymbol,
+		Message:      fmt.Sprintf("provider returned %s row not present in active security_master", assetType),
+		SecurityName: "",
 	}
 }
 
@@ -639,8 +675,24 @@ func numberValue(value any) float64 {
 	}
 }
 
+func firstNumberValue(values ...any) float64 {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		text := stringValue(value)
+		if text == "" || text == "<nil>" {
+			continue
+		}
+		return numberValue(value)
+	}
+	return 0
+}
+
 func stringValue(value any) string {
 	switch typed := value.(type) {
+	case nil:
+		return ""
 	case string:
 		return strings.TrimSpace(typed)
 	case fmt.Stringer:

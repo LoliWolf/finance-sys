@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, formatPercent, returnTone, truncate } from './format'
+import { assetTypeLabel, formatDate, formatPercent, marketLabel, returnTone, sectorTypeLabel, truncate } from './format'
 
 describe('format utilities', () => {
   it('formats ratios as percentages', () => {
@@ -21,5 +21,12 @@ describe('format utilities', () => {
   it('truncates long evidence without changing short text', () => {
     expect(truncate('简短观点', 10)).toBe('简短观点')
     expect(truncate('这是一段足够长的观点', 5)).toBe('这是一段足…')
+  })
+
+  it('labels A shares and Eastmoney sectors consistently', () => {
+    expect(assetTypeLabel('A_SHARE')).toBe('A 股')
+    expect(assetTypeLabel('SECTOR')).toBe('板块指数')
+    expect(marketLabel('DC')).toBe('东方财富板块')
+    expect(sectorTypeLabel('INDUSTRY')).toBe('行业板块')
   })
 })

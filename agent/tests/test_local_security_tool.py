@@ -59,6 +59,34 @@ def test_local_security_verify_returns_none_for_unverified_candidate():
     assert client.verify("300999.SZ", "Unknown") is None
 
 
+def test_local_security_lookup_preserves_sector_identity():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "ts_code": "BK1128.DC",
+                        "symbol": "BK1128",
+                        "name": "CPO概念",
+                        "asset_type": "SECTOR",
+                        "market": "DC",
+                    }
+                ]
+            },
+        )
+
+    client = LocalSecurityClient(
+        base_url="http://go.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    match = client.lookup("CPO板块")[0]
+    assert match.ts_code == "BK1128.DC"
+    assert match.asset_type == "SECTOR"
+    assert match.market == "DC"
+
+
 def test_local_security_http_errors_are_reported():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "db down"})

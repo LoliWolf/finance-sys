@@ -32,3 +32,18 @@ func (*ParseRunDML) QueryLatestByDocumentID(ctx context.Context, db *gorm.DB, do
 	}
 	return &model, nil
 }
+
+func (*ParseRunDML) QueryLatestParsedByDocumentID(ctx context.Context, db *gorm.DB, documentID int64) (*db_model.ParseRun, error) {
+	var model db_model.ParseRun
+	err := db.WithContext(ctx).
+		Where("document_id = ? AND status = ?", documentID, "PARSED").
+		Order("created_at DESC, id DESC").
+		First(&model).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &model, nil
+}

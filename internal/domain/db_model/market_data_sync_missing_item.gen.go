@@ -14,7 +14,7 @@ const TableNameMarketDataSyncMissingItem = "market_data_sync_missing_items"
 type MarketDataSyncMissingItem struct {
 	ID               int64     `gorm:"column:id;type:bigint;primaryKey;autoIncrement:true" json:"id"`
 	SyncRunID        int64     `gorm:"column:sync_run_id;type:bigint;not null;uniqueIndex:uk_market_sync_missing_run_ts_date,priority:1" json:"sync_run_id"`
-	SecurityMasterID int64     `gorm:"column:security_master_id;type:bigint;not null;index:fk_market_sync_missing_security,priority:1" json:"security_master_id"`
+	SecurityMasterID *int64    `gorm:"column:security_master_id;type:bigint;index:fk_market_missing_security_sector,priority:1" json:"security_master_id"`
 	TSCode           string    `gorm:"column:ts_code;type:varchar(16);not null;uniqueIndex:uk_market_sync_missing_run_ts_date,priority:2;index:idx_market_sync_missing_ts_date,priority:1" json:"ts_code"`
 	Symbol           string    `gorm:"column:symbol;type:varchar(16);not null" json:"symbol"`
 	SecurityName     string    `gorm:"column:security_name;type:varchar(128);not null" json:"security_name"`

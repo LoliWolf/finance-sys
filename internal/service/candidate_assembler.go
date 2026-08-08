@@ -106,7 +106,7 @@ func (a *CandidateAssembler) assembleOne(ctx context.Context, intent domain.Plan
 	switch len(candidates) {
 	case 1:
 		candidate := candidates[0]
-		if candidate.AssetType != domain.AssetTypeAShare && candidate.AssetType != domain.AssetTypeETF {
+		if candidate.AssetType != domain.AssetTypeAShare && candidate.AssetType != domain.AssetTypeETF && candidate.AssetType != domain.AssetTypeSector {
 			resolution.Status = domain.InstrumentResolutionStatusUntrackable
 			resolution.TargetKind = domain.InstrumentTargetKindUnknown
 			resolution.Reason = fmt.Sprintf("unsupported asset type %q", candidate.AssetType)
@@ -207,6 +207,8 @@ func mapSecurityAssetType(value string) (domain.AssetType, bool) {
 		return domain.AssetTypeAShare, true
 	case "ETF":
 		return domain.AssetTypeETF, true
+	case "SECTOR":
+		return domain.AssetTypeSector, true
 	default:
 		return "", false
 	}
@@ -220,6 +222,8 @@ func mapSecurityMarket(security domain.SecurityMaster) (domain.Market, bool) {
 		return domain.MarketSZ, true
 	case "BJ":
 		return domain.MarketBJ, true
+	case "DC":
+		return domain.MarketDC, true
 	}
 	switch {
 	case strings.HasSuffix(strings.ToUpper(security.TSCode), ".SH"):
@@ -228,6 +232,8 @@ func mapSecurityMarket(security domain.SecurityMaster) (domain.Market, bool) {
 		return domain.MarketSZ, true
 	case strings.HasSuffix(strings.ToUpper(security.TSCode), ".BJ"):
 		return domain.MarketBJ, true
+	case strings.HasSuffix(strings.ToUpper(security.TSCode), ".DC"):
+		return domain.MarketDC, true
 	}
 	switch strings.ToUpper(strings.TrimSpace(security.Exchange)) {
 	case "SSE", "SHSE":
@@ -236,6 +242,8 @@ func mapSecurityMarket(security domain.SecurityMaster) (domain.Market, bool) {
 		return domain.MarketSZ, true
 	case "BSE":
 		return domain.MarketBJ, true
+	case "DC":
+		return domain.MarketDC, true
 	default:
 		return "", false
 	}
@@ -244,6 +252,9 @@ func mapSecurityMarket(security domain.SecurityMaster) (domain.Market, bool) {
 func targetKindForAsset(assetType domain.AssetType) domain.InstrumentTargetKind {
 	if assetType == domain.AssetTypeETF {
 		return domain.InstrumentTargetKindETF
+	}
+	if assetType == domain.AssetTypeSector {
+		return domain.InstrumentTargetKindSector
 	}
 	return domain.InstrumentTargetKindStock
 }

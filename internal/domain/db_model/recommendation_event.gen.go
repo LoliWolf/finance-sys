@@ -15,7 +15,7 @@ type RecommendationEvent struct {
 	ID               int64     `gorm:"column:id;type:bigint;primaryKey;autoIncrement:true" json:"id"`
 	BloggerID        int64     `gorm:"column:blogger_id;type:bigint;not null;index:idx_recommendation_events_blogger_date,priority:1" json:"blogger_id"`
 	SourceDocumentID int64     `gorm:"column:source_document_id;type:bigint;not null;index:idx_recommendation_events_document,priority:1" json:"source_document_id"`
-	PlanID           int64     `gorm:"column:plan_id;type:bigint;not null;index:idx_recommendation_events_plan,priority:1" json:"plan_id"`
+	PlanID           *int64    `gorm:"column:plan_id;type:bigint;index:idx_recommendation_events_plan,priority:1" json:"plan_id"`
 	ParseRunID       int64     `gorm:"column:parse_run_id;type:bigint;not null;index:fk_recommendation_events_parse_run,priority:1" json:"parse_run_id"`
 	Symbol           string    `gorm:"column:symbol;type:varchar(32);not null;index:idx_recommendation_events_symbol_date,priority:1" json:"symbol"`
 	AssetType        string    `gorm:"column:asset_type;type:varchar(32);not null" json:"asset_type"`

@@ -74,6 +74,58 @@ func TestAnalyzerConvertsRawIntentsWhenNoCandidateInputs(t *testing.T) {
 	require.Equal(t, "CPO板块", intents[0].Symbol)
 }
 
+func TestAnalyzerKeepsUnresolvedRawIntentsAlongsideResolvedCandidates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		stock := testCandidatePlanInput("新易盛", "300502.SZ", "300502", "新易盛")
+		writeAgentResponse(t, w, agentclient.ResolveDocumentResponse{
+			SchemaVersion:      agentclient.ResponseSchemaVersion,
+			AgentVersion:       "test-agent",
+			Status:             agentclient.AgentStatusPartial,
+			CandidatePlanInput: []agentclient.AgentCandidatePlanInput{stock},
+			RawIntents: []agentclient.AgentRawIntent{
+				testRawIntent("新易盛"),
+				func() agentclient.AgentRawIntent {
+					item := testRawIntent("CPO板块")
+					item.IntentID = "intent-2"
+					return item
+				}(),
+			},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := agentclient.NewAnalyzer(testRuntimeWithAgent(server.URL), nil)
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{ID: 10}, domain.ParseRun{ID: 20, CleanedText: "推荐新易盛和CPO板块"})
+
+	require.NoError(t, err)
+	require.Len(t, intents, 2)
+	require.Equal(t, "300502.SZ", intents[0].Symbol)
+	require.Equal(t, "CPO板块", intents[1].Symbol)
+}
+
+func TestAnalyzerConvertsSectorCandidate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		item := testCandidatePlanInput("CPO板块", "BK1128.DC", "BK1128", "CPO概念")
+		item.Security.AssetType = "SECTOR"
+		item.Security.Market = "DC"
+		writeAgentResponse(t, w, agentclient.ResolveDocumentResponse{
+			SchemaVersion:      agentclient.ResponseSchemaVersion,
+			AgentVersion:       "test-agent",
+			Status:             agentclient.AgentStatusResolved,
+			CandidatePlanInput: []agentclient.AgentCandidatePlanInput{item},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := agentclient.NewAnalyzer(testRuntimeWithAgent(server.URL), nil)
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{ID: 10}, domain.ParseRun{ID: 20, CleanedText: "推荐CPO板块"})
+
+	require.NoError(t, err)
+	require.Len(t, intents, 1)
+	require.Equal(t, domain.AssetTypeSector, intents[0].AssetType)
+	require.Equal(t, domain.MarketDC, intents[0].Market)
+}
+
 func TestAnalyzerRejectsSchemaMismatch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeAgentResponse(t, w, agentclient.ResolveDocumentResponse{
@@ -100,6 +152,7 @@ func TestAnalyzerRejectsFailedStatus(t *testing.T) {
 			SchemaVersion: agentclient.ResponseSchemaVersion,
 			AgentVersion:  "test-agent",
 			Status:        agentclient.AgentStatusFailed,
+			Warnings:      []string{"llm extraction failed after 3 attempts"},
 		})
 	}))
 	defer server.Close()
@@ -111,6 +164,7 @@ func TestAnalyzerRejectsFailedStatus(t *testing.T) {
 		Chunks:      []domain.Chunk{{Index: 0, Text: "推荐新易盛"}},
 	})
 	require.ErrorContains(t, err, "agent returned FAILED status")
+	require.ErrorContains(t, err, "llm extraction failed after 3 attempts")
 }
 
 func TestAnalyzerUsesTradeDateFromContext(t *testing.T) {

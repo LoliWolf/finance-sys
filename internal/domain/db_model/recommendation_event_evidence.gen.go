@@ -15,7 +15,7 @@ type RecommendationEventEvidence struct {
 	ID                    int64     `gorm:"column:id;type:bigint;primaryKey;autoIncrement:true;index:idx_recommendation_event_evidences_event,priority:2" json:"id"`
 	RecommendationEventID int64     `gorm:"column:recommendation_event_id;type:bigint;not null;index:idx_recommendation_event_evidences_event,priority:1" json:"recommendation_event_id"`
 	SourceDocumentID      int64     `gorm:"column:source_document_id;type:bigint;not null;index:idx_recommendation_event_evidences_document,priority:1" json:"source_document_id"`
-	PlanID                int64     `gorm:"column:plan_id;type:bigint;not null;index:fk_recommendation_event_evidences_plan,priority:1" json:"plan_id"`
+	PlanID                *int64    `gorm:"column:plan_id;type:bigint;index:fk_rec_event_evidence_plan_sector,priority:1" json:"plan_id"`
 	ChunkIndex            int32     `gorm:"column:chunk_index;type:int;not null" json:"chunk_index"`
 	EvidenceText          string    `gorm:"column:evidence_text;type:text;not null" json:"evidence_text"`
 	CreatedAt             time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP" json:"created_at"`

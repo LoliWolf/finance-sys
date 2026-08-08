@@ -255,7 +255,12 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 	s.logger.InfoContext(ctx, "document service analyze candidate assembly success", "document_id", documentID, "parse_run_id", parseRun.ID, "trackable_intent_count", len(trackableIntents), "raw_intent_count", len(intents))
 
 	plans := make([]domain.CandidatePlan, 0, len(trackableIntents))
+	sectorIntents := make([]domain.TrackablePlanIntent, 0, len(trackableIntents))
 	for _, intent := range trackableIntents {
+		if intent.AssetType == domain.AssetTypeSector {
+			sectorIntents = append(sectorIntents, intent)
+			continue
+		}
 		s.logger.DebugContext(ctx, "document service analyze generate plan", "document_id", documentID, "ts_code", intent.TSCode, "raw_symbol", intent.RawSymbol, "direction", intent.Direction, "confidence", intent.Confidence)
 		plan := s.rules.Generate(intent, cfg.Rules, tradeDate, cfg.Meta.ConfigVersion)
 		plan.DocumentID = document.ID
@@ -263,7 +268,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 		plans = append(plans, plan)
 	}
 
-	savedPlans, err := s.replacePlansByDocumentID(ctx, *document, plans, resolutionRun, analysis, intents, resolutions)
+	savedPlans, err := s.replacePlansByDocumentID(ctx, *document, plans, sectorIntents, tradeDate, parseRun.ID, resolutionRun, analysis, intents, resolutions)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze replace plans failed", "document_id", documentID, "error", err.Error())
 		if obsErr := s.observer.FinishFailed(ctx, s.db, resolutionRun, analysis, intents, resolutions, err, "PERSIST_FAILED"); obsErr != nil {
@@ -463,12 +468,15 @@ func (s *DocumentService) analyzeWithObservation(ctx context.Context, document d
 	return result, err
 }
 
-func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, document domain.Document, plans []domain.CandidatePlan, resolutionRun *db_model.InstrumentResolutionRun, analysis AnalysisObservation, intents []domain.PlanIntent, resolutions []domain.InstrumentResolution) ([]domain.CandidatePlan, error) {
+func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, document domain.Document, plans []domain.CandidatePlan, sectorIntents []domain.TrackablePlanIntent, recommendDate time.Time, parseRunID int64, resolutionRun *db_model.InstrumentResolutionRun, analysis AnalysisObservation, intents []domain.PlanIntent, resolutions []domain.InstrumentResolution) ([]domain.CandidatePlan, error) {
 	const maxAttempts = 8
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		items := make([]domain.CandidatePlan, 0, len(plans))
 		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := dal.RecommendationEvents.DeleteDirectSectorEventsByDocumentID(ctx, tx, document.ID); err != nil {
+				return err
+			}
 			if err := dal.TradeCandidatePlans.DeleteByDocumentID(ctx, tx, document.ID); err != nil {
 				return err
 			}
@@ -488,6 +496,11 @@ func (s *DocumentService) replacePlansByDocumentID(ctx context.Context, document
 					return err
 				}
 				items = append(items, *item)
+			}
+			for _, intent := range sectorIntents {
+				if _, err := s.upsertRecommendationEventForSector(ctx, tx, document, parseRunID, intent, recommendDate); err != nil {
+					return err
+				}
 			}
 			if err := s.observer.FinishSucceeded(ctx, tx, resolutionRun, analysis, intents, resolutions, items); err != nil {
 				return err

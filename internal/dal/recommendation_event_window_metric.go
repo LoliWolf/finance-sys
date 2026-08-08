@@ -20,7 +20,7 @@ func (*RecommendationEventWindowMetricDML) UpsertBatch(ctx context.Context, db *
 	return db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "recommendation_event_id"}, {Name: "window_days"}, {Name: "quote_source"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"blogger_id", "security_master_id", "ts_code", "symbol", "security_name", "asset_type", "market", "industry",
+			"blogger_id", "security_master_id", "ts_code", "symbol", "security_name", "asset_type", "market", "industry", "sector_type",
 			"direction", "recommend_date", "status", "reason_code", "reason_message", "base_date", "base_close_price",
 			"entry_date", "entry_price", "exit_date", "exit_close_price", "expected_quote_count", "actual_quote_count",
 			"missing_quote_count", "raw_return_ratio", "direction_return_ratio", "max_favorable_return_ratio",

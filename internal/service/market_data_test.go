@@ -26,7 +26,7 @@ func TestNormalizeStockDailySyncRequestRequiresTradeDate(t *testing.T) {
 
 func TestMarketDataAssetTypesMapStockToAShareAndETF(t *testing.T) {
 	require.Equal(t, []string{"STOCK", "A_SHARE", "ETF"}, marketDataSecurityAssetTypes([]string{"STOCK", "ETF"}))
-	require.Equal(t, []string{"STOCK", "A_SHARE", "ETF"}, marketDataSecurityAssetTypes(nil))
+	require.Equal(t, []string{"STOCK", "A_SHARE", "ETF", "SECTOR"}, marketDataSecurityAssetTypes(nil))
 }
 
 func TestTushareTokenAliasFallbackKeepsDuplicateAliasesDistinct(t *testing.T) {
@@ -130,16 +130,22 @@ func TestAssociateStockDailyProviderRowsPersistsOnlyMatchedLocalSecurities(t *te
 	quotes, missing, providerErrors, err := associateStockDailyProviderRows(context.Background(), 99, securities, tradeDate, rows, nil, 7, defaultStockDailyTaskConcurrency)
 
 	require.NoError(t, err)
-	require.Zero(t, providerErrors)
+	require.Equal(t, 1, providerErrors)
 	require.Len(t, quotes, 1)
 	require.Equal(t, int64(1), quotes[0].SecurityMasterID)
 	require.Equal(t, "000001.SZ", quotes[0].TSCode)
 	require.Equal(t, 10.5, quotes[0].ClosePrice)
 
-	require.Len(t, missing, 1)
-	require.Equal(t, int64(2), missing[0].SecurityMasterID)
-	require.Equal(t, "000002.SZ", missing[0].TSCode)
-	require.Equal(t, MissingReasonNotReturned, missing[0].Reason)
+	require.Len(t, missing, 2)
+	missingByCode := make(map[string]db_model.MarketDataSyncMissingItem, len(missing))
+	for _, item := range missing {
+		missingByCode[item.TSCode] = item
+	}
+	require.NotNil(t, missingByCode["000002.SZ"].SecurityMasterID)
+	require.Equal(t, int64(2), *missingByCode["000002.SZ"].SecurityMasterID)
+	require.Equal(t, MissingReasonNotReturned, missingByCode["000002.SZ"].Reason)
+	require.Nil(t, missingByCode["999999.SZ"].SecurityMasterID)
+	require.Equal(t, MissingReasonUnknownSymbol, missingByCode["999999.SZ"].Reason)
 }
 
 func TestAssociateStockDailyProviderRowsAcceptsStockSecurityForAShareProviderRows(t *testing.T) {

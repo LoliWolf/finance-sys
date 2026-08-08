@@ -18,7 +18,21 @@ func (*SecurityAliasDML) Create(ctx context.Context, db *gorm.DB, model *db_mode
 }
 
 func (*SecurityAliasDML) UpsertByAliasAndSecurityID(ctx context.Context, db *gorm.DB, model *db_model.SecurityAlias) error {
-	return db.WithContext(ctx).Clauses(clause.OnConflict{
+	return db.WithContext(ctx).Clauses(securityAliasUpsertClause()).Create(model).Error
+}
+
+func (*SecurityAliasDML) UpsertBatch(ctx context.Context, db *gorm.DB, models []db_model.SecurityAlias, batchSize int) error {
+	if len(models) == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	return db.WithContext(ctx).Clauses(securityAliasUpsertClause()).CreateInBatches(&models, batchSize).Error
+}
+
+func securityAliasUpsertClause() clause.OnConflict {
+	return clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "normalized_alias"},
 			{Name: "security_master_id"},
@@ -31,7 +45,7 @@ func (*SecurityAliasDML) UpsertByAliasAndSecurityID(ctx context.Context, db *gor
 			"is_active":  gorm.Expr("VALUES(is_active)"),
 			"updated_at": gorm.Expr("CURRENT_TIMESTAMP"),
 		}),
-	}).Create(model).Error
+	}
 }
 
 func (*SecurityAliasDML) QueryByNormalizedAlias(ctx context.Context, db *gorm.DB, normalizedAlias string) ([]db_model.SecurityAlias, error) {
