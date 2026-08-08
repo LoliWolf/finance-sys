@@ -224,8 +224,8 @@ func (s *ExternalDocumentIngestionService) processOpenListArticle(ctx context.Co
 	if err := dal.ExternalDocumentIngestions.MarkAnalyzing(ctx, s.db, ingestion.ID); err != nil {
 		return fail(err)
 	}
-	tradeDate := article.ArticleDate.AddDate(0, 0, 1)
-	_, analyzeErr := s.documents.AnalyzeDocumentForTradeDate(ctx, document.ID, tradeDate)
+	recommendationDate := domain.RecommendationDateForArticle(article.ArticleDate)
+	_, analyzeErr := s.documents.AnalyzeDocumentForTradeDate(ctx, document.ID, recommendationDate)
 	if analyzeErr != nil {
 		current, loadErr := s.documents.GetDocumentByID(context.WithoutCancel(ctx), document.ID)
 		if loadErr == nil && current.Status == domain.DocumentStatusInvalid {
@@ -239,7 +239,7 @@ func (s *ExternalDocumentIngestionService) processOpenListArticle(ctx context.Co
 		return fail(err)
 	}
 	if s.logger != nil {
-		s.logger.InfoContext(ctx, "OpenList article ingestion completed", "path", article.Path, "document_id", document.ID, "duplicate", duplicate, "article_date", article.ArticleDate.Format(time.DateOnly), "trade_date", tradeDate.Format(time.DateOnly))
+		s.logger.InfoContext(ctx, "OpenList article ingestion completed", "path", article.Path, "document_id", document.ID, "duplicate", duplicate, "article_date", article.ArticleDate.Format(time.DateOnly), "recommend_date", recommendationDate.Format(time.DateOnly))
 	}
 	return openListArticleResult{documentID: document.ID}
 }

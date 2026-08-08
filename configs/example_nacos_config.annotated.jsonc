@@ -213,9 +213,9 @@
       "entry_price_rule": "NEXT_TRADE_OPEN",
       "base_price_rule": "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE",
       "win_threshold_ratio": 0,
-      // 行情覆盖不足的窗口标记为 INCOMPLETE，不进入榜单胜率分母。
+      // 以全市场交易日历锁定窗口边界；停牌不顺延，行情覆盖不足时标记为 INCOMPLETE。
       "min_quote_coverage_ratio": 1,
-      "calc_version": "rec-performance-v1",
+      "calc_version": "rec-performance-v2-market-calendar",
       "async_worker": {
         "enabled": false,
         "poll_interval_ms": 1000,

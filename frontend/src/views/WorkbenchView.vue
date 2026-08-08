@@ -158,7 +158,7 @@ onMounted(async () => {
             <div class="field"><label>推荐结束</label><input v-model="dateTo" type="date" /></div>
             <label class="toggle-row full"><input v-model="includeNeedsReview" type="checkbox" />包含历史待复核推荐（用于完整半年统计）</label>
             <label class="toggle-row full"><input v-model="forceRebuild" type="checkbox" />强制重算已有 READY 窗口</label>
-            <button class="button primary full" type="button" :disabled="creatingRun" @click="createRun"><LoaderCircle v-if="creatingRun" class="spin" :size="16" /><Play v-else :size="16" />创建 5 / 10 / 30 / 90 日评价任务</button>
+            <button class="button primary full" type="button" :disabled="creatingRun" @click="createRun"><LoaderCircle v-if="creatingRun" class="spin" :size="16" /><Play v-else :size="16" />创建 5 / 10 / 30 / 90 个交易日评价任务</button>
           </div>
 
           <div v-if="latestRun" style="margin-top:22px;padding:17px;border-radius:13px;background:#eee7dc">

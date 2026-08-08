@@ -92,10 +92,10 @@ function visibleReturn(metric: RecommendationWindowReturn | undefined) {
 }
 
 function metricTitle(metric: RecommendationWindowReturn | undefined, windowDays: number) {
-  if (!metric?.status) return `${windowDays} 日窗口暂未生成`
-  if (metric.status === 'READY') return `${windowDays} 日后股票涨跌幅`
-  if (metric.status === 'PENDING') return metric.reason_message || `${windowDays} 日窗口尚未到期`
-  return metric.reason_message || `${windowDays} 日窗口暂不可评估`
+  if (!metric?.status) return `${windowDays} 个交易日窗口暂未生成`
+  if (metric.status === 'READY') return `第 ${windowDays} 个交易日股票涨跌幅`
+  if (metric.status === 'PENDING') return metric.reason_message || `${windowDays} 个交易日窗口尚未到期`
+  return metric.reason_message || `${windowDays} 个交易日窗口暂不可评估`
 }
 
 const totalPages = computed(() => Math.max(1, data.value?.total_pages || 1))
@@ -119,7 +119,7 @@ onMounted(() => load())
     <PageHeader
       eyebrow="Evidence ledger"
       title="逐条看见推荐，逐条接受检验。"
-      description="每条推荐只出现一次，同时呈现后续 5、10、30、90 日的股票涨跌；尚未到期的窗口暂不展示收益。"
+      description="每条推荐只出现一次，同时呈现后续第 5、10、30、90 个交易日的股票涨跌；尚未到期的窗口暂不展示收益。"
     >
       <template #actions><button class="button" type="button" :disabled="loading" @click="load()"><RefreshCw :size="15" />刷新</button></template>
     </PageHeader>
@@ -151,7 +151,7 @@ onMounted(() => load())
         <header class="panel-header"><div><h2>推荐表现明细</h2><p>点击任意一行，查看完整价格路径、窗口指标和原始证据。</p></div><span class="muted">按推荐日倒序</span></header>
         <div v-if="data.items.length" class="table-wrap">
           <table class="data-table recommendation-ledger-table">
-            <thead><tr><th>推荐日</th><th>博主</th><th>股票</th><th>方向</th><th v-for="windowDays in windows" :key="windowDays">{{ windowDays }} 日涨跌</th><th>观点摘要</th></tr></thead>
+            <thead><tr><th>推荐日</th><th>博主</th><th>股票</th><th>方向</th><th v-for="windowDays in windows" :key="windowDays">{{ windowDays }} 个交易日</th><th>观点摘要</th></tr></thead>
             <tbody>
               <tr v-for="item in data.items" :key="item.recommendation_event_id" class="clickable" @click="router.push(`/recommendations/${item.recommendation_event_id}`)">
                 <td>{{ formatDate(item.recommend_date) }}</td>

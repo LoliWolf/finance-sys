@@ -38,7 +38,7 @@ async function load() {
 const sortedMetrics = computed(() => [...(detail.value?.metrics || [])].sort((a, b) => a.window_days - b.window_days))
 const readyMetrics = computed(() => sortedMetrics.value.filter((item) => item.status === 'READY'))
 const headlineMetric = computed(() => readyMetrics.value.find((item) => item.window_days === 30) || readyMetrics.value[0])
-const headlineMetricLabel = computed(() => headlineMetric.value ? `${headlineMetric.value.window_days} 日方向收益` : '方向收益')
+const headlineMetricLabel = computed(() => headlineMetric.value ? `${headlineMetric.value.window_days} 个交易日方向收益` : '方向收益')
 
 const priceOption = computed(() => {
   const points = series.value?.items || []
@@ -122,7 +122,7 @@ onMounted(load)
               <thead><tr><th>窗口</th><th>状态</th><th>入场</th><th>退出</th><th>方向收益</th><th>最大浮盈</th><th>最大不利</th><th>最大回撤</th><th>结果</th><th>行情覆盖</th></tr></thead>
               <tbody>
                 <tr v-for="metric in sortedMetrics" :key="metric.window_days">
-                  <td><strong>{{ metric.window_days }} 日</strong></td>
+                  <td><strong>{{ metric.window_days }} 个交易日</strong></td>
                   <td><StatusBadge :status="metric.status" /></td>
                   <td>{{ formatDate(metric.entry_date) }} <small class="muted">{{ metric.entry_price == null ? '' : `@ ${formatNumber(metric.entry_price)}` }}</small></td>
                   <td>{{ formatDate(metric.exit_date) }} <small class="muted">{{ metric.exit_close_price == null ? '' : `@ ${formatNumber(metric.exit_close_price)}` }}</small></td>
