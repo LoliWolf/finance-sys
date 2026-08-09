@@ -90,9 +90,12 @@ func main() {
 		fatal(err)
 	}
 
-	token := strings.TrimSpace(snapshot.Config.Agent.Tushare.Token)
+	token := firstEnabledMarketDataToken(snapshot.Config.MarketData.Tushare.Tokens)
 	if token == "" {
-		fatal(errors.New("agent.tushare.token is empty in Nacos config"))
+		token = strings.TrimSpace(snapshot.Config.Agent.Tushare.Token)
+	}
+	if token == "" {
+		fatal(errors.New("market_data.tushare.tokens and legacy agent.tushare.token are empty in Nacos config"))
 	}
 	if !snapshot.Config.Agent.Tushare.Enabled {
 		fmt.Fprintln(os.Stderr, "warning: agent.tushare.enabled is false; using agent.tushare.token for one-time initialization")
@@ -477,7 +480,12 @@ func (r *runner) upsertSecurityMasters(ctx context.Context, records []map[string
 
 func securityMasterFromRecord(record map[string]any, assetType string, fallbackStatus string) (*db_model.SecurityMaster, []aliasCandidate, bool) {
 	tsCode := strings.ToUpper(stringValue(record, "ts_code"))
-	name := stringValue(record, "name")
+	name := firstNonEmpty(
+		stringValue(record, "name"),
+		stringValue(record, "csname"),
+		stringValue(record, "cname"),
+		stringValue(record, "extname"),
+	)
 	if tsCode == "" || name == "" {
 		return nil, nil, false
 	}
@@ -493,6 +501,8 @@ func securityMasterFromRecord(record map[string]any, assetType string, fallbackS
 		stringValue(record, "fullname"),
 		stringValue(record, "full_name"),
 		stringValue(record, "fund_full_name"),
+		stringValue(record, "extname"),
+		stringValue(record, "cname"),
 		name,
 	)
 	listStatus := firstNonEmpty(
@@ -537,6 +547,15 @@ func securityMasterFromRecord(record map[string]any, assetType string, fallbackS
 		})
 	}
 	return model, aliases, true
+}
+
+func firstEnabledMarketDataToken(tokens []config.TushareTokenConfig) string {
+	for _, token := range tokens {
+		if token.Enabled && strings.TrimSpace(token.Token) != "" {
+			return strings.TrimSpace(token.Token)
+		}
+	}
+	return ""
 }
 
 func (r *runner) upsertNamechangeAliases(ctx context.Context, records []map[string]any) (int, int, error) {

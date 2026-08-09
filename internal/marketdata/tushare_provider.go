@@ -21,6 +21,13 @@ type ProviderRow struct {
 type StockDailyProvider interface {
 	FetchStockDaily(ctx context.Context, token string, tradeDate time.Time, fields []string) ([]ProviderRow, error)
 	FetchETFDaily(ctx context.Context, token string, tradeDate time.Time, fields []string) ([]ProviderRow, error)
+	FetchSectorDaily(ctx context.Context, token string, tradeDate time.Time, fields []string) ([]ProviderRow, error)
+}
+
+type SecurityMasterProvider interface {
+	FetchStockBasic(ctx context.Context, token string, listStatus string, fields []string) ([]ProviderRow, error)
+	FetchETFBasic(ctx context.Context, token string, listStatus string, fields []string) ([]ProviderRow, error)
+	FetchDCIndex(ctx context.Context, token string, tradeDate time.Time, fields []string) ([]ProviderRow, error)
 }
 
 type TushareProvider struct {
@@ -45,6 +52,30 @@ func (p *TushareProvider) FetchStockDaily(ctx context.Context, token string, tra
 
 func (p *TushareProvider) FetchETFDaily(ctx context.Context, token string, tradeDate time.Time, fields []string) ([]ProviderRow, error) {
 	return p.queryGeneric(ctx, "fund_daily", strings.TrimSpace(token), map[string]string{
+		"trade_date": tradeDate.Format("20060102"),
+	}, fields)
+}
+
+func (p *TushareProvider) FetchSectorDaily(ctx context.Context, token string, tradeDate time.Time, fields []string) ([]ProviderRow, error) {
+	return p.queryGeneric(ctx, "dc_daily", strings.TrimSpace(token), map[string]string{
+		"trade_date": tradeDate.Format("20060102"),
+	}, fields)
+}
+
+func (p *TushareProvider) FetchStockBasic(ctx context.Context, token string, listStatus string, fields []string) ([]ProviderRow, error) {
+	return p.queryGeneric(ctx, "stock_basic", strings.TrimSpace(token), map[string]string{
+		"list_status": strings.ToUpper(strings.TrimSpace(listStatus)),
+	}, fields)
+}
+
+func (p *TushareProvider) FetchETFBasic(ctx context.Context, token string, listStatus string, fields []string) ([]ProviderRow, error) {
+	return p.queryGeneric(ctx, "etf_basic", strings.TrimSpace(token), map[string]string{
+		"list_status": strings.ToUpper(strings.TrimSpace(listStatus)),
+	}, fields)
+}
+
+func (p *TushareProvider) FetchDCIndex(ctx context.Context, token string, tradeDate time.Time, fields []string) ([]ProviderRow, error) {
+	return p.queryGeneric(ctx, "dc_index", strings.TrimSpace(token), map[string]string{
 		"trade_date": tradeDate.Format("20060102"),
 	}, fields)
 }

@@ -79,6 +79,7 @@ func Validate(cfg *Config) error {
 			require(cfg.Agent.Tushare.TimeoutMS > 0 && cfg.Agent.Tushare.TimeoutMS <= 60000, "agent.tushare.timeout_ms must be in (0,60000] when agent.tushare.enabled is true")
 		}
 		require(cfg.Agent.TimeoutMS > 0, "agent.timeout_ms must be positive when agent.enabled is true")
+		require(!cfg.LLM.Enabled || cfg.Agent.TimeoutMS > cfg.LLM.TimeoutMS, "agent.timeout_ms must be greater than llm.timeout_ms when both agent and llm are enabled")
 		require(cfg.Agent.MaxRetries >= 0, "agent.max_retries must be zero or positive")
 		require(strings.TrimSpace(cfg.Agent.SchemaVersion) != "", "agent.schema_version is required when agent.enabled is true")
 		if cfg.Agent.Auth.Enabled {
@@ -110,6 +111,9 @@ func Validate(cfg *Config) error {
 		if cfg.MarketData.StockDaily.Enabled {
 			validateStockDailySync(cfg.MarketData.StockDaily, require)
 		}
+		if cfg.MarketData.SecurityMaster.Enabled {
+			validateSecurityMasterRefresh(cfg.MarketData.SecurityMaster, require)
+		}
 	}
 	if cfg.Evaluation.Enabled {
 		require(cfg.Evaluation.RecommendationPerformance.Enabled, "evaluation.recommendation_performance.enabled must be true when evaluation.enabled is true")
@@ -124,6 +128,10 @@ func Validate(cfg *Config) error {
 			validateDailySchedule("scheduler.stock_daily_previous_day", cfg.Scheduler.StockDailyPreviousDay, require)
 			require(cfg.MarketData.Enabled && cfg.MarketData.StockDaily.Enabled, "market_data.stock_daily must be enabled when scheduler.stock_daily_previous_day is enabled")
 			require(cfg.MarketData.AsyncWorker.Enabled, "market_data.async_worker must be enabled when scheduler.stock_daily_previous_day is enabled")
+		}
+		if cfg.Scheduler.SecurityMasterRefresh.Enabled {
+			validateDailySchedule("scheduler.security_master_refresh", cfg.Scheduler.SecurityMasterRefresh, require)
+			require(cfg.MarketData.Enabled && cfg.MarketData.SecurityMaster.Enabled, "market_data.security_master must be enabled when scheduler.security_master_refresh is enabled")
 		}
 		if cfg.Scheduler.RecommendationEvaluationRecent.Enabled {
 			validateDailySchedule("scheduler.recommendation_evaluation_recent", cfg.Scheduler.RecommendationEvaluationRecent.DailyTaskScheduleConfig, require)
@@ -207,14 +215,45 @@ func validateMarketDataTushare(cfg MarketDataTushareConfig, require func(bool, s
 func validateStockDailySync(cfg StockDailySyncConfig, require func(bool, string)) {
 	require(len(cfg.SyncAssetTypes) > 0, "market_data.stock_daily.sync_asset_types must not be empty when enabled")
 	allowedAssetTypes := map[string]struct{}{
-		"STOCK": {},
-		"ETF":   {},
+		"STOCK":  {},
+		"ETF":    {},
+		"SECTOR": {},
 	}
 	for _, assetType := range cfg.SyncAssetTypes {
 		_, ok := allowedAssetTypes[strings.ToUpper(strings.TrimSpace(assetType))]
 		require(ok, fmt.Sprintf("unsupported market_data.stock_daily.sync_asset_types value %q", assetType))
 	}
 	require(len(cfg.Fields) > 0, "market_data.stock_daily.fields must not be empty when enabled")
+	if _, enabled := configuredAssetTypes(cfg.SyncAssetTypes)["SECTOR"]; enabled {
+		require(len(cfg.SectorFields) > 0, "market_data.stock_daily.sector_fields must not be empty when SECTOR sync is enabled")
+	}
+}
+
+func validateSecurityMasterRefresh(cfg SecurityMasterRefreshConfig, require func(bool, string)) {
+	require(len(cfg.StockFields) > 0, "market_data.security_master.stock_fields must not be empty when enabled")
+	require(len(cfg.ETFFields) > 0, "market_data.security_master.etf_fields must not be empty when enabled")
+	require(len(cfg.SectorFields) > 0, "market_data.security_master.sector_fields must not be empty when enabled")
+	sectorFields := configuredFields(cfg.SectorFields)
+	for _, field := range []string{"ts_code", "trade_date", "name", "idx_type"} {
+		_, ok := sectorFields[field]
+		require(ok, fmt.Sprintf("market_data.security_master.sector_fields must contain %q when enabled", field))
+	}
+}
+
+func configuredFields(values []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[strings.ToLower(strings.TrimSpace(value))] = struct{}{}
+	}
+	return result
+}
+
+func configuredAssetTypes(values []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[strings.ToUpper(strings.TrimSpace(value))] = struct{}{}
+	}
+	return result
 }
 
 func validateRecommendationPerformance(cfg RecommendationPerformanceConfig, require func(bool, string)) {

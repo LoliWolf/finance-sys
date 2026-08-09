@@ -36,7 +36,10 @@ class LocalSecurityClient:
         self.auth_token = auth_token if auth_token is not None else settings.auth_token
         self.timeout_ms = timeout_ms if timeout_ms is not None else settings.timeout_ms
         self.max_candidates = max_candidates if max_candidates is not None else settings.max_candidates
-        self.http_client = http_client or httpx.Client(timeout=self.timeout_ms / 1000)
+        self.http_client = http_client or httpx.Client(
+            timeout=self.timeout_ms / 1000,
+            trust_env=False,
+        )
 
     def enabled(self) -> bool:
         return bool(self.base_url)

@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	agentTSCodeRe    = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
+	agentTSCodeRe    = regexp.MustCompile(`^(?:\d{6}\.(?:SH|SZ|BJ)|BK\d{4}\.DC)$`)
 	agentSkillHashRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
@@ -93,7 +93,7 @@ func validateCandidatePlanInput(input AgentCandidatePlanInput) error {
 	}
 	security := input.Security
 	if !agentTSCodeRe.MatchString(strings.ToUpper(strings.TrimSpace(security.TSCode))) {
-		return fmt.Errorf("security.ts_code must be a valid ts_code like 000001.SZ")
+		return fmt.Errorf("security.ts_code must be a valid security or BK sector ts_code")
 	}
 	if strings.TrimSpace(security.Symbol) == "" {
 		return fmt.Errorf("security.symbol is required")
@@ -102,14 +102,14 @@ func validateCandidatePlanInput(input AgentCandidatePlanInput) error {
 		return fmt.Errorf("security.name is required")
 	}
 	switch strings.ToUpper(strings.TrimSpace(security.AssetType)) {
-	case "STOCK", "ETF":
+	case "STOCK", "ETF", "SECTOR":
 	default:
-		return fmt.Errorf("security.asset_type must be STOCK or ETF")
+		return fmt.Errorf("security.asset_type must be STOCK, ETF, or SECTOR")
 	}
 	switch strings.ToUpper(strings.TrimSpace(security.Market)) {
-	case "SH", "SZ", "BJ":
+	case "SH", "SZ", "BJ", "DC":
 	default:
-		return fmt.Errorf("security.market must be SH, SZ, or BJ")
+		return fmt.Errorf("security.market must be SH, SZ, BJ, or DC")
 	}
 	return nil
 }

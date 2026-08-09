@@ -83,6 +83,19 @@ func TestValidateAllowsConfiguredLongAgentTimeout(t *testing.T) {
 	require.NoError(t, config.Validate(&cfg))
 }
 
+func TestValidateRejectsAgentTimeoutShorterThanLLMTimeout(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Agent.Enabled = true
+	cfg.Agent.TimeoutMS = cfg.LLM.TimeoutMS
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, "agent.timeout_ms must be greater than llm.timeout_ms")
+}
+
 func TestValidateRejectsLLMExtraHeadersOverridingProtectedHeaders(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)
@@ -131,6 +144,24 @@ func TestValidateMarketDataRequiresTushareWhenEnabled(t *testing.T) {
 	err = config.Validate(&cfg)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "market_data.tushare.enabled must be true when market_data.enabled is true")
+}
+
+func TestValidateSecurityMasterRequiresDCSectorTypeField(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.MarketData.Enabled = true
+	cfg.MarketData.Tushare.Enabled = true
+	cfg.MarketData.Tushare.Tokens = []config.TushareTokenConfig{
+		{Alias: "primary", Token: "test-token", Enabled: true, Weight: 1},
+	}
+	cfg.MarketData.SecurityMaster.Enabled = true
+	cfg.MarketData.SecurityMaster.SectorFields = []string{"ts_code", "trade_date", "name"}
+
+	err = config.Validate(&cfg)
+	require.ErrorContains(t, err, `market_data.security_master.sector_fields must contain "idx_type"`)
 }
 
 func TestValidateMarketDataTushareAllowsDuplicateTokenAlias(t *testing.T) {

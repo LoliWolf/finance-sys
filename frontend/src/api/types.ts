@@ -89,6 +89,7 @@ export interface RecommendationPerformanceItem {
   asset_type: string
   market: string
   industry: string
+  sector_type: string
   direction: string
   recommend_date: string
   thesis: string
@@ -131,6 +132,7 @@ export interface RecommendationLedgerItem {
   security_name: string
   asset_type: string
   market: string
+  sector_type: string
   direction: string
   recommend_date: string
   thesis: string
@@ -158,6 +160,7 @@ export interface WindowMetric {
   asset_type: string
   market: string
   industry: string
+  sector_type: string
   direction: string
   recommend_date: string
   window_days: number
@@ -195,6 +198,7 @@ export interface RecommendationContext {
   symbol: string
   asset_type: string
   market: string
+  sector_type: string
   direction: string
   recommend_date: string
   reference_price: number
@@ -244,6 +248,7 @@ export interface SecurityRankingItem {
   asset_type: string
   market: string
   industry: string
+  sector_type: string
   recommendation_count: number
   blogger_count: number
   evaluated_count: number

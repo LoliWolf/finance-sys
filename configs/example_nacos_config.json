@@ -3,7 +3,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 11
+    "config_version": 14
   },
   "service": {
     "http": {
@@ -114,7 +114,7 @@
     "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
     "api_key": "",
     "model": "qwen2.5:14b-instruct",
-    "timeout_ms": 20000,
+    "timeout_ms": 240000,
     "max_retries": 2,
     "extra_headers": {
       "X-Client-Name": "finance-sys-agent",
@@ -143,7 +143,7 @@
       "max_json_bytes": 65535,
       "retention_days": 90
     },
-    "timeout_ms": 120000,
+    "timeout_ms": 300000,
     "max_retries": 1,
     "schema_version": "agent.resolve_document.response.v1",
     "auth": {
@@ -184,11 +184,24 @@
       "max_concurrent_runs": 1,
       "batch_size": 500
     },
+    "security_master": {
+      "enabled": false,
+      "stock_fields": [
+        "ts_code", "symbol", "name", "area", "industry", "fullname", "market", "exchange", "list_status", "list_date", "delist_date"
+      ],
+      "etf_fields": [
+        "ts_code", "csname", "cname", "extname", "index_code", "index_name", "setup_date", "list_date", "list_status", "exchange"
+      ],
+      "sector_fields": [
+        "ts_code", "trade_date", "name", "idx_type", "level"
+      ]
+    },
     "stock_daily": {
       "enabled": false,
       "sync_asset_types": [
         "STOCK",
-        "ETF"
+        "ETF",
+        "SECTOR"
       ],
       "fields": [
         "ts_code",
@@ -202,6 +215,9 @@
         "pct_chg",
         "vol",
         "amount"
+      ],
+      "sector_fields": [
+        "ts_code", "trade_date", "open", "high", "low", "close", "pct_change", "vol", "amount", "swing", "turnover_rate"
       ],
       "preserve_raw_units": true,
       "store_raw_content": true,
@@ -223,7 +239,7 @@
       "base_price_rule": "RECOMMEND_DATE_CLOSE_OR_NEXT_CLOSE",
       "win_threshold_ratio": 0,
       "min_quote_coverage_ratio": 1,
-      "calc_version": "rec-performance-v2-market-calendar",
+      "calc_version": "rec-performance-v3-sector",
       "async_worker": {
         "enabled": false,
         "poll_interval_ms": 1000,
@@ -242,6 +258,11 @@
     "enabled": false,
     "poll_interval_ms": 1000,
     "claim_timeout_ms": 28800000,
+    "security_master_refresh": {
+      "enabled": false,
+      "hour": 1,
+      "minute": 0
+    },
     "stock_daily_previous_day": {
       "enabled": false,
       "hour": 2,

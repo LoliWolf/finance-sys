@@ -12,7 +12,7 @@ KNOWN_TARGETS = (
     "A股贵金属个股",
 )
 
-TS_CODE_RE = re.compile(r"\b\d{6}\.(?:SH|SZ|BJ)\b")
+TS_CODE_RE = re.compile(r"(?:\b\d{6}\.(?:SH|SZ|BJ)\b|\bBK\d{4}\.DC\b)")
 PRICE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*元")
 
 

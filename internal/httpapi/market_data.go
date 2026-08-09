@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -33,6 +34,26 @@ func (s *Server) handleCreateStockDailySyncRun(w http.ResponseWriter, r *http.Re
 	}
 	s.logRequest(r, slog.LevelInfo, "handle create stock daily sync run success", "sync_run_id", response.SyncRunID, "deduped", response.Deduped)
 	writeJSON(w, http.StatusAccepted, response)
+}
+
+func (s *Server) handleRefreshSecurityMaster(w http.ResponseWriter, r *http.Request) {
+	if s.marketData == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("market data service not enabled"))
+		return
+	}
+	var request service.SecurityMasterRefreshRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	response, err := s.marketData.RefreshSecurityMaster(r.Context(), request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleListMarketDataSyncRuns(w http.ResponseWriter, r *http.Request) {

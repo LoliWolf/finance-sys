@@ -64,6 +64,8 @@ const (
 	AssetTypeAShare AssetType = "A_SHARE"
 	// AssetTypeETF 表示交易型开放式指数基金标的。
 	AssetTypeETF AssetType = "ETF"
+	// AssetTypeSector 表示东方财富 BK 编码板块指数，仅用于持续跟踪，不进入交易规则层。
+	AssetTypeSector AssetType = "SECTOR"
 )
 
 // Market 表示标的所在的交易市场。
@@ -76,6 +78,8 @@ const (
 	MarketSZ Market = "SZ"
 	// MarketBJ 表示北京证券交易所市场。
 	MarketBJ Market = "BJ"
+	// MarketDC 表示东方财富板块指数市场。
+	MarketDC Market = "DC"
 )
 
 // CandidatePlanStatus 表示规则引擎生成的候选计划状态。

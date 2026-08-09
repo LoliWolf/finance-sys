@@ -7,7 +7,7 @@ import type { RecommendationLedgerItem, RecommendationLedgerList, Recommendation
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatePanel from '../components/StatePanel.vue'
-import { formatDate, formatNumber, formatPercent, returnTone, truncate } from '../utils/format'
+import { assetTypeLabel, formatDate, formatNumber, formatPercent, returnTone, sectorTypeLabel, truncate } from '../utils/format'
 import { paginationItems } from '../utils/pagination'
 
 const router = useRouter()
@@ -91,9 +91,9 @@ function visibleReturn(metric: RecommendationWindowReturn | undefined) {
   return metric?.status === 'READY' ? metric.return_ratio : null
 }
 
-function metricTitle(metric: RecommendationWindowReturn | undefined, windowDays: number) {
-  if (!metric?.status) return `${windowDays} 个交易日窗口暂未生成`
-  if (metric.status === 'READY') return `第 ${windowDays} 个交易日股票涨跌幅`
+function metricTitle(item: RecommendationLedgerItem, metric: RecommendationWindowReturn | undefined, windowDays: number) {
+	if (!metric?.status) return `${windowDays} 个交易日窗口暂未生成`
+	if (metric.status === 'READY') return `第 ${windowDays} 个交易日${item.asset_type === 'SECTOR' ? '板块指数' : '标的'}涨跌幅`
   if (metric.status === 'PENDING') return metric.reason_message || `${windowDays} 个交易日窗口尚未到期`
   return metric.reason_message || `${windowDays} 个交易日窗口暂不可评估`
 }
@@ -119,18 +119,18 @@ onMounted(() => load())
     <PageHeader
       eyebrow="Evidence ledger"
       title="逐条看见推荐，逐条接受检验。"
-      description="每条推荐只出现一次，同时呈现后续第 5、10、30、90 个交易日的股票涨跌；尚未到期的窗口暂不展示收益。"
+		description="每条推荐只出现一次，同时呈现股票、ETF 与板块指数后续第 5、10、30、90 个交易日的涨跌；尚未到期的窗口暂不展示结果。"
     >
       <template #actions><button class="button" type="button" :disabled="loading" @click="load()"><RefreshCw :size="15" />刷新</button></template>
     </PageHeader>
 
     <section class="filter-bar">
       <div class="field grow"><label>博主姓名</label><div class="search-input"><UsersRound :size="15" /><input v-model="bloggerName" placeholder="输入全部或部分名字" @keyup.enter="load(true)" /></div></div>
-      <div class="field grow"><label>股票代码</label><div class="search-input"><Search :size="15" /><input v-model="symbol" placeholder="如 600519 或 600519.SH" @keyup.enter="load(true)" /></div></div>
+		<div class="field grow"><label>标的代码</label><div class="search-input"><Search :size="15" /><input v-model="symbol" placeholder="如 600519.SH 或 BK1128.DC" @keyup.enter="load(true)" /></div></div>
       <div class="field"><label>窗口状态（任一）</label><select v-model="status"><option value="">全部</option><option value="READY">已有结果</option><option value="PENDING">尚未到期</option><option value="INCOMPLETE">行情不全</option><option value="NO_SECURITY">未识别</option><option value="FAILED">失败</option></select></div>
       <div class="field"><label>方向</label><select v-model="direction"><option value="">全部</option><option value="LONG">看多</option><option value="SHORT">看空</option></select></div>
-      <div class="field"><label>市场</label><select v-model="market"><option value="">全部</option><option value="SH">沪市</option><option value="SZ">深市</option><option value="BJ">北交所</option></select></div>
-      <div class="field"><label>资产</label><select v-model="assetType"><option value="">全部</option><option value="STOCK">A 股</option><option value="ETF">ETF</option></select></div>
+		<div class="field"><label>市场</label><select v-model="market"><option value="">全部</option><option value="SH">沪市</option><option value="SZ">深市</option><option value="BJ">北交所</option><option value="DC">东方财富板块</option></select></div>
+		<div class="field"><label>资产</label><select v-model="assetType"><option value="">全部</option><option value="A_SHARE">A 股</option><option value="ETF">ETF</option><option value="SECTOR">板块指数</option></select></div>
       <div class="field"><label>推荐开始</label><input v-model="dateFrom" type="date" /></div>
       <div class="field"><label>推荐结束</label><input v-model="dateTo" type="date" /></div>
       <button class="button" type="button" :disabled="loading" @click="clearFilters">清除</button>
@@ -151,14 +151,14 @@ onMounted(() => load())
         <header class="panel-header"><div><h2>推荐表现明细</h2><p>点击任意一行，查看完整价格路径、窗口指标和原始证据。</p></div><span class="muted">按推荐日倒序</span></header>
         <div v-if="data.items.length" class="table-wrap">
           <table class="data-table recommendation-ledger-table">
-            <thead><tr><th>推荐日</th><th>博主</th><th>股票</th><th>方向</th><th v-for="windowDays in windows" :key="windowDays">{{ windowDays }} 个交易日</th><th>观点摘要</th></tr></thead>
+			<thead><tr><th>推荐日</th><th>博主</th><th>标的</th><th>方向</th><th v-for="windowDays in windows" :key="windowDays">{{ windowDays }} 个交易日</th><th>观点摘要</th></tr></thead>
             <tbody>
               <tr v-for="item in data.items" :key="item.recommendation_event_id" class="clickable" @click="router.push(`/recommendations/${item.recommendation_event_id}`)">
                 <td>{{ formatDate(item.recommend_date) }}</td>
                 <td><div class="identity-cell"><span class="avatar">{{ item.blogger_name.slice(0, 1) }}</span><span><strong>{{ item.blogger_name }}</strong><small>{{ item.institution || '独立研究者' }}</small></span></div></td>
-                <td><strong>{{ item.security_name || item.symbol }}</strong><br/><small class="mono muted">{{ item.ts_code || item.symbol }}</small></td>
+				<td><strong>{{ item.security_name || item.symbol }}</strong><br/><small class="mono muted">{{ item.ts_code || item.symbol }} · {{ item.asset_type === 'SECTOR' ? sectorTypeLabel(item.sector_type) : assetTypeLabel(item.asset_type) }}</small></td>
                 <td><span class="direction-pill" :class="item.direction.toLowerCase()">{{ item.direction === 'SHORT' ? '看空' : '看多' }}</span></td>
-                <td v-for="windowDays in windows" :key="windowDays" class="window-return-cell" :title="metricTitle(metricFor(item, windowDays), windowDays)">
+				<td v-for="windowDays in windows" :key="windowDays" class="window-return-cell" :title="metricTitle(item, metricFor(item, windowDays), windowDays)">
                   <span class="return-value" :class="returnTone(visibleReturn(metricFor(item, windowDays)))">{{ formatPercent(visibleReturn(metricFor(item, windowDays))) }}</span>
                 </td>
                 <td class="thesis-cell"><div class="thesis-copy" :title="item.thesis">{{ truncate(item.thesis, 56) }}</div></td>

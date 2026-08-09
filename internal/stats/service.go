@@ -33,6 +33,7 @@ type metricRow struct {
 	AssetType               string
 	Market                  string
 	Industry                string
+	SectorType              string
 	Direction               string
 	RecommendDate           time.Time
 	WindowDays              int
@@ -51,6 +52,7 @@ type recommendationLedgerMetricRow struct {
 	SecurityName          string
 	AssetType             string
 	Market                string
+	SectorType            string
 	WindowDays            int
 	Status                string
 	ReasonCode            string
@@ -218,7 +220,7 @@ func (s *Service) RecommendationPerformanceList(ctx context.Context, filter Filt
 	var items []RecommendationPerformanceItem
 	selectSQL := `
 		m.recommendation_event_id, m.blogger_id, b.name AS blogger_name, b.institution,
-		re.source_document_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market, m.industry,
+			re.source_document_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market, m.industry, m.sector_type,
 		m.direction, m.recommend_date, re.thesis, m.window_days, m.status, m.reason_code, m.reason_message,
 		m.entry_date, m.entry_price, m.exit_date, m.exit_close_price, m.direction_return_ratio,
 		m.max_favorable_return_ratio, m.max_adverse_return_ratio, m.max_drawdown_ratio, m.win_flag`
@@ -237,6 +239,7 @@ func (s *Service) RecommendationPerformanceList(ctx context.Context, filter Filt
 // pagination source so a missing or not-yet-created metric never removes the
 // underlying recommendation from the ledger.
 func (s *Service) RecommendationLedger(ctx context.Context, filter Filter) (*RecommendationLedgerList, error) {
+	filter.AssetType = normalizeAssetTypeFilter(filter.AssetType)
 	filter = normalizePagination(filter)
 	quoteSource := configuredQuoteSource(s.runtime)
 	base := s.db.WithContext(ctx).
@@ -254,7 +257,7 @@ func (s *Service) RecommendationLedger(ctx context.Context, filter Filter) (*Rec
 	selectSQL := `
 		re.id AS recommendation_event_id, re.blogger_id, b.name AS blogger_name, b.institution,
 		COALESCE(sm.ts_code, '') AS ts_code, re.symbol, COALESCE(sm.name, '') AS security_name,
-		re.asset_type, re.market, re.direction, re.recommend_date, re.thesis`
+			re.asset_type, re.market, COALESCE(sm.sector_type, '') AS sector_type, re.direction, re.recommend_date, re.thesis`
 	if err := base.Select(selectSQL).
 		Order("re.recommend_date DESC, re.id DESC").
 		Limit(filter.Limit).
@@ -272,7 +275,7 @@ func (s *Service) RecommendationLedger(ctx context.Context, filter Filter) (*Rec
 		var metrics []recommendationLedgerMetricRow
 		err := s.db.WithContext(ctx).
 			Table("recommendation_event_window_metrics AS m").
-			Select(`m.recommendation_event_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market,
+			Select(`m.recommendation_event_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market, m.sector_type,
 				m.window_days, m.status, m.reason_code, m.reason_message, m.raw_return_ratio`).
 			Where("m.recommendation_event_id IN ?", eventIDs).
 			Where("m.window_days IN ?", windows).
@@ -301,10 +304,11 @@ func (s *Service) RecommendationDetail(ctx context.Context, eventID int64) (*Rec
 		Table("recommendation_events AS re").
 		Select(`re.id AS recommendation_event_id, re.blogger_id, b.name AS blogger_name, b.institution,
 			re.source_document_id, COALESCE(d.title, '') AS document_title, COALESCE(d.file_name, '') AS document_file_name,
-			re.symbol, re.asset_type, re.market, re.direction, re.recommend_date, re.reference_price,
+			re.symbol, re.asset_type, re.market, COALESCE(sm.sector_type, '') AS sector_type, re.direction, re.recommend_date, re.reference_price,
 			re.confidence, re.status AS recommendation_status, re.thesis`).
 		Joins("JOIN bloggers AS b ON b.id = re.blogger_id").
 		Joins("LEFT JOIN documents AS d ON d.id = re.source_document_id").
+		Joins("LEFT JOIN security_master AS sm ON sm.ts_code = CASE WHEN re.symbol LIKE '%.%' THEN re.symbol ELSE CONCAT(re.symbol, '.', re.market) END").
 		Where("re.id = ?", eventID).
 		Take(&item).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -437,6 +441,7 @@ func (s *Service) SecurityRankings(ctx context.Context, filter Filter) (*Securit
 		assetType        string
 		market           string
 		industry         string
+		sectorType       string
 		bloggers         map[int64]struct{}
 		values           aggregate
 	}
@@ -455,6 +460,7 @@ func (s *Service) SecurityRankings(ctx context.Context, filter Filter) (*Securit
 				assetType:        row.AssetType,
 				market:           row.Market,
 				industry:         row.Industry,
+				sectorType:       row.SectorType,
 				bloggers:         make(map[int64]struct{}),
 			}
 			grouped[key] = entry
@@ -475,6 +481,7 @@ func (s *Service) SecurityRankings(ctx context.Context, filter Filter) (*Securit
 			AssetType:           entry.assetType,
 			Market:              entry.market,
 			Industry:            entry.industry,
+			SectorType:          entry.sectorType,
 			RecommendationCount: entry.values.sampleCount,
 			BloggerCount:        len(entry.bloggers),
 			EvaluatedCount:      entry.values.evaluatedCount,
@@ -530,7 +537,7 @@ func (s *Service) metricRows(ctx context.Context, filter Filter) ([]metricRow, e
 	tx := s.db.WithContext(ctx).
 		Table("recommendation_event_window_metrics AS m").
 		Select(`m.recommendation_event_id, m.blogger_id, b.name AS blogger_name, b.institution,
-			m.security_master_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market, m.industry,
+			m.security_master_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market, m.industry, m.sector_type,
 			m.direction, m.recommend_date, m.window_days, m.status, m.direction_return_ratio,
 			m.max_favorable_return_ratio, m.max_adverse_return_ratio, m.max_drawdown_ratio, m.win_flag`).
 		Joins("JOIN bloggers AS b ON b.id = m.blogger_id")
@@ -624,6 +631,7 @@ func applyRecommendationLedgerFilters(tx *gorm.DB, filter Filter, quoteSource st
 
 func (s *Service) normalizeFilter(filter Filter) Filter {
 	cfg := s.runtime.Config()
+	filter.AssetType = normalizeAssetTypeFilter(filter.AssetType)
 	if filter.WindowDays <= 0 {
 		filter.WindowDays = 30
 		if cfg != nil && cfg.Evaluation.RecommendationPerformance.Ranking.DefaultWindowDays > 0 {
@@ -642,6 +650,19 @@ func (s *Service) normalizeFilter(filter Filter) Filter {
 		}
 	}
 	return normalizePagination(filter)
+}
+
+func normalizeAssetTypeFilter(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "STOCK", "ASHARE", "A_SHARE":
+		return "A_SHARE"
+	case "ETF":
+		return "ETF"
+	case "SECTOR":
+		return "SECTOR"
+	default:
+		return strings.ToUpper(strings.TrimSpace(value))
+	}
 }
 
 func normalizePagination(filter Filter) Filter {
@@ -816,6 +837,9 @@ func mergeRecommendationLedgerMetrics(items []RecommendationLedgerItem, metrics 
 			}
 			if item.Market == "" && metric.Market != "" {
 				item.Market = metric.Market
+			}
+			if item.SectorType == "" && metric.SectorType != "" {
+				item.SectorType = metric.SectorType
 			}
 			if item.Symbol == "" && metric.Symbol != "" {
 				item.Symbol = metric.Symbol

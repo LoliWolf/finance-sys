@@ -12,7 +12,7 @@ from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill
 
 
 JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
-TS_CODE_RE = re.compile(r"\b\d{6}\.(?:SH|SZ|BJ)\b")
+TS_CODE_RE = re.compile(r"(?:\b\d{6}\.(?:SH|SZ|BJ)\b|\bBK\d{4}\.DC\b)")
 PROTECTED_EXTRA_HEADER_NAMES = {"authorization", "content-type"}
 
 
@@ -148,7 +148,11 @@ def _request_headers(extra_headers: Dict[str, str], api_key: str) -> Dict[str, s
 
 
 def _is_provider_moderation_block(response_text: str) -> bool:
-    return "smart moderation blocked by ai" in response_text.lower()
+    normalized = response_text.lower()
+    return (
+        "smart moderation blocked by" in normalized
+        or "moderation_blocked" in normalized
+    )
 
 
 def build_system_prompt(skill: SkillSpec) -> str:

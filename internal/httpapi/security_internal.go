@@ -56,7 +56,7 @@ func (s *Server) handleResolveSecurity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	maxCandidates := normalizeSecurityToolMaxCandidates(request.MaxCandidates)
-	candidates, err := s.security.ResolveTradableCandidates(r.Context(), request.Query, maxCandidates)
+	candidates, err := s.security.ResolveTrackableCandidates(r.Context(), request.Query, maxCandidates)
 	if err != nil {
 		s.logRequest(r, slog.LevelError, "handle internal security resolve failed", "query", request.Query, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, err)
@@ -87,7 +87,7 @@ func (s *Server) handleVerifySecurity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("ts_code is required"))
 		return
 	}
-	candidate, err := s.security.VerifyTradableCandidate(r.Context(), request.TSCode)
+	candidate, err := s.security.VerifyTrackableCandidate(r.Context(), request.TSCode)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, dal.ErrNotFound) {

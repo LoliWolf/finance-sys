@@ -15,6 +15,7 @@ type SecurityMaster struct {
 	ListDate   *time.Time `json:"list_date,omitempty"`
 	DelistDate *time.Time `json:"delist_date,omitempty"`
 	Industry   string     `json:"industry"`
+	SectorType string     `json:"sector_type"`
 	IsActive   bool       `json:"is_active"`
 	Source     string     `json:"source"`
 	CreatedAt  time.Time  `json:"created_at"`
@@ -40,7 +41,7 @@ type SecurityAliasMatch struct {
 }
 
 type SecurityLookupResult struct {
-	Query          string               `json:"query"`
+	Query         string               `json:"query"`
 	Normalized    string               `json:"normalized"`
 	DirectMatches []SecurityMaster     `json:"direct_matches"`
 	AliasMatches  []SecurityAliasMatch `json:"alias_matches"`

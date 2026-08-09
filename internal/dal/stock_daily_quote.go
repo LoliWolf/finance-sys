@@ -21,30 +21,35 @@ func (*StockDailyQuoteDML) UpsertBatch(ctx context.Context, db *gorm.DB, models 
 	}
 	const batchSize = 300
 	return db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "ts_code"}, {Name: "trade_date"}, {Name: "source"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"security_master_id": gorm.Expr("VALUES(security_master_id)"),
-			"symbol":             gorm.Expr("VALUES(symbol)"),
-			"security_name":      gorm.Expr("VALUES(security_name)"),
-			"exchange":           gorm.Expr("VALUES(exchange)"),
-			"market":             gorm.Expr("VALUES(market)"),
-			"asset_type":         gorm.Expr("VALUES(asset_type)"),
-			"industry":           gorm.Expr("VALUES(industry)"),
-			"list_status":        gorm.Expr("VALUES(list_status)"),
-			"open_price":         gorm.Expr("VALUES(open_price)"),
-			"high_price":         gorm.Expr("VALUES(high_price)"),
-			"low_price":          gorm.Expr("VALUES(low_price)"),
-			"close_price":        gorm.Expr("VALUES(close_price)"),
-			"pre_close_price":    gorm.Expr("VALUES(pre_close_price)"),
-			"change_amount":      gorm.Expr("VALUES(change_amount)"),
-			"pct_chg":            gorm.Expr("VALUES(pct_chg)"),
-			"volume":             gorm.Expr("VALUES(volume)"),
-			"amount":             gorm.Expr("VALUES(amount)"),
-			"tushare_content":    gorm.Expr("VALUES(tushare_content)"),
-			"config_version":     gorm.Expr("VALUES(config_version)"),
-			"updated_at":         gorm.Expr("CURRENT_TIMESTAMP"),
-		}),
+		Columns:   []clause.Column{{Name: "ts_code"}, {Name: "trade_date"}, {Name: "source"}},
+		DoUpdates: clause.Assignments(stockDailyQuoteUpsertAssignments()),
 	}).CreateInBatches(models, batchSize).Error
+}
+
+func stockDailyQuoteUpsertAssignments() map[string]any {
+	return map[string]any{
+		"security_master_id": gorm.Expr("VALUES(security_master_id)"),
+		"symbol":             gorm.Expr("VALUES(symbol)"),
+		"security_name":      gorm.Expr("VALUES(security_name)"),
+		"exchange":           gorm.Expr("VALUES(exchange)"),
+		"market":             gorm.Expr("VALUES(market)"),
+		"asset_type":         gorm.Expr("VALUES(asset_type)"),
+		"industry":           gorm.Expr("VALUES(industry)"),
+		"sector_type":        gorm.Expr("VALUES(sector_type)"),
+		"list_status":        gorm.Expr("VALUES(list_status)"),
+		"open_price":         gorm.Expr("VALUES(open_price)"),
+		"high_price":         gorm.Expr("VALUES(high_price)"),
+		"low_price":          gorm.Expr("VALUES(low_price)"),
+		"close_price":        gorm.Expr("VALUES(close_price)"),
+		"pre_close_price":    gorm.Expr("VALUES(pre_close_price)"),
+		"change_amount":      gorm.Expr("VALUES(change_amount)"),
+		"pct_chg":            gorm.Expr("VALUES(pct_chg)"),
+		"volume":             gorm.Expr("VALUES(volume)"),
+		"amount":             gorm.Expr("VALUES(amount)"),
+		"tushare_content":    gorm.Expr("VALUES(tushare_content)"),
+		"config_version":     gorm.Expr("VALUES(config_version)"),
+		"updated_at":         gorm.Expr("CURRENT_TIMESTAMP"),
+	}
 }
 
 func (*StockDailyQuoteDML) QueryByTSCodeRange(ctx context.Context, db *gorm.DB, tsCode string, source string, dateFrom time.Time, dateTo time.Time) ([]db_model.StockDailyQuote, error) {

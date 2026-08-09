@@ -115,6 +115,7 @@ type RecommendationPerformanceItem struct {
 	AssetType               string     `json:"asset_type"`
 	Market                  string     `json:"market"`
 	Industry                string     `json:"industry"`
+	SectorType              string     `json:"sector_type"`
 	Direction               string     `json:"direction"`
 	RecommendDate           time.Time  `json:"recommend_date"`
 	Thesis                  string     `json:"thesis"`
@@ -157,6 +158,7 @@ type RecommendationLedgerItem struct {
 	SecurityName          string                       `json:"security_name"`
 	AssetType             string                       `json:"asset_type"`
 	Market                string                       `json:"market"`
+	SectorType            string                       `json:"sector_type"`
 	Direction             string                       `json:"direction"`
 	RecommendDate         time.Time                    `json:"recommend_date"`
 	Thesis                string                       `json:"thesis"`
@@ -187,6 +189,7 @@ type RecommendationContext struct {
 	Symbol                string     `json:"symbol"`
 	AssetType             string     `json:"asset_type"`
 	Market                string     `json:"market"`
+	SectorType            string     `json:"sector_type"`
 	Direction             string     `json:"direction"`
 	RecommendDate         time.Time  `json:"recommend_date"`
 	ReferencePrice        float64    `json:"reference_price"`
@@ -236,6 +239,7 @@ type SecurityRankingItem struct {
 	AssetType           string  `json:"asset_type"`
 	Market              string  `json:"market"`
 	Industry            string  `json:"industry"`
+	SectorType          string  `json:"sector_type"`
 	RecommendationCount int     `json:"recommendation_count"`
 	BloggerCount        int     `json:"blogger_count"`
 	EvaluatedCount      int     `json:"evaluated_count"`

@@ -22,6 +22,7 @@ type RecommendationEventWindowMetric struct {
 	AssetType               string     `gorm:"column:asset_type;type:varchar(32);not null" json:"asset_type"`
 	Market                  string     `gorm:"column:market;type:varchar(32);not null" json:"market"`
 	Industry                string     `gorm:"column:industry;type:varchar(128);not null" json:"industry"`
+	SectorType              string     `gorm:"column:sector_type;type:varchar(32);not null" json:"sector_type"`
 	Direction               string     `gorm:"column:direction;type:varchar(16);not null" json:"direction"`
 	RecommendDate           time.Time  `gorm:"column:recommend_date;type:date;not null;index:idx_rec_window_metric_blogger,priority:4;index:idx_rec_window_metric_security,priority:3;index:idx_rec_window_metric_symbol,priority:3" json:"recommend_date"`
 	WindowDays              int32      `gorm:"column:window_days;type:int;not null;uniqueIndex:uk_rec_window_metric,priority:2;index:idx_rec_window_metric_blogger,priority:2;index:idx_rec_window_metric_rank,priority:1;index:idx_rec_window_metric_security,priority:2;index:idx_rec_window_metric_symbol,priority:2" json:"window_days"`

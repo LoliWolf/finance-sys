@@ -89,11 +89,11 @@ class AgentRawIntent(StrictBaseModel):
 
 
 class AgentSecurity(StrictBaseModel):
-    ts_code: str = Field(pattern=r"^\d{6}\.(SH|SZ|BJ)$")
+    ts_code: str = Field(pattern=r"^(?:\d{6}\.(?:SH|SZ|BJ)|BK\d{4}\.DC)$")
     symbol: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    asset_type: Literal["STOCK", "ETF"]
-    market: Literal["SH", "SZ", "BJ"]
+    asset_type: Literal["STOCK", "ETF", "SECTOR"]
+    market: Literal["SH", "SZ", "BJ", "DC"]
 
 
 class AgentCandidatePlanInput(AgentRawIntent):

@@ -85,6 +85,12 @@ func (*RecommendationEventDML) QueryByDocumentID(ctx context.Context, db *gorm.D
 	})
 }
 
+func (*RecommendationEventDML) DeleteDirectSectorEventsByDocumentID(ctx context.Context, db *gorm.DB, documentID int64) error {
+	return db.WithContext(ctx).
+		Where("source_document_id = ? AND asset_type = ? AND plan_id IS NULL", documentID, "SECTOR").
+		Delete(&db_model.RecommendationEvent{}).Error
+}
+
 func (*RecommendationEventDML) QueryLatest(ctx context.Context, db *gorm.DB, limit int) ([]db_model.RecommendationEvent, error) {
 	return RecommendationEvents.QueryByParam(ctx, db, QueryParam{
 		Orders: []OrderParam{OrderBy("created_at", true), OrderBy("id", true)},

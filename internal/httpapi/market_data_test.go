@@ -67,6 +67,10 @@ type fakeMarketDataService struct {
 	listRows       []db_model.MarketDataSyncRun
 }
 
+func (f *fakeMarketDataService) RefreshSecurityMaster(context.Context, service.SecurityMasterRefreshRequest) (*service.SecurityMasterRefreshResponse, error) {
+	return &service.SecurityMasterRefreshResponse{}, nil
+}
+
 func (f *fakeMarketDataService) CreateStockDailySyncRun(ctx context.Context, request service.StockDailySyncRequest) (*service.StockDailySyncResponse, error) {
 	f.createRequest = request
 	return f.createResponse, nil

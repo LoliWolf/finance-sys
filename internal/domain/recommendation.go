@@ -17,7 +17,7 @@ type RecommendationEvent struct {
 	BloggerID        int64                     `json:"blogger_id"`
 	BloggerName      string                    `json:"blogger_name"`
 	SourceDocumentID int64                     `json:"source_document_id"`
-	PlanID           int64                     `json:"plan_id"`
+	PlanID           *int64                    `json:"plan_id,omitempty"`
 	ParseRunID       int64                     `json:"parse_run_id"`
 	Symbol           string                    `json:"symbol"`
 	AssetType        AssetType                 `json:"asset_type"`

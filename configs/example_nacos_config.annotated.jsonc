@@ -5,7 +5,7 @@
     "app_name": "finance-sys",
     "env": "dev",
     "timezone": "Asia/Shanghai",
-    "config_version": 11
+    "config_version": 14
   },
   "service": {
     "http": {
@@ -113,7 +113,7 @@
     "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
     "api_key": "",
     "model": "qwen2.5:14b-instruct",
-    "timeout_ms": 20000,
+    "timeout_ms": 240000,
     "max_retries": 2,
     // Stable, transparent client metadata for OpenAI-compatible gateways that group traffic by request headers.
     "extra_headers": {
@@ -147,7 +147,7 @@
       "max_json_bytes": 65535,
       "retention_days": 90
     },
-    "timeout_ms": 120000,
+    "timeout_ms": 300000,
     "max_retries": 1,
     "schema_version": "agent.resolve_document.response.v1",
     "auth": {
@@ -192,12 +192,22 @@
       "max_concurrent_runs": 1,
       "batch_size": 500
     },
+    "security_master": {
+      // 每日刷新股票、ETF 和东方财富 BK 板块主数据；只有完整快照成功后才停用缺失标的。
+      "enabled": false,
+      "stock_fields": ["ts_code", "symbol", "name", "area", "industry", "fullname", "market", "exchange", "list_status", "list_date", "delist_date"],
+      "etf_fields": ["ts_code", "csname", "cname", "extname", "index_code", "index_name", "setup_date", "list_date", "list_status", "exchange"],
+      // dc_index 的权威分类字段是 idx_type（概念板块、行业板块、地域板块）。
+      "sector_fields": ["ts_code", "trade_date", "name", "idx_type", "level"]
+    },
     "stock_daily": {
       "enabled": false,
-      // 第一版同步 A 股股票和 ETF。
-      "sync_asset_types": ["STOCK", "ETF"],
+      // 同步 A 股股票、ETF 和东方财富 BK 板块指数。
+      "sync_asset_types": ["STOCK", "ETF", "SECTOR"],
       // Tushare daily 常用字段；amount 和 vol 保留 Tushare 原始单位。
       "fields": ["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"],
+      // dc_daily 使用 pct_change，不提供 pre_close。
+      "sector_fields": ["ts_code", "trade_date", "open", "high", "low", "close", "pct_change", "vol", "amount", "swing", "turnover_rate"],
       "preserve_raw_units": true,
       "store_raw_content": true,
       "missing_item_mark_enabled": true
@@ -215,7 +225,7 @@
       "win_threshold_ratio": 0,
       // 以全市场交易日历锁定窗口边界；停牌不顺延，行情覆盖不足时标记为 INCOMPLETE。
       "min_quote_coverage_ratio": 1,
-      "calc_version": "rec-performance-v2-market-calendar",
+      "calc_version": "rec-performance-v3-sector",
       "async_worker": {
         "enabled": false,
         "poll_interval_ms": 1000,
@@ -236,6 +246,12 @@
     "poll_interval_ms": 1000,
     // RUNNING 超过该时间可被其他实例重新认领；需覆盖最长的正常调度处理时间。
     "claim_timeout_ms": 28800000,
+    "security_master_refresh": {
+      // 每天 01:00 先刷新证券和板块主数据，保证 02:00 行情同步能识别新标的。
+      "enabled": false,
+      "hour": 1,
+      "minute": 0
+    },
     "stock_daily_previous_day": {
       // 每天 02:00 创建前一自然日的行情同步任务；非交易日由行情同步结果明确记录为空。
       "enabled": false,

@@ -10,11 +10,12 @@ const (
 	ScheduledTaskTypeStockDailyPreviousDay ScheduledTaskType = 1
 	ScheduledTaskTypeEvaluationRecent      ScheduledTaskType = 2
 	ScheduledTaskTypeOpenListDocuments     ScheduledTaskType = 3
+	ScheduledTaskTypeSecurityMasterRefresh ScheduledTaskType = 4
 )
 
 func (t ScheduledTaskType) Valid() bool {
 	switch t {
-	case ScheduledTaskTypeStockDailyPreviousDay, ScheduledTaskTypeEvaluationRecent, ScheduledTaskTypeOpenListDocuments:
+	case ScheduledTaskTypeStockDailyPreviousDay, ScheduledTaskTypeEvaluationRecent, ScheduledTaskTypeOpenListDocuments, ScheduledTaskTypeSecurityMasterRefresh:
 		return true
 	default:
 		return false
@@ -29,6 +30,8 @@ func (t ScheduledTaskType) String() string {
 		return "EVALUATION_RECENT"
 	case ScheduledTaskTypeOpenListDocuments:
 		return "OPENLIST_DOCUMENTS"
+	case ScheduledTaskTypeSecurityMasterRefresh:
+		return "SECURITY_MASTER_REFRESH"
 	default:
 		return "UNKNOWN_" + strconv.FormatUint(uint64(t), 10)
 	}

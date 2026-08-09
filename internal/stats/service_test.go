@@ -58,6 +58,14 @@ func TestPaginationMetadataIncludesTotalPages(t *testing.T) {
 	require.Equal(t, 0, totalPages)
 }
 
+func TestNormalizeAssetTypeFilterAcceptsLegacyStockAliases(t *testing.T) {
+	require.Equal(t, "A_SHARE", normalizeAssetTypeFilter("STOCK"))
+	require.Equal(t, "A_SHARE", normalizeAssetTypeFilter("ashare"))
+	require.Equal(t, "A_SHARE", normalizeAssetTypeFilter("A_SHARE"))
+	require.Equal(t, "ETF", normalizeAssetTypeFilter("etf"))
+	require.Equal(t, "SECTOR", normalizeAssetTypeFilter("sector"))
+}
+
 func TestPerformanceScoreIsDeterministicAndBounded(t *testing.T) {
 	values := aggregate{
 		evaluatedCount: 10,

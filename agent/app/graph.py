@@ -283,8 +283,17 @@ def _verify_external_candidates_node(state: AgentGraphState) -> Dict:
 
 def _classify_untrackable_targets_node(state: AgentGraphState) -> Dict:
     request = state["request"]
+    resolved_intent_ids = {
+        (item.get("intent_id", "") if isinstance(item, dict) else item.intent_id)
+        for item in state.get("candidate_plan_inputs", [])
+    }
+    unresolved = [
+        item
+        for item in state.get("raw_intents", [])
+        if item.intent_id not in resolved_intent_ids
+    ]
     targets = classify_untrackable_targets(
-        state.get("raw_intents", []),
+        unresolved,
         request.limits.max_untrackable_targets,
     )
     return {

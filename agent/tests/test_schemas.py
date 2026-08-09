@@ -35,6 +35,21 @@ def test_candidate_input_rejects_invalid_ts_code():
         )
 
 
+def test_candidate_input_accepts_eastmoney_sector():
+    item = AgentCandidatePlanInput(
+        **_raw_intent(raw_symbol="CPO板块").model_dump(),
+        security=AgentSecurity(
+            ts_code="BK1128.DC",
+            symbol="BK1128",
+            name="CPO概念",
+            asset_type="SECTOR",
+            market="DC",
+        ),
+    )
+
+    assert item.security.asset_type == "SECTOR"
+
+
 def test_successful_response_requires_output():
     with pytest.raises(ValidationError):
         AgentResolveDocumentResponse(agent_version="test", status=AgentStatus.resolved)

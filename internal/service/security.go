@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	securityTSCodeRe = regexp.MustCompile(`^\d{6}\.(SH|SZ|BJ)$`)
-	securitySymbolRe = regexp.MustCompile(`^\d{6}$`)
+	securityTSCodeRe = regexp.MustCompile(`^(?:\d{6}\.(?:SH|SZ|BJ)|BK\d{4}\.DC)$`)
+	securitySymbolRe = regexp.MustCompile(`^(?:\d{6}|BK\d{4})$`)
 )
 
 type SecurityService struct {
@@ -69,8 +69,8 @@ func (s *SecurityService) Lookup(ctx context.Context, query string) (domain.Secu
 			addDirect([]db_model.SecurityMaster{*row})
 		}
 	}
-	if securitySymbolRe.MatchString(query) {
-		rows, err := dal.SecurityMasters.QueryBySymbol(ctx, s.db, query)
+	if securitySymbolRe.MatchString(upperQuery) {
+		rows, err := dal.SecurityMasters.QueryBySymbol(ctx, s.db, upperQuery)
 		if err != nil {
 			return result, err
 		}
@@ -112,11 +112,19 @@ func (s *SecurityService) Lookup(ctx context.Context, query string) (domain.Secu
 }
 
 func (s *SecurityService) ResolveTradableCandidates(ctx context.Context, query string, maxCandidates int) ([]domain.InstrumentResolutionCandidate, error) {
+	return s.resolveCandidates(ctx, query, maxCandidates, false)
+}
+
+func (s *SecurityService) ResolveTrackableCandidates(ctx context.Context, query string, maxCandidates int) ([]domain.InstrumentResolutionCandidate, error) {
+	return s.resolveCandidates(ctx, query, maxCandidates, true)
+}
+
+func (s *SecurityService) resolveCandidates(ctx context.Context, query string, maxCandidates int, includeSectors bool) ([]domain.InstrumentResolutionCandidate, error) {
 	lookup, err := s.Lookup(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	candidates := filterTradableResolutionCandidates(uniqueResolutionCandidates(lookup))
+	candidates := filterTrackableResolutionCandidates(uniqueResolutionCandidates(lookup), includeSectors)
 	if maxCandidates > 0 && len(candidates) > maxCandidates {
 		candidates = candidates[:maxCandidates]
 	}
@@ -124,11 +132,19 @@ func (s *SecurityService) ResolveTradableCandidates(ctx context.Context, query s
 }
 
 func (s *SecurityService) VerifyTradableCandidate(ctx context.Context, tsCode string) (*domain.InstrumentResolutionCandidate, error) {
+	return s.verifyCandidate(ctx, tsCode, false)
+}
+
+func (s *SecurityService) VerifyTrackableCandidate(ctx context.Context, tsCode string) (*domain.InstrumentResolutionCandidate, error) {
+	return s.verifyCandidate(ctx, tsCode, true)
+}
+
+func (s *SecurityService) verifyCandidate(ctx context.Context, tsCode string, includeSectors bool) (*domain.InstrumentResolutionCandidate, error) {
 	tsCode = strings.ToUpper(strings.TrimSpace(tsCode))
 	if !securityTSCodeRe.MatchString(tsCode) {
 		return nil, fmt.Errorf("invalid ts_code %q", tsCode)
 	}
-	candidates, err := s.ResolveTradableCandidates(ctx, tsCode, 2)
+	candidates, err := s.resolveCandidates(ctx, tsCode, 2, includeSectors)
 	if err != nil {
 		return nil, err
 	}
@@ -144,10 +160,10 @@ func isActiveSecurity(row db_model.SecurityMaster) bool {
 	return row.IsActive && row.ListStatus == "L"
 }
 
-func filterTradableResolutionCandidates(candidates []domain.InstrumentResolutionCandidate) []domain.InstrumentResolutionCandidate {
+func filterTrackableResolutionCandidates(candidates []domain.InstrumentResolutionCandidate, includeSectors bool) []domain.InstrumentResolutionCandidate {
 	tradable := candidates[:0]
 	for _, candidate := range candidates {
-		if candidate.AssetType == domain.AssetTypeAShare || candidate.AssetType == domain.AssetTypeETF {
+		if candidate.AssetType == domain.AssetTypeAShare || candidate.AssetType == domain.AssetTypeETF || (includeSectors && candidate.AssetType == domain.AssetTypeSector) {
 			tradable = append(tradable, candidate)
 		}
 	}
@@ -168,6 +184,7 @@ func mapSecurityMaster(row *db_model.SecurityMaster) domain.SecurityMaster {
 		ListDate:   utcPtr(row.ListDate),
 		DelistDate: utcPtr(row.DelistDate),
 		Industry:   row.Industry,
+		SectorType: row.SectorType,
 		IsActive:   row.IsActive,
 		Source:     row.Source,
 		CreatedAt:  row.CreatedAt.UTC(),

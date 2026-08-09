@@ -56,6 +56,9 @@ func (a *Analyzer) AnalyzeWithResponse(ctx context.Context, document domain.Docu
 		return nil, nil, err
 	}
 	if err := ValidateResponse(response, cfg.Agent.SchemaVersion); err != nil {
+		if warnings := strings.TrimSpace(strings.Join(response.Warnings, "; ")); warnings != "" {
+			err = fmt.Errorf("%w: %s", err, warnings)
+		}
 		return nil, response, err
 	}
 	intents, err := responseToPlanIntents(document, response)
@@ -112,54 +115,55 @@ func agentTradeDate(cfg *config.Config) time.Time {
 }
 
 func responseToPlanIntents(document domain.Document, response *ResolveDocumentResponse) ([]domain.PlanIntent, error) {
-	if len(response.CandidatePlanInput) > 0 {
-		intents := make([]domain.PlanIntent, 0, len(response.CandidatePlanInput))
-		for _, item := range response.CandidatePlanInput {
-			assetType, err := mapAgentAssetType(item.Security.AssetType)
-			if err != nil {
-				return nil, err
-			}
-			market, err := mapAgentMarket(item.Security.Market)
-			if err != nil {
-				return nil, err
-			}
-			intents = append(intents, domain.PlanIntent{
-				Analyst:            document.Author,
-				Institution:        document.Institution,
-				Symbol:             strings.ToUpper(strings.TrimSpace(item.Security.TSCode)),
-				AssetType:          assetType,
-				Market:             market,
-				Direction:          item.Direction,
-				ReferencePrice:     item.ReferencePrice,
-				ReferencePriceNote: item.ReferencePriceNote,
-				Thesis:             item.Thesis,
-				Evidence:           item.Evidence,
-				Risks:              item.Risks,
-				Confidence:         item.Confidence,
-			})
+	intents := make([]domain.PlanIntent, 0, len(response.CandidatePlanInput)+len(response.RawIntents))
+	resolvedIntentIDs := make(map[string]struct{}, len(response.CandidatePlanInput))
+	for _, item := range response.CandidatePlanInput {
+		assetType, err := mapAgentAssetType(item.Security.AssetType)
+		if err != nil {
+			return nil, err
 		}
-		return intents, nil
+		market, err := mapAgentMarket(item.Security.Market)
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, domain.PlanIntent{
+			Analyst:            document.Author,
+			Institution:        document.Institution,
+			Symbol:             strings.ToUpper(strings.TrimSpace(item.Security.TSCode)),
+			AssetType:          assetType,
+			Market:             market,
+			Direction:          item.Direction,
+			ReferencePrice:     item.ReferencePrice,
+			ReferencePriceNote: item.ReferencePriceNote,
+			Thesis:             item.Thesis,
+			Evidence:           item.Evidence,
+			Risks:              item.Risks,
+			Confidence:         item.Confidence,
+		})
+		resolvedIntentIDs[strings.TrimSpace(item.IntentID)] = struct{}{}
 	}
 
-	if len(response.RawIntents) > 0 {
-		intents := make([]domain.PlanIntent, 0, len(response.RawIntents))
-		for _, item := range response.RawIntents {
-			intents = append(intents, domain.PlanIntent{
-				Analyst:            document.Author,
-				Institution:        document.Institution,
-				Symbol:             strings.TrimSpace(item.RawSymbol),
-				Direction:          item.Direction,
-				ReferencePrice:     item.ReferencePrice,
-				ReferencePriceNote: item.ReferencePriceNote,
-				Thesis:             item.Thesis,
-				Evidence:           item.Evidence,
-				Risks:              item.Risks,
-				Confidence:         item.Confidence,
-			})
+	for _, item := range response.RawIntents {
+		if _, resolved := resolvedIntentIDs[strings.TrimSpace(item.IntentID)]; resolved {
+			continue
 		}
-		return intents, nil
+		intents = append(intents, domain.PlanIntent{
+			Analyst:            document.Author,
+			Institution:        document.Institution,
+			Symbol:             strings.TrimSpace(item.RawSymbol),
+			Direction:          item.Direction,
+			ReferencePrice:     item.ReferencePrice,
+			ReferencePriceNote: item.ReferencePriceNote,
+			Thesis:             item.Thesis,
+			Evidence:           item.Evidence,
+			Risks:              item.Risks,
+			Confidence:         item.Confidence,
+		})
 	}
-	return nil, fmt.Errorf("agent returned no plan intents")
+	if len(intents) == 0 {
+		return nil, fmt.Errorf("agent returned no plan intents")
+	}
+	return intents, nil
 }
 
 func mapAgentAssetType(value string) (domain.AssetType, error) {
@@ -168,6 +172,8 @@ func mapAgentAssetType(value string) (domain.AssetType, error) {
 		return domain.AssetTypeAShare, nil
 	case "ETF":
 		return domain.AssetTypeETF, nil
+	case "SECTOR":
+		return domain.AssetTypeSector, nil
 	default:
 		return "", fmt.Errorf("unsupported agent asset_type %q", value)
 	}
@@ -181,6 +187,8 @@ func mapAgentMarket(value string) (domain.Market, error) {
 		return domain.MarketSZ, nil
 	case "BJ":
 		return domain.MarketBJ, nil
+	case "DC":
+		return domain.MarketDC, nil
 	default:
 		return "", fmt.Errorf("unsupported agent market %q", value)
 	}

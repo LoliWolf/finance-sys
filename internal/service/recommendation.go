@@ -15,6 +15,8 @@ import (
 
 const unknownBloggerName = "UNKNOWN"
 
+const sectorRecommendationRuleVersion = "sector-index-v1"
+
 func normalizeBloggerName(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
 }
@@ -50,10 +52,11 @@ func recommendationStatusFromPlan(plan domain.CandidatePlan) domain.Recommendati
 }
 
 func recommendationEventFromPlan(document domain.Document, plan domain.CandidatePlan, blogger *db_model.Blogger) *db_model.RecommendationEvent {
+	planID := plan.ID
 	return &db_model.RecommendationEvent{
 		BloggerID:        blogger.ID,
 		SourceDocumentID: document.ID,
-		PlanID:           plan.ID,
+		PlanID:           &planID,
 		ParseRunID:       plan.ParseRunID,
 		Symbol:           plan.Symbol,
 		AssetType:        string(plan.AssetType),
@@ -77,19 +80,61 @@ func (s *DocumentService) upsertRecommendationEventForPlan(ctx context.Context, 
 	}
 
 	eventModel := recommendationEventFromPlan(document, plan, blogger)
-	if err := dal.RecommendationEvents.UpsertByDedupeKey(ctx, db, eventModel); err != nil {
-		return nil, err
-	}
-	eventModel, err = dal.RecommendationEvents.QueryByDedupeKey(ctx, db, eventModel.DedupeKey)
+	planID := plan.ID
+	return s.upsertRecommendationEvent(ctx, db, document, blogger, eventModel, &planID, recommendationEvidenceModels(document.ID, &planID, plan.Evidence, 0))
+}
+
+func (s *DocumentService) upsertRecommendationEventForSector(ctx context.Context, db *gorm.DB, document domain.Document, parseRunID int64, intent domain.TrackablePlanIntent, recommendDate time.Time) (*domain.RecommendationEvent, error) {
+	blogger, err := s.resolveBlogger(ctx, db, document, intent.Analyst, intent.Institution)
 	if err != nil {
 		return nil, err
 	}
-	var evidenceModels []db_model.RecommendationEventEvidence
-	if eventModel.SourceDocumentID == document.ID && eventModel.PlanID == plan.ID {
+	eventModel := recommendationEventFromSectorIntent(document, *blogger, parseRunID, intent, recommendDate, s.currentConfig().Meta.ConfigVersion)
+	return s.upsertRecommendationEvent(ctx, db, document, blogger, eventModel, nil, recommendationEvidenceModels(document.ID, nil, intent.Evidence, 0))
+}
+
+func recommendationEventFromSectorIntent(document domain.Document, blogger db_model.Blogger, parseRunID int64, intent domain.TrackablePlanIntent, recommendDate time.Time, configVersion int64) *db_model.RecommendationEvent {
+	return &db_model.RecommendationEvent{
+		BloggerID:        blogger.ID,
+		SourceDocumentID: document.ID,
+		PlanID:           nil,
+		ParseRunID:       parseRunID,
+		Symbol:           intent.TSCode,
+		AssetType:        string(domain.AssetTypeSector),
+		Market:           string(domain.MarketDC),
+		Direction:        string(intent.Direction),
+		RecommendDate:    dbDateOnly(recommendDate),
+		ReferencePrice:   intent.ReferencePrice,
+		Confidence:       intent.Confidence,
+		Status:           string(domain.RecommendationEventStatusActive),
+		Thesis:           intent.Thesis,
+		DedupeKey: BuildRecommendationEventDedupeKey(
+			blogger.NormalizedName,
+			blogger.Institution,
+			intent.TSCode,
+			string(intent.Direction),
+			recommendDate,
+		),
+		ConfigVersion: configVersion,
+		RuleVersion:   sectorRecommendationRuleVersion,
+	}
+}
+
+func (s *DocumentService) upsertRecommendationEvent(ctx context.Context, db *gorm.DB, document domain.Document, blogger *db_model.Blogger, eventModel *db_model.RecommendationEvent, expectedPlanID *int64, evidenceModels []db_model.RecommendationEventEvidence) (*domain.RecommendationEvent, error) {
+	if err := dal.RecommendationEvents.UpsertByDedupeKey(ctx, db, eventModel); err != nil {
+		return nil, err
+	}
+	eventModel, err := dal.RecommendationEvents.QueryByDedupeKey(ctx, db, eventModel.DedupeKey)
+	if err != nil {
+		return nil, err
+	}
+	if eventModel.SourceDocumentID == document.ID && sameOptionalInt64(eventModel.PlanID, expectedPlanID) {
 		if err := dal.RecommendationEventEvidences.DeleteByEventID(ctx, db, eventModel.ID); err != nil {
 			return nil, err
 		}
-		evidenceModels = recommendationEvidenceModels(document.ID, plan, eventModel.ID)
+		for index := range evidenceModels {
+			evidenceModels[index].RecommendationEventID = eventModel.ID
+		}
 		if err := dal.RecommendationEventEvidences.CreateBatch(ctx, db, evidenceModels); err != nil {
 			return nil, err
 		}
@@ -152,7 +197,11 @@ func (s *DocumentService) GetRecommendationEventByID(ctx context.Context, id int
 }
 
 func (s *DocumentService) resolveBloggerForPlan(ctx context.Context, db *gorm.DB, document domain.Document, plan domain.CandidatePlan) (*db_model.Blogger, error) {
-	name := strings.TrimSpace(plan.Analyst)
+	return s.resolveBlogger(ctx, db, document, plan.Analyst, plan.Institution)
+}
+
+func (s *DocumentService) resolveBlogger(ctx context.Context, db *gorm.DB, document domain.Document, analyst string, planInstitution string) (*db_model.Blogger, error) {
+	name := strings.TrimSpace(analyst)
 	if name == "" {
 		name = strings.TrimSpace(document.Author)
 	}
@@ -163,7 +212,7 @@ func (s *DocumentService) resolveBloggerForPlan(ctx context.Context, db *gorm.DB
 		name = unknownBloggerName
 	}
 
-	institution := strings.TrimSpace(plan.Institution)
+	institution := strings.TrimSpace(planInstitution)
 	if institution == "" {
 		institution = strings.TrimSpace(document.Institution)
 	}
@@ -206,18 +255,25 @@ func (s *DocumentService) mapRecommendationEventRows(ctx context.Context, rows [
 	return items, nil
 }
 
-func recommendationEvidenceModels(documentID int64, plan domain.CandidatePlan, eventID int64) []db_model.RecommendationEventEvidence {
-	items := make([]db_model.RecommendationEventEvidence, 0, len(plan.Evidence))
-	for _, evidence := range plan.Evidence {
+func recommendationEvidenceModels(documentID int64, planID *int64, evidenceSpans []domain.EvidenceSpan, eventID int64) []db_model.RecommendationEventEvidence {
+	items := make([]db_model.RecommendationEventEvidence, 0, len(evidenceSpans))
+	for _, evidence := range evidenceSpans {
 		items = append(items, db_model.RecommendationEventEvidence{
 			RecommendationEventID: eventID,
 			SourceDocumentID:      documentID,
-			PlanID:                plan.ID,
+			PlanID:                planID,
 			ChunkIndex:            int32(evidence.ChunkIndex),
 			EvidenceText:          evidence.Text,
 		})
 	}
 	return items
+}
+
+func sameOptionalInt64(left *int64, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func mapRecommendationEvent(row *db_model.RecommendationEvent, blogger *db_model.Blogger, evidenceRows []db_model.RecommendationEventEvidence) *domain.RecommendationEvent {

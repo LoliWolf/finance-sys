@@ -8,7 +8,7 @@ import ChartPanel from '../components/ChartPanel.vue'
 import MetricCard from '../components/MetricCard.vue'
 import StatePanel from '../components/StatePanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
-import { formatDate, formatNumber, formatPercent, returnTone } from '../utils/format'
+import { assetTypeLabel, formatDate, formatNumber, formatPercent, marketLabel, returnTone, sectorTypeLabel } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -38,7 +38,9 @@ async function load() {
 const sortedMetrics = computed(() => [...(detail.value?.metrics || [])].sort((a, b) => a.window_days - b.window_days))
 const readyMetrics = computed(() => sortedMetrics.value.filter((item) => item.status === 'READY'))
 const headlineMetric = computed(() => readyMetrics.value.find((item) => item.window_days === 30) || readyMetrics.value[0])
-const headlineMetricLabel = computed(() => headlineMetric.value ? `${headlineMetric.value.window_days} 个交易日方向收益` : '方向收益')
+const isSector = computed(() => detail.value?.recommendation.asset_type === 'SECTOR')
+const headlineMetricLabel = computed(() => headlineMetric.value ? `${headlineMetric.value.window_days} 个交易日方向${isSector.value ? '表现' : '收益'}` : `方向${isSector.value ? '表现' : '收益'}`)
+const instrumentTypeLabel = computed(() => isSector.value ? sectorTypeLabel(detail.value?.recommendation.sector_type) : assetTypeLabel(detail.value?.recommendation.asset_type))
 
 const priceOption = computed(() => {
   const points = series.value?.items || []
@@ -98,14 +100,14 @@ onMounted(load)
         <div class="detail-meta">
           <span>{{ formatDate(detail.recommendation.recommend_date) }} 推荐</span>
           <span>{{ detail.recommendation.direction }}</span>
-          <span>{{ detail.recommendation.market }} · {{ detail.recommendation.asset_type }}</span>
+		  <span>{{ marketLabel(detail.recommendation.market) }} · {{ instrumentTypeLabel }}</span>
           <span>置信度 {{ formatPercent(detail.recommendation.confidence) }}</span>
           <span>{{ detail.recommendation.institution || '独立研究者' }}</span>
         </div>
       </section>
 
       <section class="metric-grid">
-        <MetricCard :label="headlineMetricLabel" :value="formatPercent(headlineMetric?.direction_return_ratio)" note="T+1 开盘至窗口退出" :icon="Target" tone="accent" />
+		<MetricCard :label="headlineMetricLabel" :value="formatPercent(headlineMetric?.direction_return_ratio)" :note="isSector ? '下一交易日开盘至窗口终点' : 'T+1 开盘至窗口退出'" :icon="Target" tone="accent" />
         <MetricCard label="最大浮盈" :value="formatPercent(headlineMetric?.max_favorable_return_ratio)" note="窗口内最有利价格" :tone="(headlineMetric?.max_favorable_return_ratio || 0) >= 0 ? 'positive' : 'negative'" />
         <MetricCard label="最大不利波动" :value="formatPercent(headlineMetric?.max_adverse_return_ratio)" note="窗口内最不利价格" tone="negative" />
         <MetricCard label="最大回撤" :value="formatPercent(headlineMetric?.max_drawdown_ratio)" note="按方向净值序列" :icon="CandlestickChart" tone="negative" />
@@ -113,13 +115,13 @@ onMounted(load)
       </section>
 
       <section class="content-grid">
-        <ChartPanel class="span-12" title="推荐前后价格路径" description="K 线叠加推荐日、T+1 入场、各窗口退出、最佳与最不利点。" :option="priceOption" :height="490" />
+		<ChartPanel class="span-12" :title="isSector ? '板块指数推荐前后路径' : '推荐前后价格路径'" :description="isSector ? '板块指数 K 线叠加推荐日、观察起点、各窗口终点及最佳与最不利点。' : 'K 线叠加推荐日、T+1 入场、各窗口退出、最佳与最不利点。'" :option="priceOption" :height="490" />
 
         <article class="panel span-12">
           <header class="panel-header"><div><h2>窗口指标明细</h2><p>同一推荐在 5 / 10 / 30 / 90 个交易日的确定性计算结果。</p></div><span class="mono">{{ series?.ts_code || detail.recommendation.symbol }}</span></header>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>窗口</th><th>状态</th><th>入场</th><th>退出</th><th>方向收益</th><th>最大浮盈</th><th>最大不利</th><th>最大回撤</th><th>结果</th><th>行情覆盖</th></tr></thead>
+			<thead><tr><th>窗口</th><th>状态</th><th>{{ isSector ? '观察起点' : '入场' }}</th><th>{{ isSector ? '窗口终点' : '退出' }}</th><th>方向{{ isSector ? '表现' : '收益' }}</th><th>最大有利</th><th>最大不利</th><th>最大回撤</th><th>结果</th><th>行情覆盖</th></tr></thead>
               <tbody>
                 <tr v-for="metric in sortedMetrics" :key="metric.window_days">
                   <td><strong>{{ metric.window_days }} 个交易日</strong></td>

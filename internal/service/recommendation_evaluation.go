@@ -566,6 +566,7 @@ func buildEvaluationMetric(event db_model.RecommendationEvent, security *db_mode
 	metric.AssetType = security.AssetType
 	metric.Market = security.Market
 	metric.Industry = security.Industry
+	metric.SectorType = security.SectorType
 	if !evaluationSecuritySupported(*security, event.Direction) {
 		metric.Status = string(evaluation.StatusUnsupported)
 		metric.ReasonCode = "UNSUPPORTED_SECURITY"
@@ -660,6 +661,8 @@ func evaluationTSCodes(symbol string, market string) []string {
 		suffixes = []string{"SZ"}
 	case "BJ", "BSE":
 		suffixes = []string{"BJ"}
+	case "DC":
+		suffixes = []string{"DC"}
 	default:
 		suffixes = []string{"SH", "SZ", "BJ"}
 	}
@@ -681,7 +684,7 @@ func securityMatchesEvent(security db_model.SecurityMaster, event db_model.Recom
 			return false
 		}
 	}
-	return evaluationAssetTypeSupported(security.AssetType) && evaluationAssetTypeSupported(event.AssetType)
+	return evaluationAssetTypesMatch(security.AssetType, event.AssetType)
 }
 
 func evaluationSecuritySupported(security db_model.SecurityMaster, direction string) bool {
@@ -691,11 +694,20 @@ func evaluationSecuritySupported(security db_model.SecurityMaster, direction str
 
 func evaluationAssetTypeSupported(value string) bool {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
-	case "STOCK", "A_SHARE", "ASHARE", "ETF":
+	case "STOCK", "A_SHARE", "ASHARE", "ETF", "SECTOR":
 		return true
 	default:
 		return false
 	}
+}
+
+func evaluationAssetTypesMatch(left string, right string) bool {
+	left = strings.ToUpper(strings.TrimSpace(left))
+	right = strings.ToUpper(strings.TrimSpace(right))
+	if isMarketDataStockAssetType(left) && isMarketDataStockAssetType(right) {
+		return true
+	}
+	return left == right && evaluationAssetTypeSupported(left)
 }
 
 func normalizeEvaluationSymbols(values []string) []string {
@@ -708,7 +720,11 @@ func normalizeEvaluationSymbols(values []string) []string {
 		}
 		candidates := []string{value}
 		if !strings.Contains(value, ".") {
-			candidates = append(candidates, value+".SH", value+".SZ", value+".BJ")
+			if strings.HasPrefix(value, "BK") {
+				candidates = append(candidates, value+".DC")
+			} else {
+				candidates = append(candidates, value+".SH", value+".SZ", value+".BJ")
+			}
 		}
 		for _, candidate := range candidates {
 			if _, exists := seen[candidate]; exists {
