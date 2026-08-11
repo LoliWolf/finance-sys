@@ -32,6 +32,7 @@ type App struct {
 	Runtime           *config.Runtime
 	Logger            *slog.Logger
 	DB                *gorm.DB
+	Loader            *nacoscfg.Loader
 	DocumentService   *service.DocumentService
 	SecurityService   *service.SecurityService
 	MarketDataService *service.MarketDataService
@@ -48,7 +49,13 @@ type App struct {
 }
 
 func (a *App) Close() error {
-	if a == nil || a.DB == nil {
+	if a == nil {
+		return nil
+	}
+	if a.Loader != nil {
+		_ = a.Loader.Close()
+	}
+	if a.DB == nil {
 		return nil
 	}
 	sqlDB, err := a.DB.DB()
@@ -131,6 +138,7 @@ func Build(ctx context.Context) (*App, error) {
 		Runtime:           runtime,
 		Logger:            logger,
 		DB:                db,
+		Loader:            loader,
 		DocumentService:   documentService,
 		SecurityService:   securityService,
 		MarketDataService: marketDataService,

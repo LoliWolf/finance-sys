@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"finance-sys/internal/config"
 
 	"github.com/nacos-group/nacos-sdk-go/v2/clients"
+	"github.com/nacos-group/nacos-sdk-go/v2/clients/config_client"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
 )
@@ -22,6 +24,9 @@ import (
 type Loader struct {
 	bootstrap BootstrapConfig
 	logger    *slog.Logger
+	client    config_client.IConfigClient
+	clientErr error
+	once      sync.Once
 }
 
 type BootstrapConfig struct {
@@ -38,6 +43,32 @@ func NewLoader(bootstrapCfg BootstrapConfig, logger *slog.Logger) *Loader {
 		bootstrap: bootstrapCfg,
 		logger:    logger,
 	}
+}
+
+func (l *Loader) Close() error {
+	if l == nil {
+		return nil
+	}
+	l.once.Do(func() {
+		if l.client != nil {
+			l.client.CloseClient()
+			l.client = nil
+		}
+	})
+	return nil
+}
+
+func (l *Loader) configClient() (config_client.IConfigClient, error) {
+	if l.client != nil {
+		return l.client, nil
+	}
+	if l.clientErr != nil {
+		return nil, l.clientErr
+	}
+	l.once.Do(func() {
+		l.client, l.clientErr = l.newConfigClient()
+	})
+	return l.client, l.clientErr
 }
 
 func (l *Loader) Load(ctx context.Context, _ bool, failFast bool) (*config.Snapshot, error) {
@@ -57,11 +88,6 @@ func (l *Loader) Load(ctx context.Context, _ bool, failFast bool) (*config.Snaps
 }
 
 func (l *Loader) fetch(_ context.Context) ([]byte, string, error) {
-	serverConfigs, err := buildServerConfigs(l.bootstrap.ServerAddr)
-	if err != nil {
-		return nil, "", err
-	}
-
 	cacheDir := filepath.Join(os.TempDir(), "finance-sys-nacos-sdk-cache")
 	defer func() {
 		if err := os.RemoveAll(cacheDir); err != nil && l.logger != nil {
@@ -69,20 +95,7 @@ func (l *Loader) fetch(_ context.Context) ([]byte, string, error) {
 		}
 	}()
 
-	clientConfig := constant.NewClientConfig(
-		constant.WithNamespaceId(l.bootstrap.Namespace),
-		constant.WithUsername(l.bootstrap.Username),
-		constant.WithPassword(l.bootstrap.Password),
-		constant.WithTimeoutMs(5000),
-		constant.WithNotLoadCacheAtStart(true),
-		constant.WithDisableUseSnapShot(true),
-		constant.WithCacheDir(cacheDir),
-	)
-
-	client, err := clients.NewConfigClient(vo.NacosClientParam{
-		ClientConfig:  clientConfig,
-		ServerConfigs: serverConfigs,
-	})
+	client, err := l.configClient()
 	if err != nil {
 		return nil, "", fmt.Errorf("new nacos client: %w", err)
 	}
@@ -111,6 +124,34 @@ func (l *Loader) fetch(_ context.Context) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("nacos config response is empty")
 	}
 	return []byte(content), "nacos", nil
+}
+
+func (l *Loader) newConfigClient() (config_client.IConfigClient, error) {
+	serverConfigs, err := buildServerConfigs(l.bootstrap.ServerAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheDir := filepath.Join(os.TempDir(), "finance-sys-nacos-sdk-cache")
+
+	clientConfig := constant.NewClientConfig(
+		constant.WithNamespaceId(l.bootstrap.Namespace),
+		constant.WithUsername(l.bootstrap.Username),
+		constant.WithPassword(l.bootstrap.Password),
+		constant.WithTimeoutMs(5000),
+		constant.WithNotLoadCacheAtStart(true),
+		constant.WithDisableUseSnapShot(true),
+		constant.WithCacheDir(cacheDir),
+	)
+
+	client, err := clients.NewConfigClient(vo.NacosClientParam{
+		ClientConfig:  clientConfig,
+		ServerConfigs: serverConfigs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func (l *Loader) decode(raw []byte, source string) (*config.Snapshot, error) {
