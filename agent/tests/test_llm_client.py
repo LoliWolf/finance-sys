@@ -62,6 +62,54 @@ def test_llm_client_extracts_raw_intents_from_chat_completion():
     assert requests[0].headers["authorization"] == "Bearer test-key"
 
 
+def test_llm_client_extracts_and_normalizes_first_document_author():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert "first human analyst or author" in payload["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "author": "张豪杰、韩笑",
+                                    "raw_intents": [
+                                        {
+                                            "intent_id": "intent-1",
+                                            "raw_symbol": "002353.SZ",
+                                            "direction": "LONG",
+                                            "reference_price": 0,
+                                            "reference_price_note": "price_missing_in_text",
+                                            "thesis": "source text supports recommendation",
+                                            "evidence": [
+                                                {"chunk_index": 0, "text": "source evidence"}
+                                            ],
+                                            "risks": [],
+                                            "confidence": 0.8,
+                                        }
+                                    ],
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = LLMClient(_settings(), httpx.Client(transport=httpx.MockTransport(handler)))
+
+    extraction = client.extract_document(
+        "张豪杰（分析师） 韩笑（分析师） 推荐杰瑞股份",
+        max_intents=5,
+    )
+
+    assert extraction.author == "张豪杰"
+    assert extraction.raw_intents[0].raw_symbol == "002353.SZ"
+
+
 def test_llm_default_stdlib_transport_posts_and_retries_5xx(run_http_server):
     observed = {"attempts": 0, "authorization": "", "model": ""}
 

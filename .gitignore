@@ -23,6 +23,8 @@ cmd/api/cache
 testdata/游资大V复盘文章汇总2026
 cmd/api/__debug_*.exe
 agent/.venv/
+trading_agent/.venv/
+trading_agent/logs/
 tools/**/.venv/
 frontend/node_modules/
 frontend/*.tsbuildinfo

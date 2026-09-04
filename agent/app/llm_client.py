@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx
@@ -14,6 +15,12 @@ from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill
 JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 TS_CODE_RE = re.compile(r"(?:\b\d{6}\.(?:SH|SZ|BJ)\b|\bBK\d{4}\.DC\b)")
 PROTECTED_EXTRA_HEADER_NAMES = {"authorization", "content-type"}
+
+
+@dataclass(frozen=True)
+class DocumentExtraction:
+    author: str
+    raw_intents: List[AgentRawIntent]
 
 
 class LLMClient:
@@ -47,6 +54,14 @@ class LLMClient:
         max_intents: int,
         skill: Optional[SkillSpec] = None,
     ) -> List[AgentRawIntent]:
+        return self.extract_document(text, max_intents, skill).raw_intents
+
+    def extract_document(
+        self,
+        text: str,
+        max_intents: int,
+        skill: Optional[SkillSpec] = None,
+    ) -> DocumentExtraction:
         if not self.llm.enabled:
             raise RuntimeError("LLM extraction is disabled")
         if self.llm.provider != "openai_compatible":
@@ -69,7 +84,7 @@ class LLMClient:
                     "role": "user",
                     "content": (
                         "Return this shape: "
-                        '{"raw_intents":[{"intent_id":"intent-1","raw_symbol":"新易盛",'
+                        '{"author":"张豪杰","raw_intents":[{"intent_id":"intent-1","raw_symbol":"新易盛",'
                         '"direction":"LONG","reference_price":0,'
                         '"reference_price_note":"price_missing_in_text","thesis":"...",'
                         '"evidence":[{"chunk_index":0,"text":"..."}],"risks":[],"confidence":0.8}]}\n\n'
@@ -158,6 +173,12 @@ def _is_provider_moderation_block(response_text: str) -> bool:
 def build_system_prompt(skill: SkillSpec) -> str:
     return (
         "Extract Chinese equity trading intents from research text. "
+        "Also extract the document author into the top-level author field. "
+        "Use the first human analyst or author appearing in source order near the "
+        "document title or report header. When authors are joint, return only the "
+        "first person. Ignore names from related-report lists, citations, company "
+        "management, and body text. Return an empty author when no reliable document "
+        "author is present. "
         "Return JSON only. Do not invent ts_code. Do not output entry_price, "
         "stop_loss, take_profit, or position size.\n\n"
         "The following project-local rules are trusted system instructions:\n"
@@ -165,7 +186,7 @@ def build_system_prompt(skill: SkillSpec) -> str:
     )
 
 
-def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> List[AgentRawIntent]:
+def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> DocumentExtraction:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("llm response missing choices")
@@ -177,7 +198,25 @@ def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> List[Ag
     raw_items = data.get("raw_intents")
     if not isinstance(raw_items, list):
         raise RuntimeError("llm response missing raw_intents")
-    return [AgentRawIntent(**_normalize_raw_intent_item(item)) for item in raw_items[:max_intents]]
+    author = data.get("author", "")
+    if not isinstance(author, str):
+        raise RuntimeError("llm response author must be a string")
+    return DocumentExtraction(
+        author=_normalize_first_author(author),
+        raw_intents=[
+            AgentRawIntent(**_normalize_raw_intent_item(item))
+            for item in raw_items[:max_intents]
+        ],
+    )
+
+
+def _normalize_first_author(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    first = re.split(r"\s*(?:、|,|，|;|；|/|&|\band\b)\s*", value, maxsplit=1)[0]
+    first = re.sub(r"\s*[（(](?:分析师|研究员|作者|首席分析师)[）)]\s*$", "", first)
+    return first.strip()[:128]
 
 
 def _normalize_raw_intent_item(item: Any) -> Any:

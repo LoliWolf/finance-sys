@@ -121,6 +121,7 @@ class AgentResolveDocumentResponse(StrictBaseModel):
     schema_version: Literal["agent.resolve_document.response.v1"] = RESPONSE_SCHEMA_VERSION
     agent_version: str = Field(min_length=1)
     status: AgentStatus
+    extracted_author: str = Field(default="", max_length=128)
     raw_intents: List[AgentRawIntent] = Field(default_factory=list)
     candidate_plan_inputs: List[AgentCandidatePlanInput] = Field(default_factory=list)
     untrackable_targets: List[AgentUntrackableTarget] = Field(default_factory=list)

@@ -1,0 +1,3 @@
+# The Bridge API uses only the Python 3.10 standard library.
+# gm.api is installed and managed by the Eastmoney terminal separately.
+

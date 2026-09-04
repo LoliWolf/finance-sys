@@ -7,7 +7,7 @@ from langgraph.graph import END, StateGraph
 from app.config import get_settings
 from app.llm_client import LLMClient
 from app.nodes.classify import classify_untrackable_targets
-from app.nodes.extract import extract_raw_intents
+from app.nodes.extract import extract_first_author, extract_raw_intents
 from app.schemas import (
     AgentDebug,
     AgentResolveDocumentRequest,
@@ -26,6 +26,7 @@ from app.tools.tushare_tool import (
 
 class AgentGraphState(TypedDict, total=False):
     request: AgentResolveDocumentRequest
+    extracted_author: str
     raw_intents: List
     untrackable_targets: List
     candidate_plan_inputs: List
@@ -68,6 +69,7 @@ def resolve_document(request: AgentResolveDocumentRequest) -> AgentResolveDocume
         state = _compiled_graph().invoke(
             {
                 "request": request,
+                "extracted_author": "",
                 "raw_intents": [],
                 "untrackable_targets": [],
                 "candidate_plan_inputs": [],
@@ -103,6 +105,7 @@ def resolve_document(request: AgentResolveDocumentRequest) -> AgentResolveDocume
     return AgentResolveDocumentResponse(
         agent_version=get_settings().agent_version,
         status=status,
+        extracted_author=state.get("extracted_author", ""),
         raw_intents=raw_intents,
         candidate_plan_inputs=candidate_inputs,
         untrackable_targets=untrackable_targets,
@@ -140,14 +143,18 @@ def _extract_raw_intents_node(state: AgentGraphState) -> Dict:
     chunks = [(chunk.chunk_index, chunk.text) for chunk in request.chunks]
     llm_client = LLMClient()
     if llm_client.enabled():
-        raw_intents = llm_client.extract_raw_intents(
+        extraction = llm_client.extract_document(
             "\n\n".join(chunk.text for chunk in request.chunks),
             request.limits.max_intents,
             state["skill"],
         )
+        raw_intents = extraction.raw_intents
+        extracted_author = extraction.author
     else:
         raw_intents = extract_raw_intents(chunks, request.limits.max_intents)
+        extracted_author = extract_first_author(chunks)
     return {
+        "extracted_author": extracted_author,
         "raw_intents": raw_intents,
         "nodes": state.get("nodes", []) + ["extract_raw_intents"],
     }
@@ -311,6 +318,7 @@ def _failed_response(
     return AgentResolveDocumentResponse(
         agent_version=get_settings().agent_version,
         status=AgentStatus.failed,
+        extracted_author="",
         raw_intents=[],
         candidate_plan_inputs=[],
         untrackable_targets=[],

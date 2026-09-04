@@ -2,6 +2,7 @@ package dal
 
 import (
 	"context"
+	"errors"
 
 	"finance-sys/internal/domain/db_model"
 
@@ -44,4 +45,16 @@ func (*TradeCandidatePlanDML) QueryByDocumentID(ctx context.Context, db *gorm.DB
 		return nil, err
 	}
 	return models, nil
+}
+
+func (*TradeCandidatePlanDML) QueryByID(ctx context.Context, db *gorm.DB, id int64) (*db_model.TradeCandidatePlan, error) {
+	var model db_model.TradeCandidatePlan
+	err := db.WithContext(ctx).Where("id = ?", id).First(&model).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &model, nil
 }

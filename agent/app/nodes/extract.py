@@ -14,6 +14,9 @@ KNOWN_TARGETS = (
 
 TS_CODE_RE = re.compile(r"(?:\b\d{6}\.(?:SH|SZ|BJ)\b|\bBK\d{4}\.DC\b)")
 PRICE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*元")
+AUTHOR_RE = re.compile(
+    r"([\u4e00-\u9fff·]{2,12})\s*[（(]\s*(?:首席分析师|分析师|研究员|作者)\s*[）)]"
+)
 
 
 def extract_raw_intents(chunks: Iterable[Tuple[int, str]], max_intents: int) -> List[AgentRawIntent]:
@@ -41,6 +44,14 @@ def extract_raw_intents(chunks: Iterable[Tuple[int, str]], max_intents: int) -> 
             if len(intents) >= max_intents:
                 return intents
     return intents
+
+
+def extract_first_author(chunks: Iterable[Tuple[int, str]]) -> str:
+    for _, text in chunks:
+        match = AUTHOR_RE.search(text)
+        if match:
+            return match.group(1).strip()
+    return ""
 
 
 def _targets_in_text(text: str) -> List[str]:

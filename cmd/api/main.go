@@ -34,6 +34,9 @@ func main() {
 	if app.Scheduler != nil {
 		go app.Scheduler.Run(ctx)
 	}
+	if app.TradingWorker != nil {
+		go app.TradingWorker.Run(ctx)
+	}
 
 	go func() {
 		app.Logger.Info("api server started", "addr", server.Addr)

@@ -30,6 +30,9 @@ func ValidateResponse(response *ResolveDocumentResponse, expectedSchemaVersion s
 	if err := validateDebug(response.Debug); err != nil {
 		return err
 	}
+	if len([]rune(strings.TrimSpace(response.ExtractedAuthor))) > 128 {
+		return fmt.Errorf("agent extracted_author must not exceed 128 characters")
+	}
 	for i := range response.RawIntents {
 		if err := validateRawIntent(response.RawIntents[i]); err != nil {
 			return fmt.Errorf("agent raw_intents[%d]: %w", i, err)

@@ -66,7 +66,7 @@ func (a *Analyzer) AnalyzeWithResponse(ctx context.Context, document domain.Docu
 		return nil, response, err
 	}
 	if a.logger != nil {
-		a.logger.InfoContext(ctx, "agent analyze completed", "document_id", document.ID, "parse_run_id", parsed.ID, "agent_status", response.Status, "agent_version", response.AgentVersion, "skill_name", response.Debug.SkillName, "skill_version", response.Debug.SkillVersion, "skill_hash", response.Debug.SkillHash, "raw_intent_count", len(response.RawIntents), "candidate_plan_input_count", len(response.CandidatePlanInput), "untrackable_count", len(response.UntrackableTargets), "intent_count", len(intents))
+		a.logger.InfoContext(ctx, "agent analyze completed", "document_id", document.ID, "parse_run_id", parsed.ID, "agent_status", response.Status, "agent_version", response.AgentVersion, "extracted_author", response.ExtractedAuthor, "skill_name", response.Debug.SkillName, "skill_version", response.Debug.SkillVersion, "skill_hash", response.Debug.SkillHash, "raw_intent_count", len(response.RawIntents), "candidate_plan_input_count", len(response.CandidatePlanInput), "untrackable_count", len(response.UntrackableTargets), "intent_count", len(intents))
 	}
 	return intents, response, nil
 }
@@ -117,6 +117,7 @@ func agentTradeDate(cfg *config.Config) time.Time {
 func responseToPlanIntents(document domain.Document, response *ResolveDocumentResponse) ([]domain.PlanIntent, error) {
 	intents := make([]domain.PlanIntent, 0, len(response.CandidatePlanInput)+len(response.RawIntents))
 	resolvedIntentIDs := make(map[string]struct{}, len(response.CandidatePlanInput))
+	analyst := preferredAnalyst(document.Author, response.ExtractedAuthor)
 	for _, item := range response.CandidatePlanInput {
 		assetType, err := mapAgentAssetType(item.Security.AssetType)
 		if err != nil {
@@ -127,7 +128,7 @@ func responseToPlanIntents(document domain.Document, response *ResolveDocumentRe
 			return nil, err
 		}
 		intents = append(intents, domain.PlanIntent{
-			Analyst:            document.Author,
+			Analyst:            analyst,
 			Institution:        document.Institution,
 			Symbol:             strings.ToUpper(strings.TrimSpace(item.Security.TSCode)),
 			AssetType:          assetType,
@@ -148,7 +149,7 @@ func responseToPlanIntents(document domain.Document, response *ResolveDocumentRe
 			continue
 		}
 		intents = append(intents, domain.PlanIntent{
-			Analyst:            document.Author,
+			Analyst:            analyst,
 			Institution:        document.Institution,
 			Symbol:             strings.TrimSpace(item.RawSymbol),
 			Direction:          item.Direction,
@@ -164,6 +165,28 @@ func responseToPlanIntents(document domain.Document, response *ResolveDocumentRe
 		return nil, fmt.Errorf("agent returned no plan intents")
 	}
 	return intents, nil
+}
+
+func preferredAnalyst(explicitAuthor string, extractedAuthor string) string {
+	if value := strings.TrimSpace(explicitAuthor); value != "" {
+		return value
+	}
+	return firstExtractedAuthor(extractedAuthor)
+}
+
+func firstExtractedAuthor(value string) string {
+	parts := strings.FieldsFunc(strings.TrimSpace(value), func(r rune) bool {
+		switch r {
+		case '、', ',', '，', ';', '；', '/', '&':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
 }
 
 func mapAgentAssetType(value string) (domain.AssetType, error) {

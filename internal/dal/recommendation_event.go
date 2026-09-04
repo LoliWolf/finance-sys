@@ -138,3 +138,26 @@ func (*RecommendationEventDML) QueryForEvaluation(ctx context.Context, db *gorm.
 	}
 	return models, nil
 }
+
+func (*RecommendationEventDML) QueryForTrading(ctx context.Context, db *gorm.DB, asOf time.Time, minConfidence float64, afterID int64, limit int) ([]db_model.RecommendationEvent, error) {
+	var models []db_model.RecommendationEvent
+	tx := db.WithContext(ctx).
+		Where("asset_type IN ?", []string{"A_SHARE", "STOCK", "ETF"}).
+		Where("market IN ?", []string{"SH", "SZ"}).
+		Where("direction IN ?", []string{"LONG", "BUY"}).
+		Where("status = ?", "ACTIVE").
+		Where("confidence >= ?", minConfidence).
+		Where("recommend_date <= ?", asOf).
+		Where("created_at <= ?", asOf).
+		Order("recommend_date DESC, id DESC")
+	if afterID > 0 {
+		tx = tx.Where("id < ?", afterID)
+	}
+	if limit > 0 {
+		tx = tx.Limit(limit)
+	}
+	if err := tx.Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}

@@ -22,6 +22,7 @@ Return JSON only.
 Do not generate entry price, stop loss, take profit, or position.
 Only extract facts explicitly supported by the source text.
 For symbol, keep the source instrument text or code. Do not invent a ts_code or exchange suffix.
+For analyst, an explicit non-empty Author value in the user message has highest priority. Otherwise use the first document author or analyst appearing in source order near the report header. For joint authors, use only the first person. Ignore names from related-report lists, citations, company management, and body text.
 The confidence field is your extraction confidence for this structured record, not an investment rating from the source text. It must be a number in (0,1].
 Output shape:
 {"plans":[{"analyst":"","institution":"","symbol":"","asset_type":"","market":"","direction":"LONG or SHORT","reference_price":0,"reference_price_note":"","thesis":"","evidence":[{"chunk_index":0,"text":""}],"risks":[""],"confidence":0.0}]}`
@@ -122,10 +123,44 @@ func (a *ModelAnalyzer) Analyze(ctx context.Context, document domain.Document, p
 	if len(intents) == 0 {
 		return nil, fmt.Errorf("no structured trade intent extracted")
 	}
+	applyPreferredAnalyst(intents, document.Author)
 	if a.logger != nil {
 		a.logger.InfoContext(ctx, "llm analyze completed", "document_id", document.ID, "raw_intent_count", len(rawIntents), "merged_intent_count", len(intents))
 	}
 	return intents, nil
+}
+
+func applyPreferredAnalyst(intents []domain.PlanIntent, explicitAuthor string) {
+	analyst := strings.TrimSpace(explicitAuthor)
+	if analyst == "" {
+		for i := range intents {
+			if value := strings.TrimSpace(intents[i].Analyst); value != "" {
+				analyst = firstModelAnalyst(value)
+				break
+			}
+		}
+	}
+	if analyst == "" {
+		return
+	}
+	for i := range intents {
+		intents[i].Analyst = analyst
+	}
+}
+
+func firstModelAnalyst(value string) string {
+	parts := strings.FieldsFunc(strings.TrimSpace(value), func(r rune) bool {
+		switch r {
+		case '、', ',', '，', ';', '；', '/', '&':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
 }
 
 func (a *ModelAnalyzer) analyzeChunk(ctx context.Context, cfg config.LLMConfig, document domain.Document, chunk domain.Chunk) ([]domain.PlanIntent, error) {

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"finance-sys/internal/config"
@@ -18,6 +19,7 @@ import (
 	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/service"
 	"finance-sys/internal/stats"
+	tradingservice "finance-sys/internal/trading/service"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -29,15 +31,18 @@ type ConfigReloader interface {
 }
 
 type Server struct {
-	db         *gorm.DB
-	runtime    *config.Runtime
-	documents  *service.DocumentService
-	security   *service.SecurityService
-	marketData marketDataService
-	evaluation recommendationEvaluationService
-	stats      performanceStatsService
-	reloader   ConfigReloader
-	logger     *slog.Logger
+	db            *gorm.DB
+	runtime       *config.Runtime
+	documents     *service.DocumentService
+	security      *service.SecurityService
+	marketData    marketDataService
+	evaluation    recommendationEvaluationService
+	stats         performanceStatsService
+	trading       *tradingservice.Service
+	reloader      ConfigReloader
+	logger        *slog.Logger
+	bridgeNonceMu sync.Mutex
+	bridgeNonces  map[string]time.Time
 }
 
 type marketDataService interface {
@@ -72,19 +77,22 @@ func NewServer(
 	marketData marketDataService,
 	evaluation recommendationEvaluationService,
 	performanceStats performanceStatsService,
+	trading *tradingservice.Service,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
 	return &Server{
-		db:         db,
-		runtime:    runtime,
-		documents:  documents,
-		security:   security,
-		marketData: marketData,
-		evaluation: evaluation,
-		stats:      performanceStats,
-		reloader:   reloader,
-		logger:     logger,
+		db:           db,
+		runtime:      runtime,
+		documents:    documents,
+		security:     security,
+		marketData:   marketData,
+		evaluation:   evaluation,
+		stats:        performanceStats,
+		trading:      trading,
+		reloader:     reloader,
+		logger:       logger,
+		bridgeNonces: make(map[string]time.Time),
 	}
 }
 
@@ -103,6 +111,7 @@ func (s *Server) Router() http.Handler {
 	}
 
 	router.Get("/healthz", s.handleHealth)
+	router.Post("/internal/v1/trading/bridge-events", s.handleTradingBridgeEvent)
 	router.Route(apiPrefix, func(r chi.Router) {
 		r.Get("/documents", s.handleListDocuments)
 		r.Post("/documents/upload", s.handleUploadDocument)
@@ -135,6 +144,25 @@ func (s *Server) Router() http.Handler {
 		r.Post("/internal/security/resolve", s.handleResolveSecurity)
 		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
+		r.Post("/trading/agent-runs", s.handleCreateTradingAgentRun)
+		r.Get("/trading/agent-runs/{id}", s.handleGetTradingAgentRun)
+		r.Get("/trading/agent-runs/{id}/skill-decisions", s.handleListTradingSkillDecisions)
+		r.Get("/trading/intents", s.handleListTradingIntents)
+		r.Get("/trading/orders", s.handleListTradingOrders)
+		r.Get("/trading/position-cycles", s.handleListTradingPositionCycles)
+		r.Get("/trading/daily-sessions", s.handleListTradingDailySessions)
+		r.Post("/trading/preflight", s.handleTradingPreflight)
+		r.Post("/trading/orders/{clientOrderID}/cancel", s.handleCancelTradingOrder)
+		r.Get("/trading/account", s.handleGetTradingAccount)
+		r.Get("/trading/positions", s.handleGetTradingPositions)
+		r.Post("/trading/reconciliation-runs", s.handleCreateTradingReconciliationRun)
+		r.Post("/trading/kill-switch", s.handleSetTradingKillSwitch)
+		r.Get("/internal/trading-tools/recommendation-candidates", s.handleTradingToolRecommendationCandidates)
+		r.Get("/internal/trading-tools/blogger-performance/{bloggerID}", s.handleTradingToolBloggerPerformance)
+		r.Get("/internal/trading-tools/market-snapshot", s.handleTradingToolMarketSnapshot)
+		r.Get("/internal/trading-tools/daily-history", s.handleTradingToolDailyHistory)
+		r.Get("/internal/trading-tools/portfolio", s.handleTradingToolPortfolio)
+		r.Get("/internal/trading-tools/risk-budget", s.handleTradingToolRiskBudget)
 	})
 	frontend := newFrontendHandler()
 	router.Get("/", frontend.ServeHTTP)
@@ -453,6 +481,14 @@ func (s *Server) handleLookupSecurity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := s.runtime.Config()
+		apiPrefix := "/api/v1"
+		if cfg != nil && cfg.Service.HTTP.APIPrefix != "" {
+			apiPrefix = cfg.Service.HTTP.APIPrefix
+		}
+		if r.URL.Path == "/internal/v1/trading/bridge-events" || strings.HasPrefix(r.URL.Path, strings.TrimRight(apiPrefix, "/")+"/internal/trading-tools") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if cfg == nil || !cfg.Security.Auth.Enabled {
 			next.ServeHTTP(w, r)
 			return

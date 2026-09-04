@@ -40,6 +40,7 @@ type ResolveDocumentResponse struct {
 	SchemaVersion      string                    `json:"schema_version"`
 	AgentVersion       string                    `json:"agent_version"`
 	Status             AgentStatus               `json:"status"`
+	ExtractedAuthor    string                    `json:"extracted_author"`
 	RawIntents         []AgentRawIntent          `json:"raw_intents"`
 	CandidatePlanInput []AgentCandidatePlanInput `json:"candidate_plan_inputs"`
 	UntrackableTargets []AgentUntrackableTarget  `json:"untrackable_targets"`

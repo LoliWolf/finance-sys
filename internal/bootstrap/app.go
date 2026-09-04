@@ -23,6 +23,10 @@ import (
 	"finance-sys/internal/service"
 	"finance-sys/internal/stats"
 	"finance-sys/internal/telemetry"
+	"finance-sys/internal/trading/policy"
+	tradingservice "finance-sys/internal/trading/service"
+	"finance-sys/internal/tradingagentclient"
+	"finance-sys/internal/tradingbridgeclient"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -43,6 +47,8 @@ type App struct {
 	ExternalDocuments *service.ExternalDocumentIngestionService
 	Scheduler         *service.AutomaticScheduler
 	StatsService      *stats.Service
+	TradingService    *tradingservice.Service
+	TradingWorker     *tradingservice.Worker
 	HTTPServer        *httpapi.Server
 	Watcher           *nacoscfg.Watcher
 	Reloader          *nacoscfg.Reloader
@@ -118,7 +124,11 @@ func Build(ctx context.Context) (*App, error) {
 	evaluationWorker := service.NewRecommendationEvaluationWorker(evaluationService, runtime, logger)
 	scheduledTasks := service.NewScheduledTaskService(db, runtime, logger)
 	externalDocuments := service.NewExternalDocumentIngestionService(db, runtime, documentService, logger)
-	automaticScheduler, err := service.NewAutomaticScheduler(scheduledTasks, marketDataService, evaluationService, externalDocuments, runtime, logger)
+	tradingAgentClient := tradingagentclient.New(runtime)
+	tradingBridgeClient := tradingbridgeclient.New(runtime)
+	tradingService := tradingservice.New(db, runtime, tradingAgentClient, tradingBridgeClient, policy.New(), logger)
+	tradingWorker := tradingservice.NewWorker(tradingService, runtime, logger)
+	automaticScheduler, err := service.NewAutomaticScheduler(scheduledTasks, marketDataService, evaluationService, externalDocuments, tradingService, runtime, logger)
 	if err != nil {
 		_ = dbConnectionClose(db)
 		return nil, err
@@ -132,7 +142,7 @@ func Build(ctx context.Context) (*App, error) {
 		reloader = nacoscfg.NewReloader(loader, runtime, db, logger)
 	}
 
-	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, evaluationService, statsService, reloader, logger)
+	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, evaluationService, statsService, tradingService, reloader, logger)
 	logger.Info("bootstrap build completed")
 	return &App{
 		Runtime:           runtime,
@@ -149,6 +159,8 @@ func Build(ctx context.Context) (*App, error) {
 		ExternalDocuments: externalDocuments,
 		Scheduler:         automaticScheduler,
 		StatsService:      statsService,
+		TradingService:    tradingService,
+		TradingWorker:     tradingWorker,
 		HTTPServer:        httpServer,
 		Watcher:           watcher,
 		Reloader:          reloader,

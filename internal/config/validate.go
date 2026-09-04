@@ -144,6 +144,12 @@ func Validate(cfg *Config) error {
 			require(cfg.ExternalDocuments.OpenList.Enabled, "external_documents.openlist must be enabled when scheduler.openlist_document_ingestion is enabled")
 		}
 	}
+	if cfg.Trading.Enabled || strings.TrimSpace(cfg.Trading.Provider) != "" {
+		validateTrading(cfg.Trading, require)
+		if cfg.Trading.Scheduler.Enabled {
+			require(cfg.Scheduler.Enabled, "scheduler.enabled must be true when trading.scheduler.enabled is true")
+		}
+	}
 
 	allowed := map[string]struct{}{
 		".pdf":  {},
@@ -162,6 +168,155 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func validateTrading(cfg TradingConfig, require func(bool, string)) {
+	require(cfg.Environment == "SIMULATION", "trading.environment must be SIMULATION")
+	require(cfg.Provider == "EASTMONEY_GM", "trading.provider must be EASTMONEY_GM")
+	require(!cfg.AllowLive, "trading.allow_live must be false")
+	require(cfg.Bridge.SimulationOnly, "trading.bridge.simulation_only must be true")
+	require(cfg.Eastmoney.Mode == "MODE_LIVE", "trading.eastmoney.mode must be MODE_LIVE")
+	require(cfg.Eastmoney.MaxSubscribedSymbols > 0 && cfg.Eastmoney.MaxSubscribedSymbols <= 50, "trading.eastmoney.max_subscribed_symbols must be in (0,50]")
+	require(strings.TrimSpace(cfg.Eastmoney.SQLitePath) != "", "trading.eastmoney.sqlite_path is required")
+	require(cfg.Eastmoney.TokenHealth.ProbeIntervalSeconds > 0, "trading.eastmoney.token_health.probe_interval_seconds must be positive")
+	require(cfg.Eastmoney.TokenHealth.TransientFailureThreshold > 0, "trading.eastmoney.token_health.transient_failure_threshold must be positive")
+	require(len(cfg.Eastmoney.TokenHealth.InvalidTokenErrorCodes) > 0, "trading.eastmoney.token_health.invalid_token_error_codes must not be empty")
+	require(cfg.Eastmoney.HistoricalData.MaxRecordsPerRequest > 0 && cfg.Eastmoney.HistoricalData.MaxRecordsPerRequest <= 33000, "trading.eastmoney.historical_data.max_records_per_request must be in (0,33000]")
+	require(!cfg.Eastmoney.HistoricalData.BulkBackfillEnabled || cfg.Eastmoney.HistoricalData.ProviderDailyQuotaVerified, "trading bulk backfill requires a verified provider daily quota")
+	require(cfg.Eastmoney.AccountPolicy.MaxActiveAccounts == 1, "trading.eastmoney.account_policy.max_active_accounts must be 1")
+	require(cfg.Eastmoney.AccountPolicy.MaxSimulationStrategiesPerAccount > 0 && cfg.Eastmoney.AccountPolicy.MaxSimulationStrategiesPerAccount <= 10, "trading.eastmoney.account_policy.max_simulation_strategies_per_account must be in (0,10]")
+
+	require(cfg.Decision.Provider == "DETERMINISTIC" || cfg.Decision.Provider == "SHADOW", "trading.decision.provider must be DETERMINISTIC or SHADOW")
+	require(strings.TrimSpace(cfg.Decision.StrategyName) != "", "trading.decision.strategy_name is required")
+	require(strings.TrimSpace(cfg.Decision.StrategyVersion) != "", "trading.decision.strategy_version is required")
+	require(strings.TrimSpace(cfg.Decision.ToolContractVersion) != "", "trading.decision.tool_contract_version is required")
+	require(cfg.Decision.MinRecommendationConfidence >= 0 && cfg.Decision.MinRecommendationConfidence <= 1, "trading.decision.min_recommendation_confidence must be in [0,1]")
+	require(cfg.Decision.MinBloggerWinRate >= 0 && cfg.Decision.MinBloggerWinRate <= 1, "trading.decision.min_blogger_win_rate must be in [0,1]")
+	require(cfg.Decision.MaxCandidatesPerRun > 0, "trading.decision.max_candidates_per_run must be positive")
+	require(cfg.Decision.MaxIntentsPerRun > 0 && cfg.Decision.MaxIntentsPerRun <= cfg.Decision.MaxCandidatesPerRun, "trading.decision.max_intents_per_run must be positive and not exceed max_candidates_per_run")
+
+	require(strings.TrimSpace(cfg.Risk.Version) != "", "trading.risk.version is required")
+	require(sameStringSet(cfg.Risk.AllowedAssetTypes, []string{"STOCK", "ETF"}), "trading.risk.allowed_asset_types must contain exactly STOCK and ETF")
+	require(sameStringSet(cfg.Risk.AllowedMarkets, []string{"SH", "SZ"}), "trading.risk.allowed_markets must contain exactly SH and SZ")
+	require(sameStringSet(cfg.Risk.AllowedSides, []string{"BUY", "SELL"}), "trading.risk.allowed_sides must contain exactly BUY and SELL")
+	validBoards := map[string]bool{"SH_MAIN": true, "SZ_MAIN": true, "CHINEXT": true, "STAR": true, "ETF": true}
+	for _, board := range cfg.Risk.AllowedBoards {
+		require(validBoards[strings.ToUpper(strings.TrimSpace(board))], fmt.Sprintf("unsupported trading.risk.allowed_boards value %q", board))
+	}
+	for _, board := range cfg.Eastmoney.AccountPolicy.VerifiedBoards {
+		require(validBoards[strings.ToUpper(strings.TrimSpace(board))], fmt.Sprintf("unsupported trading.eastmoney.account_policy.verified_boards value %q", board))
+	}
+	if cfg.Scheduler.Enabled {
+		require(len(cfg.Risk.AllowedBoards) > 0, "trading.risk.allowed_boards must not be empty when trading scheduler is enabled")
+		require(len(cfg.Eastmoney.AccountPolicy.VerifiedBoards) > 0, "trading.eastmoney.account_policy.verified_boards must not be empty when trading scheduler is enabled")
+		require(strings.TrimSpace(cfg.Risk.TradingRuleVersion) != "", "trading.risk.trading_rule_version is required when trading scheduler is enabled")
+		require(cfg.Agent.Enabled, "trading.agent.enabled must be true when trading scheduler is enabled")
+	}
+	for name, value := range map[string]float64{
+		"max_total_position_ratio":  cfg.Risk.MaxTotalPositionRatio,
+		"max_symbol_position_ratio": cfg.Risk.MaxSymbolPositionRatio,
+		"max_single_order_ratio":    cfg.Risk.MaxSingleOrderRatio,
+		"max_daily_turnover_ratio":  cfg.Risk.MaxDailyTurnoverRatio,
+		"daily_loss_kill_ratio":     cfg.Risk.DailyLossKillRatio,
+		"max_price_deviation_ratio": cfg.Risk.MaxPriceDeviationRatio,
+		"min_cash_reserve_ratio":    cfg.Risk.MinCashReserveRatio,
+	} {
+		require(value > 0 && value <= 1, "trading.risk."+name+" must be in (0,1]")
+	}
+	require(cfg.Risk.MaxSingleOrderRatio <= cfg.Risk.MaxSymbolPositionRatio, "trading.risk.max_single_order_ratio must not exceed max_symbol_position_ratio")
+	require(cfg.Risk.MaxSymbolPositionRatio <= cfg.Risk.MaxTotalPositionRatio, "trading.risk.max_symbol_position_ratio must not exceed max_total_position_ratio")
+	require(cfg.Risk.MaxTotalPositionRatio+cfg.Risk.MinCashReserveRatio <= 1, "trading.risk total position and cash reserve ratios conflict")
+	require(cfg.Risk.MaxPositionCount > 0, "trading.risk.max_position_count must be positive")
+	require(cfg.Risk.MaxNewOrdersPerDay > 0, "trading.risk.max_new_orders_per_day must be positive")
+	require(cfg.Risk.IntentCooldownTradeDays > 0, "trading.risk.intent_cooldown_trade_days must be positive")
+	require(cfg.Risk.MaxSnapshotAgeSeconds > 0, "trading.risk.max_snapshot_age_seconds must be positive")
+
+	require(cfg.Execution.DefaultOrderType == "LIMIT", "trading.execution.default_order_type must be LIMIT")
+	require(!cfg.Execution.AllowMarketOrder, "trading.execution.allow_market_order must be false")
+	require(cfg.Execution.CommandPollIntervalMS > 0, "trading.execution.command_poll_interval_ms must be positive")
+	require(cfg.Execution.CommandClaimTimeoutMS > 0, "trading.execution.command_claim_timeout_ms must be positive")
+	require(cfg.Execution.DispatchTimeoutMS > 0, "trading.execution.dispatch_timeout_ms must be positive")
+	require(cfg.Execution.DispatchMaxRetries >= 0, "trading.execution.dispatch_max_retries must be zero or positive")
+	require(cfg.Exit.StopLossRatio > 0 && cfg.Exit.StopLossRatio < 1, "trading.exit.stop_loss_ratio must be in (0,1)")
+	require(cfg.Exit.TakeProfitRatio > 0 && cfg.Exit.TakeProfitRatio < 1, "trading.exit.take_profit_ratio must be in (0,1)")
+	require(cfg.Exit.MaxHoldingTradeDays > 0, "trading.exit.max_holding_trade_days must be positive")
+	require(cfg.Exit.MonitorIntervalSeconds > 0, "trading.exit.monitor_interval_seconds must be positive")
+	require(cfg.Exit.SellLimitDiscountRatio >= 0 && cfg.Exit.SellLimitDiscountRatio <= cfg.Risk.MaxPriceDeviationRatio, "trading.exit.sell_limit_discount_ratio must be non-negative and not exceed max_price_deviation_ratio")
+	require(strings.HasPrefix(cfg.Bridge.CallbackURL, "http://") || strings.HasPrefix(cfg.Bridge.CallbackURL, "https://"), "trading.bridge.callback_url must start with http:// or https://")
+	require(cfg.Bridge.RequestTimeoutMS > 0, "trading.bridge.request_timeout_ms must be positive")
+	require(cfg.Bridge.HMAC.MaxClockSkewSeconds > 0, "trading.bridge.hmac.max_clock_skew_seconds must be positive")
+	require(cfg.Bridge.HMAC.NonceTTLSeconds > 0, "trading.bridge.hmac.nonce_ttl_seconds must be positive")
+	if cfg.Bridge.TLS.Verify {
+		require(strings.TrimSpace(cfg.Bridge.TLS.CAFile) != "", "trading.bridge.tls.ca_file is required when verification is enabled")
+		require(strings.TrimSpace(cfg.Bridge.TLS.CertFile) != "", "trading.bridge.tls.cert_file is required when verification is enabled")
+		require(strings.TrimSpace(cfg.Bridge.TLS.KeyFile) != "", "trading.bridge.tls.key_file is required when verification is enabled")
+	}
+
+	if cfg.Agent.Enabled {
+		require(strings.HasPrefix(cfg.Agent.Endpoint, "http://") || strings.HasPrefix(cfg.Agent.Endpoint, "https://"), "trading.agent.endpoint must start with http:// or https:// when enabled")
+		require(strings.HasPrefix(cfg.Agent.HealthEndpoint, "http://") || strings.HasPrefix(cfg.Agent.HealthEndpoint, "https://"), "trading.agent.health_endpoint must start with http:// or https:// when enabled")
+		require(cfg.Agent.TimeoutMS > 0, "trading.agent.timeout_ms must be positive when enabled")
+		require(cfg.Agent.MaxRetries >= 0, "trading.agent.max_retries must be zero or positive")
+		require(strings.TrimSpace(cfg.Agent.SchemaVersion) != "", "trading.agent.schema_version is required when enabled")
+		require(strings.TrimSpace(cfg.Agent.InternalToken) != "", "trading.agent.internal_token is required when enabled")
+	}
+
+	if cfg.TradingReadyForExecution() {
+		require(strings.TrimSpace(cfg.Bridge.BaseURL) != "", "trading.bridge.base_url is required when trading.enabled is true")
+		require(strings.TrimSpace(cfg.Bridge.ExpectedAccountID) != "", "trading.bridge.expected_account_id is required when trading.enabled is true")
+		require(strings.TrimSpace(cfg.Bridge.StrategyID) != "", "trading.bridge.strategy_id is required when trading.enabled is true")
+		require(strings.TrimSpace(cfg.Bridge.HMAC.KeyID) != "", "trading.bridge.hmac.key_id is required when trading.enabled is true")
+		require(strings.TrimSpace(cfg.Bridge.HMAC.Secret) != "", "trading.bridge.hmac.secret is required when trading.enabled is true")
+		require(strings.TrimSpace(cfg.Eastmoney.Token) != "", "trading.eastmoney.token is required when trading.enabled is true")
+		require(cfg.Bridge.ExpectedAccountID == cfg.Eastmoney.ExpectedAccountID, "trading Bridge and Eastmoney expected_account_id must match")
+		require(cfg.Bridge.StrategyID == cfg.Eastmoney.StrategyID, "trading Bridge and Eastmoney strategy_id must match")
+		require(len(cfg.Eastmoney.AccountPolicy.AllowedAccountIDs) == 1 && cfg.Eastmoney.AccountPolicy.AllowedAccountIDs[0] == cfg.Eastmoney.ExpectedAccountID, "trading allowed_account_ids must contain only expected_account_id")
+	}
+
+	if cfg.Reconciliation.Enabled {
+		require(cfg.Reconciliation.IntervalSeconds > 0, "trading.reconciliation.interval_seconds must be positive when enabled")
+		require(cfg.Reconciliation.RefreshTimeoutSeconds > 0, "trading.reconciliation.refresh_timeout_seconds must be positive when enabled")
+	}
+	if cfg.Scheduler.Enabled {
+		if cfg.Scheduler.PreOpenDecision.Enabled {
+			validateDailySchedule("trading.scheduler.pre_open_decision", cfg.Scheduler.PreOpenDecision, require)
+		}
+		if cfg.Scheduler.EndOfDayReconcile.Enabled {
+			validateDailySchedule("trading.scheduler.end_of_day_reconcile", cfg.Scheduler.EndOfDayReconcile, require)
+		}
+		validateTradingSession("trading.scheduler.morning_window", cfg.Scheduler.MorningWindow, require)
+		validateTradingSession("trading.scheduler.afternoon_window", cfg.Scheduler.AfternoonWindow, require)
+	}
+}
+
+func (cfg TradingConfig) TradingReadyForExecution() bool {
+	return cfg.Enabled
+}
+
+func validateTradingSession(name string, cfg TradingSessionWindow, require func(bool, string)) {
+	start, startErr := time.Parse("15:04:05", cfg.Start)
+	end, endErr := time.Parse("15:04:05", cfg.End)
+	require(startErr == nil, name+".start must use HH:MM:SS")
+	require(endErr == nil, name+".end must use HH:MM:SS")
+	if startErr == nil && endErr == nil {
+		require(start.Before(end), name+" start must be before end")
+	}
+}
+
+func sameStringSet(actual, expected []string) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	values := make(map[string]struct{}, len(actual))
+	for _, item := range actual {
+		values[strings.ToUpper(strings.TrimSpace(item))] = struct{}{}
+	}
+	for _, item := range expected {
+		if _, ok := values[item]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDailySchedule(name string, cfg DailyTaskScheduleConfig, require func(bool, string)) {

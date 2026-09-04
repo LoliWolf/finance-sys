@@ -19,6 +19,7 @@ def test_resolve_document_api_returns_stable_response():
     payload = response.json()
     assert payload["schema_version"] == RESPONSE_SCHEMA_VERSION
     assert payload["status"] == "RESOLVED"
+    assert payload["extracted_author"] == ""
     assert [item["raw_symbol"] for item in payload["raw_intents"]] == ["新易盛", "CPO板块"]
     assert payload["untrackable_targets"][0]["raw_symbol"] == "CPO板块"
 

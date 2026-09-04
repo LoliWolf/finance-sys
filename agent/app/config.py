@@ -17,7 +17,7 @@ DEFAULT_NACOS_NAMESPACE = "public"
 DEFAULT_NACOS_GROUP = "DEFAULT_GROUP"
 DEFAULT_NACOS_DATA_ID = "expert_trade"
 DEFAULT_NACOS_TIMEOUT_MS = 5000
-DEFAULT_AGENT_VERSION = "m4-agent-0.1.0"
+DEFAULT_AGENT_VERSION = "m4-agent-0.1.1"
 FINANCE_SYS_ENV = "FINANCE_SYS_ENV"
 PRODUCTION_ENVIRONMENT = "PROD"
 
@@ -269,7 +269,7 @@ def _runtime_internal_api_base_url(config: Dict[str, Any], agent: Dict[str, Any]
 
 def _settings_from_env() -> AgentSettings:
     return AgentSettings(
-        agent_version=os.getenv("AGENT_VERSION", "m4-agent-0.1.0"),
+        agent_version=os.getenv("AGENT_VERSION", DEFAULT_AGENT_VERSION),
         config_source="env",
         auth_enabled=_env_bool("AGENT_AUTH_ENABLED", bool(os.getenv("AGENT_AUTH_TOKEN", ""))),
         auth_header=os.getenv("AGENT_AUTH_HEADER", "X-Agent-Token"),

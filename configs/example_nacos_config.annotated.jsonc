@@ -271,6 +271,144 @@
       "minute": 15
     }
   },
+  "trading": {
+    // 仿真交易默认失败关闭；只有 Nacos、MySQL 运行态和 Bridge 本地三层开关都放行时才能创建新单。
+    "enabled": false,
+    "environment": "SIMULATION",
+    "provider": "EASTMONEY_GM",
+    "allow_live": false,
+    "kill_switch": true,
+    "agent": {
+      "enabled": false,
+      "endpoint": "http://127.0.0.1:8110/internal/v1/trading-agent/runs",
+      "health_endpoint": "http://127.0.0.1:8110/healthz",
+      "timeout_ms": 30000,
+      "max_retries": 1,
+      "schema_version": "trading-intent/v2",
+      // 真实值只维护在 Nacos。
+      "internal_token": ""
+    },
+    "decision": {
+      "provider": "DETERMINISTIC",
+      "strategy_name": "blogger_follow_v1",
+      "strategy_version": "1.0.0",
+      "tool_contract_version": "trading-tools/v2",
+      "min_recommendation_confidence": 0.65,
+      "min_blogger_sample_count": 10,
+      "min_blogger_win_rate": 0.55,
+      "max_candidates_per_run": 20,
+      "max_intents_per_run": 5
+    },
+    "risk": {
+      "version": "risk-v1",
+      "allowed_asset_types": ["STOCK", "ETF"],
+      "allowed_markets": ["SH", "SZ"],
+      // 板块必须经过账户级仿真 BUY/SELL UAT 后再逐个加入。
+      "allowed_boards": ["SH_MAIN"],
+      "allowed_sides": ["BUY", "SELL"],
+      "trading_rule_version": "cn-equity-board-rules-2026-v1",
+      "exclude_no_price_limit_period": true,
+      "max_total_position_ratio": 0.60,
+      "max_symbol_position_ratio": 0.10,
+      "max_single_order_ratio": 0.05,
+      "max_position_count": 10,
+      "max_new_orders_per_day": 20,
+      "max_daily_turnover_ratio": 0.30,
+      "daily_loss_kill_ratio": 0.03,
+      "max_price_deviation_ratio": 0.02,
+      "min_cash_reserve_ratio": 0.20,
+      "intent_cooldown_trade_days": 5,
+      "max_snapshot_age_seconds": 15
+    },
+    "execution": {
+      "default_order_type": "LIMIT",
+      "allow_market_order": false,
+      "command_poll_interval_ms": 500,
+      "command_claim_timeout_ms": 10000,
+      "dispatch_timeout_ms": 5000,
+      "dispatch_max_retries": 3,
+      "cancel_open_orders_at_session_end": true
+    },
+    // 确定性退出规则；保持关闭直到测试库、Windows Bridge 和各板块 UAT 完成。
+    "exit": {
+      "enabled": false,
+      "stop_loss_ratio": 0.03,
+      "take_profit_ratio": 0.06,
+      "max_holding_trade_days": 20,
+      "monitor_interval_seconds": 30,
+      "sell_limit_discount_ratio": 0.002
+    },
+    "bridge": {
+      "base_url": "https://win-trade-01:8111",
+      "callback_url": "http://127.0.0.1:18081/internal/v1/trading/bridge-events",
+      "health_path": "/healthz",
+      "request_timeout_ms": 5000,
+      "expected_account_id": "",
+      "strategy_id": "",
+      "simulation_only": true,
+      "hmac": {
+        "key_id": "bridge-key-01",
+        "secret": "",
+        "max_clock_skew_seconds": 60,
+        "nonce_ttl_seconds": 300
+      },
+      "tls": {
+        "verify": true,
+        "ca_file": "conf/finance-sys-bridge-ca.pem",
+        "cert_file": "conf/bridge-cert.pem",
+        "key_file": "conf/bridge-key.pem"
+      }
+    },
+    "eastmoney": {
+      // Token、strategy_id、account_id 真实值只维护在 Nacos；Token 不写日志与数据库。
+      "token": "",
+      "strategy_id": "",
+      "expected_account_id": "",
+      "mode": "MODE_LIVE",
+      "max_subscribed_symbols": 45,
+      "sqlite_path": "data/bridge.db",
+      "token_health": {
+        "probe_interval_seconds": 60,
+        "transient_failure_threshold": 2,
+        "invalid_token_error_codes": [1000],
+        "auth_service_error_codes": [1025, 1026],
+        "kill_on_invalid_token": true,
+        "require_restart_after_rotation": true
+      },
+      "historical_data": {
+        "bulk_backfill_enabled": false,
+        "max_records_per_request": 33000,
+        "max_wait_time_seconds": 10,
+        "local_cache_enabled": true,
+        "provider_daily_quota_verified": false
+      },
+      "account_policy": {
+        "max_active_accounts": 1,
+        "allowed_account_ids": [],
+        "verified_boards": ["SH_MAIN"],
+        "provider_account_limit_verified": false,
+        "max_simulation_strategies_per_account": 10
+      }
+    },
+    "reconciliation": {
+      "enabled": false,
+      "interval_seconds": 60,
+      "refresh_timeout_seconds": 10,
+      "auto_repair_missing_events": true,
+      "auto_repair_missing_fills": true,
+      "kill_on_money_or_position_diff": true
+    },
+    "scheduler": {
+      "enabled": false,
+      "preflight": {"enabled": false, "hour": 8, "minute": 50},
+      "pre_open_decision": {"enabled": false, "hour": 9, "minute": 20},
+      "morning_window": {"start": "09:35:00", "end": "11:25:00"},
+      "afternoon_window": {"start": "13:05:00", "end": "14:50:00"},
+      "morning_cancel": {"enabled": false, "hour": 11, "minute": 25},
+      "afternoon_cancel": {"enabled": false, "hour": 14, "minute": 50},
+      "end_of_day_reconcile": {"enabled": false, "hour": 15, "minute": 10}
+    }
+  },
   "rules": {
     "version": "rules-v2",
     "strategy": "TEXT_REFERENCE_PRICE",

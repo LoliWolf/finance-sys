@@ -99,3 +99,19 @@ func (*StockDailyQuoteDML) QueryLatestTradeDate(ctx context.Context, db *gorm.DB
 	}
 	return model.TradeDate, nil
 }
+
+func (*StockDailyQuoteDML) QueryLatestBySymbolAt(ctx context.Context, db *gorm.DB, symbol string, asOf time.Time) (*db_model.StockDailyQuote, error) {
+	var model db_model.StockDailyQuote
+	err := db.WithContext(ctx).
+		Where("symbol = ?", symbol).
+		Where("trade_date <= ?", asOf).
+		Order("trade_date DESC, id DESC").
+		First(&model).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &model, nil
+}
