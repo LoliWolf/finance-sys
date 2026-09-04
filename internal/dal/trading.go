@@ -186,6 +186,28 @@ func (*TradingOrderDML) List(ctx context.Context, db *gorm.DB, status, symbol st
 	return models, err
 }
 
+func (*TradingOrderDML) ListByAccountAndCreatedAt(ctx context.Context, db *gorm.DB, accountID string, from, to time.Time, limit int) ([]db_model.TradingOrder, error) {
+	var models []db_model.TradingOrder
+	tx := db.WithContext(ctx).
+		Where("account_id = ?", accountID).
+		Where("created_at >= ? AND created_at < ?", from, to).
+		Order("created_at DESC, id DESC")
+	if limit > 0 {
+		tx = tx.Limit(limit)
+	}
+	err := tx.Find(&models).Error
+	return models, err
+}
+
+func (*TradingOrderDML) QueryByIDs(ctx context.Context, db *gorm.DB, ids []int64) ([]db_model.TradingOrder, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var models []db_model.TradingOrder
+	err := db.WithContext(ctx).Where("id IN ?", ids).Find(&models).Error
+	return models, err
+}
+
 func (*TradingOrderDML) QueryOpen(ctx context.Context, db *gorm.DB) ([]db_model.TradingOrder, error) {
 	var models []db_model.TradingOrder
 	err := db.WithContext(ctx).Where("status IN ?", []string{"DISPATCH_PENDING", "BRIDGE_QUEUED", "SUBMITTED", "PARTIALLY_FILLED", "UNKNOWN"}).Order("id ASC").Find(&models).Error
@@ -247,6 +269,19 @@ func (*TradingFillDML) CreateIdempotent(ctx context.Context, db *gorm.DB, model 
 func (*TradingFillDML) ListByAccount(ctx context.Context, db *gorm.DB, accountID string) ([]db_model.TradingFill, error) {
 	var models []db_model.TradingFill
 	err := db.WithContext(ctx).Where("account_id = ?", accountID).Order("traded_at ASC, id ASC").Find(&models).Error
+	return models, err
+}
+
+func (*TradingFillDML) ListByAccountAndTradedAt(ctx context.Context, db *gorm.DB, accountID string, from, to time.Time, limit int) ([]db_model.TradingFill, error) {
+	var models []db_model.TradingFill
+	tx := db.WithContext(ctx).
+		Where("account_id = ?", accountID).
+		Where("traded_at >= ? AND traded_at < ?", from, to).
+		Order("traded_at DESC, id DESC")
+	if limit > 0 {
+		tx = tx.Limit(limit)
+	}
+	err := tx.Find(&models).Error
 	return models, err
 }
 

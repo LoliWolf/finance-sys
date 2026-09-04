@@ -8,6 +8,17 @@ export function formatNumber(value: number | null | undefined, digits = 2) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: digits }).format(value)
 }
 
+export function formatCurrency(value: string | number | null | undefined, digits = 2) {
+  const numeric = typeof value === 'string' ? Number(value) : value
+  if (numeric === null || numeric === undefined || Number.isNaN(numeric)) return '—'
+  return new Intl.NumberFormat('zh-CN', {
+    style: 'currency',
+    currency: 'CNY',
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(numeric)
+}
+
 export function formatDate(value: string | null | undefined) {
   if (!value) return '—'
   return value.slice(0, 10)

@@ -40,6 +40,12 @@ const router = createRouter({
       component: () => import('./views/WorkbenchView.vue'),
       meta: { eyebrow: 'Research operations', title: '分析工作台' },
     },
+    {
+      path: '/simulation-trading',
+      name: 'simulation-trading',
+      component: () => import('./views/SimulationTradingView.vue'),
+      meta: { eyebrow: 'Paper trading ledger', title: '模拟交易' },
+    },
   ],
 })
 

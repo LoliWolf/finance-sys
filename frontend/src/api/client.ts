@@ -10,6 +10,7 @@ import type {
   RecommendationPerformanceList,
   SecurityRankingItem,
   SecurityRankingResponse,
+  TradingDashboard,
 } from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
@@ -50,6 +51,8 @@ export const api = {
   securityRankings: (query: Query = {}) => request<SecurityRankingResponse>(`/securities/rankings${queryString(query)}`),
   securitySummary: (tsCode: string, query: Query = {}) => request<SecurityRankingItem>(`/securities/${encodeURIComponent(tsCode)}/performance/summary${queryString(query)}`),
   securityRecommendations: (tsCode: string, query: Query = {}) => request<RecommendationPerformanceList>(`/securities/${encodeURIComponent(tsCode)}/recommendations/performance${queryString(query)}`),
+  tradingDashboard: (query: Query = {}) => request<TradingDashboard>(`/trading/dashboard${queryString(query)}`),
+  refreshTradingDashboard: (query: Query = {}) => request<TradingDashboard>(`/trading/dashboard/refresh${queryString(query)}`, { method: 'POST' }),
   evaluationRuns: (query: Query = {}) => request<{ items: EvaluationRun[] }>(`/admin/evaluations/recommendations/runs${queryString(query)}`),
   createEvaluationRun: (payload: Record<string, unknown>) => request<{ run_id: number; status: string; message: string }>('/admin/evaluations/recommendations/runs', {
     method: 'POST',

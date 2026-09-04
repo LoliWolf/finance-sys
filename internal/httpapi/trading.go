@@ -166,6 +166,30 @@ func (s *Server) handleGetTradingPositions(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }
 
+func (s *Server) handleGetTradingDashboard(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTradingService(w) {
+		return
+	}
+	view, err := s.trading.TradingDashboard(r.Context(), r.URL.Query().Get("trade_date"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleRefreshTradingDashboard(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTradingService(w) {
+		return
+	}
+	view, err := s.trading.RefreshTradingDashboard(r.Context(), r.URL.Query().Get("trade_date"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 func (s *Server) handleCreateTradingReconciliationRun(w http.ResponseWriter, r *http.Request) {
 	if !s.requireTradingService(w) {
 		return

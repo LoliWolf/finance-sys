@@ -135,6 +135,8 @@ button { color: inherit; }
 .return-value.positive { color: var(--positive); }
 .return-value.negative { color: var(--negative); }
 .return-value.muted { color: #928b82; }
+.positive { color: var(--positive); }
+.negative { color: var(--negative); }
 .muted { color: #8c857c; }
 .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: .94em; }
 
@@ -145,12 +147,18 @@ button { color: inherit; }
 .status-running { color: #456987; background: #e1eaf1; }
 .status-failed, .status-partial_failed { color: #a04a41; background: #f4dfdc; }
 .status-incomplete, .status-no_security, .status-unsupported { color: #756c62; background: #e8e3dc; }
+.status-filled, .status-closed, .status-verified, .status-reported { color: #326b54; background: #e1eee6; }
+.status-partially_filled, .status-submitted, .status-dispatch_pending, .status-bridge_queued, .status-exit_pending { color: #94713d; background: #f5ead1; }
+.status-rejected, .status-canceled, .status-cancelled { color: #a04a41; background: #f4dfdc; }
+.status-open { color: #456987; background: #e1eaf1; }
+.status-unknown, .status-unavailable { color: #756c62; background: #e8e3dc; }
 
 .state-panel { min-height: 250px; padding: 40px; display: grid; place-items: center; align-content: center; gap: 10px; color: #8a8177; text-align: center; }
 .state-panel strong { color: var(--ink); font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 19px; }
 .state-panel p { max-width: 330px; margin: 0; font-size: 12px; line-height: 1.6; }
 .spin { animation: spin 1s linear infinite; }
 .error-banner { margin-bottom: 18px; padding: 13px 15px; color: #923e34; background: #f5e3de; border: 1px solid rgba(181,77,67,.2); border-radius: 11px; font-size: 12px; }
+.success-banner { margin-bottom: 18px; padding: 13px 15px; color: #326b54; background: #e1eee6; border: 1px solid rgba(52,112,90,.2); border-radius: 11px; font-size: 12px; }
 .insight-note { padding: 16px 18px; color: #5e554b; background: #efe6da; border-left: 3px solid var(--terracotta); font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 14px; line-height: 1.65; }
 .recommendation-ledger-table { min-width: 1180px; }
 .recommendation-ledger-table th:nth-child(n+5):nth-child(-n+8), .recommendation-ledger-table td:nth-child(n+5):nth-child(-n+8) { text-align: right; }
@@ -200,6 +208,48 @@ button { color: inherit; }
 .toggle-row input { accent-color: var(--terracotta-deep); }
 .result-box { max-height: 320px; overflow: auto; padding: 14px; border-radius: 11px; color: #d9e4d5; background: #252a25; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; line-height: 1.65; white-space: pre-wrap; }
 
+.trading-runtime { margin-bottom: 20px; padding: 16px 18px; display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 13px; border: 1px solid var(--line); border-radius: 15px; background: rgba(250,247,241,.82); }
+.trading-runtime.is-running { border-color: rgba(52,112,90,.22); background: rgba(225,238,230,.58); }
+.trading-runtime.is-blocked { border-color: rgba(181,77,67,.19); background: rgba(245,227,222,.56); }
+.runtime-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; color: #fff8ef; background: var(--positive); }
+.is-blocked .runtime-icon { background: var(--negative); }
+.trading-runtime strong { display: block; font-size: 13px; }
+.trading-runtime p { margin: 4px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.45; }
+.runtime-meta { padding: 6px 9px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 999px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; white-space: nowrap; }
+.account-caption { margin-bottom: 13px; display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.account-caption span { display: block; color: var(--ink-soft); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.account-caption strong { display: block; margin-top: 4px; font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 18px; }
+.account-caption small { display: block; margin-top: 4px; color: #8a8278; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
+.account-caption p { margin: 0; color: var(--ink-soft); font-size: 10px; }
+.account-caption p.stale { color: var(--negative); font-weight: 650; }
+.trading-metrics { margin-bottom: 24px; }
+.trading-metrics .metric-card > strong { font-size: clamp(23px, 1.85vw, 34px); white-space: nowrap; }
+.account-empty { margin-bottom: 24px; }
+.security-cell strong { display: block; font-size: 12px; }
+.security-cell small { display: block; margin-top: 3px; color: #8a8278; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
+.pnl-ratio { display: block; margin-top: 4px; font-size: 10px; font-weight: 650; }
+.limit-pair { font-variant-numeric: tabular-nums; }
+.trade-day-header { align-items: flex-end; }
+.trade-date-control { display: grid; gap: 5px; }
+.trade-date-control label { color: var(--ink-soft); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.trade-date-control input { min-height: 36px; padding: 0 10px; color: var(--ink); background: rgba(255,255,255,.55); border: 1px solid var(--line); border-radius: 9px; outline: none; }
+.daily-trade-summary { padding: 17px 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+.daily-trade-summary > div { min-width: 0; padding: 14px 16px; display: grid; grid-template-columns: 19px 1fr; column-gap: 7px; background: rgba(250,247,241,.98); }
+.daily-trade-summary svg { grid-row: span 3; margin-top: 2px; color: var(--terracotta-deep); }
+.daily-trade-summary span { color: var(--ink-soft); font-size: 10px; }
+.daily-trade-summary strong { margin-top: 5px; overflow: hidden; font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 21px; font-weight: 600; text-overflow: ellipsis; }
+.daily-trade-summary small { margin-top: 3px; color: #8a8278; font-size: 9px; }
+.trade-side { min-width: 42px; padding: 5px 8px; display: inline-flex; justify-content: center; border-radius: 999px; font-size: 10px; font-weight: 700; }
+.trade-side.buy { color: var(--negative); background: rgba(181,77,67,.10); }
+.trade-side.sell { color: var(--positive); background: rgba(52,112,90,.10); }
+.trading-position-table { min-width: 1080px; }
+.trading-fill-table { min-width: 990px; }
+.trading-order-table { min-width: 1120px; }
+.trading-cycle-table { min-width: 1240px; }
+.order-reason { max-width: 230px; overflow: hidden; color: var(--ink-soft); text-overflow: ellipsis; }
+.recommendation-link { color: var(--terracotta-deep); font-weight: 700; }
+.recommendation-link:hover { text-decoration: underline; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: .35; } }
 
@@ -223,6 +273,7 @@ button { color: inherit; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .content-grid { display: block; }
   .content-grid > * { margin-bottom: 16px; }
+  .daily-trade-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 580px) {
@@ -241,4 +292,10 @@ button { color: inherit; }
   .page-size-select { justify-content: space-between; }
   .page-buttons { justify-content: space-between; }
   .page-button { min-width: 32px; }
+  .trading-runtime { grid-template-columns: 38px 1fr; }
+  .runtime-meta { grid-column: 2; justify-self: start; }
+  .account-caption { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .trade-day-header { align-items: flex-start; flex-direction: column; }
+  .trade-date-control, .trade-date-control input { width: 100%; }
+  .daily-trade-summary { grid-template-columns: 1fr; }
 }

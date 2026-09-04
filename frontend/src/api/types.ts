@@ -292,3 +292,148 @@ export interface DocumentRecord {
   status: string
   created_at: string
 }
+
+export interface TradingDashboardRuntime {
+  trading_enabled: boolean
+  nacos_kill_switch: boolean
+  runtime_kill_switch: boolean
+  scheduler_enabled: boolean
+  exit_enabled: boolean
+  reconciliation_enabled: boolean
+  environment: string
+  provider: string
+  config_version: number
+}
+
+export interface TradingDashboardAccount {
+  account_id: string
+  account_name: string
+  nav: string
+  balance: string
+  available_cash: string
+  frozen_cash: string
+  market_value: string
+  position_ratio: string
+  floating_pnl: string
+  cumulative_pnl: string
+  cumulative_commission: string
+  commission_data_status: string
+  terminal_state: string
+  account_state: string
+  snapshot_at: string
+  snapshot_age_seconds: number
+  snapshot_max_age_seconds: number
+  snapshot_stale: boolean
+}
+
+export interface TradingDashboardPosition {
+  id: number
+  symbol: string
+  ts_code: string
+  security_name: string
+  market: string
+  asset_type: string
+  eastmoney_symbol: string
+  volume: number
+  available_volume: number
+  today_volume: number
+  vwap: string
+  last_price: string
+  market_value: string
+  floating_pnl: string
+  floating_pnl_ratio: string
+  cycle_id: number | null
+  cycle_status: string
+  stop_loss_price: string
+  take_profit_price: string
+  holding_trade_days: number
+  max_holding_trade_days: number
+  exit_reason: string
+}
+
+export interface TradingDashboardDailySummary {
+  fill_count: number
+  buy_count: number
+  sell_count: number
+  buy_volume: number
+  sell_volume: number
+  buy_amount: string
+  sell_amount: string
+  commission: string
+  net_cash_flow: string
+}
+
+export interface TradingDashboardFill {
+  id: number
+  trading_order_id: number
+  client_order_id: string
+  symbol: string
+  ts_code: string
+  security_name: string
+  side: string
+  price: string
+  volume: number
+  amount: string
+  commission: string
+  commission_status: string
+  order_status: string
+  traded_at: string
+}
+
+export interface TradingDashboardOrder {
+  id: number
+  client_order_id: string
+  symbol: string
+  ts_code: string
+  security_name: string
+  side: string
+  order_type: string
+  limit_price: string | null
+  volume: number
+  filled_volume: number
+  filled_vwap: string | null
+  filled_amount: string
+  filled_commission: string
+  status: string
+  provider_status: string
+  error_code: string
+  error_message: string
+  created_at: string
+  submitted_at: string | null
+  finished_at: string | null
+}
+
+export interface TradingDashboardCycle {
+  id: number
+  source_recommendation_event_id: number | null
+  symbol: string
+  ts_code: string
+  security_name: string
+  status: string
+  entry_trade_date: string
+  sellable_trade_date: string
+  entry_price: string
+  initial_volume: number
+  current_volume: number
+  stop_loss_price: string
+  take_profit_price: string
+  holding_trade_days: number
+  max_holding_trade_days: number
+  exit_reason: string
+  exit_price: string | null
+  realized_pnl: string | null
+  realized_pnl_ratio: string | null
+  opened_at: string
+  closed_at: string | null
+}
+
+export interface TradingDashboard {
+  trade_date: string
+  runtime: TradingDashboardRuntime
+  account: TradingDashboardAccount | null
+  positions: TradingDashboardPosition[]
+  daily_summary: TradingDashboardDailySummary
+  fills: TradingDashboardFill[]
+  orders: TradingDashboardOrder[]
+  position_cycles: TradingDashboardCycle[]
+}

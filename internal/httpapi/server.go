@@ -155,6 +155,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/trading/orders/{clientOrderID}/cancel", s.handleCancelTradingOrder)
 		r.Get("/trading/account", s.handleGetTradingAccount)
 		r.Get("/trading/positions", s.handleGetTradingPositions)
+		r.Get("/trading/dashboard", s.handleGetTradingDashboard)
+		r.Post("/trading/dashboard/refresh", s.handleRefreshTradingDashboard)
 		r.Post("/trading/reconciliation-runs", s.handleCreateTradingReconciliationRun)
 		r.Post("/trading/kill-switch", s.handleSetTradingKillSwitch)
 		r.Get("/internal/trading-tools/recommendation-candidates", s.handleTradingToolRecommendationCandidates)

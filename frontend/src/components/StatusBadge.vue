@@ -14,6 +14,21 @@ const labels: Record<string, string> = {
   PARTIAL_FAILED: '部分失败',
   ACTIVE: '有效',
   NEEDS_REVIEW: '待复核',
+  FILLED: '全部成交',
+  PARTIALLY_FILLED: '部分成交',
+  SUBMITTED: '已报',
+  DISPATCH_PENDING: '待发送',
+  BRIDGE_QUEUED: '桥接排队',
+  REJECTED: '已拒绝',
+  CANCELED: '已撤单',
+  CANCELLED: '已撤单',
+  UNKNOWN: '待确认',
+  OPEN: '持有中',
+  EXIT_PENDING: '待退出',
+  CLOSED: '已平仓',
+  VERIFIED: '已核验',
+  REPORTED: '已上报',
+  UNAVAILABLE: '不可用',
 }
 </script>
 
