@@ -29,6 +29,18 @@ const router = createRouter({
       meta: { eyebrow: 'Recommendation trace', title: '单条推荐复盘' },
     },
     {
+      path: '/document-reports',
+      name: 'document-reports',
+      component: () => import('./views/DocumentReportsView.vue'),
+      meta: { eyebrow: 'Document archive', title: '文档报告' },
+    },
+    {
+      path: '/document-reports/:id',
+      name: 'document-report-detail',
+      component: () => import('./views/DocumentReportDetailView.vue'),
+      meta: { eyebrow: 'Document dossier', title: '单篇文档追踪报告' },
+    },
+    {
       path: '/securities',
       name: 'securities',
       component: () => import('./views/SecuritiesView.vue'),

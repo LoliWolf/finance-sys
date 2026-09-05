@@ -29,6 +29,15 @@ const labels: Record<string, string> = {
   VERIFIED: '已核验',
   REPORTED: '已上报',
   UNAVAILABLE: '不可用',
+  INGESTED: '已入库',
+  PARSED: '已解析',
+  PLANNED: '已完成分析',
+  INVALID: '无有效推荐',
+  EMPTY: '无推荐',
+  NEEDS_EVALUATION: '待补算',
+  PARTIAL: '部分可用',
+  NOT_EVALUATED: '尚未补算',
+  OUTDATED: '版本已过期',
 }
 </script>
 

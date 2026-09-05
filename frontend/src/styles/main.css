@@ -142,11 +142,12 @@ button { color: inherit; }
 
 .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; color: #655e54; background: #eee8dd; font-size: 10px; font-weight: 650; }
 .status-badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.status-ready, .status-succeeded, .status-active { color: #326b54; background: #e1eee6; }
-.status-pending, .status-queued, .status-needs_review { color: #94713d; background: #f5ead1; }
+.status-ready, .status-succeeded, .status-active, .status-planned { color: #326b54; background: #e1eee6; }
+.status-pending, .status-queued, .status-needs_review, .status-ingested, .status-parsed, .status-needs_evaluation, .status-outdated { color: #94713d; background: #f5ead1; }
 .status-running { color: #456987; background: #e1eaf1; }
 .status-failed, .status-partial_failed { color: #a04a41; background: #f4dfdc; }
-.status-incomplete, .status-no_security, .status-unsupported { color: #756c62; background: #e8e3dc; }
+.status-incomplete, .status-no_security, .status-unsupported, .status-empty, .status-not_evaluated, .status-invalid { color: #756c62; background: #e8e3dc; }
+.status-partial { color: #456987; background: #e1eaf1; }
 .status-filled, .status-closed, .status-verified, .status-reported { color: #326b54; background: #e1eee6; }
 .status-partially_filled, .status-submitted, .status-dispatch_pending, .status-bridge_queued, .status-exit_pending { color: #94713d; background: #f5ead1; }
 .status-rejected, .status-canceled, .status-cancelled { color: #a04a41; background: #f4dfdc; }
@@ -250,12 +251,70 @@ button { color: inherit; }
 .recommendation-link { color: var(--terracotta-deep); font-weight: 700; }
 .recommendation-link:hover { text-decoration: underline; }
 
+.print-only { display: none; }
+.bulk-action-bar { margin-bottom: 20px; padding: 15px 17px; display: flex; align-items: center; gap: 18px; border: 1px solid rgba(207,107,77,.24); border-radius: 14px; background: rgba(232,148,114,.08); }
+.bulk-action-bar > div { min-width: 220px; margin-right: auto; }
+.bulk-action-bar strong { display: block; font-size: 13px; }
+.bulk-action-bar span { display: block; margin-top: 4px; color: var(--ink-soft); font-size: 10px; }
+.document-report-list-table { min-width: 1260px; }
+.selection-cell { width: 44px; text-align: center !important; }
+.selection-cell input { width: 15px; height: 15px; accent-color: var(--terracotta-deep); cursor: pointer; }
+.document-title-cell { min-width: 280px; white-space: normal; }
+.document-title-cell strong { display: block; line-height: 1.45; }
+.document-title-cell small { display: block; margin-top: 5px; color: var(--ink-soft); font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
+
+.report-toolbar { margin-bottom: 22px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.report-toolbar > div { display: flex; flex-wrap: wrap; gap: 9px; }
+.report-cover { margin-bottom: 22px; }
+.report-summary-grid { margin-bottom: 22px; }
+.report-window-summary { margin-bottom: 22px; }
+.report-view-switch { margin: 28px 0 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.report-view-switch > span { color: var(--ink-soft); font-size: 10px; }
+.blogger-report-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 22px; }
+.blogger-report-card { min-width: 0; }
+.blogger-current-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+.blogger-current-strip > div { padding: 14px 16px; background: rgba(250,247,241,.96); }
+.blogger-current-strip span { display: block; color: var(--ink-soft); font-size: 9px; }
+.blogger-current-strip strong { display: block; margin-top: 6px; font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 20px; font-weight: 600; }
+.blogger-recommendation-links { padding: 13px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; border-top: 1px solid var(--line); }
+.blogger-recommendation-links button { padding: 10px 11px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink); border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.28); cursor: pointer; text-align: left; }
+.blogger-recommendation-links button:hover { border-color: rgba(207,107,77,.45); background: rgba(207,107,77,.04); }
+.blogger-recommendation-links span { overflow: hidden; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.blogger-recommendation-links small { flex: 0 0 auto; color: var(--ink-soft); font-size: 9px; }
+
+.report-recommendation-list { display: grid; gap: 18px; margin-bottom: 22px; }
+.report-recommendation-card { overflow: visible; }
+.report-recommendation-header { min-height: 77px; padding: 17px 20px; display: grid; grid-template-columns: minmax(220px, 1fr) auto 36px; align-items: center; gap: 18px; border-bottom: 1px solid var(--line); }
+.report-recommendation-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; color: var(--ink-soft); font-size: 10px; }
+.report-recommendation-meta > span:not(.direction-pill) { padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; background: rgba(255,255,255,.3); }
+.report-current-line { display: grid; grid-template-columns: 1.05fr 1fr 1fr 1.15fr; gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+.report-current-line > div { min-width: 0; padding: 13px 16px; background: rgba(250,247,241,.96); }
+.report-current-line > div > span { display: block; margin-bottom: 6px; color: var(--ink-soft); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
+.report-current-line strong { font-size: 12px; }
+.report-current-line strong small { color: var(--ink-soft); font-weight: 500; }
+.report-reason { margin: 0; padding: 9px 16px; color: #8c6645; background: #f5ead1; border-bottom: 1px solid rgba(148,113,61,.12); font-size: 10px; }
+.report-metric-table { min-width: 1040px; }
+.report-metric-table td small { color: var(--ink-soft); font-size: 9px; }
+.report-evidence-grid { padding: 19px 21px 21px; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr); gap: 24px; border-top: 1px solid var(--line); }
+.report-section-label { display: block; margin-bottom: 8px; color: var(--terracotta-deep); font-size: 9px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.report-evidence-grid p { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.75; white-space: pre-wrap; }
+.report-evidence-grid details { min-width: 0; }
+.report-evidence-grid summary { color: var(--terracotta-deep); cursor: pointer; font-size: 11px; font-weight: 650; }
+.report-evidence-grid .evidence-list { max-height: 300px; overflow-y: auto; }
+.report-untrackable { margin: 22px 0; }
+.print-blogger-summary { margin: 22px 0; }
+.report-disclaimer { margin-top: 24px; padding: 20px 22px; color: #e9dfd1; background: #312e29; border-radius: 15px; }
+.report-disclaimer strong { font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 16px; }
+.report-disclaimer p { margin: 8px 0 10px; color: rgba(255,248,239,.68); font-size: 10px; line-height: 1.7; }
+.report-disclaimer small { color: rgba(255,248,239,.45); font-size: 9px; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: .35; } }
 
 @media (max-width: 1260px) {
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 6; }
+  .blogger-report-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 900px) {
@@ -274,6 +333,13 @@ button { color: inherit; }
   .content-grid { display: block; }
   .content-grid > * { margin-bottom: 16px; }
   .daily-trade-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bulk-action-bar, .report-toolbar, .report-view-switch { align-items: stretch; flex-direction: column; }
+  .bulk-action-bar > div { margin-right: 0; }
+  .report-toolbar > div { width: 100%; }
+  .report-current-line { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .report-recommendation-header { grid-template-columns: 1fr 36px; }
+  .report-recommendation-meta { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+  .report-evidence-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 580px) {
@@ -298,4 +364,53 @@ button { color: inherit; }
   .trade-day-header { align-items: flex-start; flex-direction: column; }
   .trade-date-control, .trade-date-control input { width: 100%; }
   .daily-trade-summary { grid-template-columns: 1fr; }
+  .report-toolbar > div .button { flex: 1 1 auto; }
+  .blogger-current-strip, .report-current-line { grid-template-columns: 1fr; }
+  .blogger-recommendation-links { grid-template-columns: 1fr; }
+}
+
+@media print {
+  @page { size: A4 portrait; margin: 11mm; }
+  html, body { min-width: 0; background: #fff; }
+  body.document-report-printing { color: #26231f; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.document-report-printing .sidebar,
+  body.document-report-printing .topbar,
+  body.document-report-printing .no-print,
+  body.document-report-printing .no-print-view { display: none !important; }
+  body.document-report-printing .print-only { display: block !important; }
+  body.document-report-printing .app-shell { min-height: 0; display: block; }
+  body.document-report-printing .workspace { display: block; }
+  body.document-report-printing .page-frame { width: 100%; margin: 0; padding: 0; }
+  body.document-report-printing .document-report-detail { width: 100%; }
+  body.document-report-printing .detail-hero { padding: 24px; border-radius: 12px; }
+  body.document-report-printing .detail-hero h1 { font-size: 31px; }
+  body.document-report-printing .metric-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+  body.document-report-printing .metric-card { min-height: 105px; padding: 12px; border-radius: 10px; box-shadow: none; }
+  body.document-report-printing .metric-card > strong { font-size: 22px; }
+  body.document-report-printing .panel { border-radius: 10px; box-shadow: none; }
+  body.document-report-printing .panel-header { min-height: 58px; padding: 12px 14px; }
+  body.document-report-printing .panel-header h2 { font-size: 16px; }
+  body.document-report-printing .table-wrap { overflow: visible; }
+  body.document-report-printing .data-table { min-width: 0; table-layout: auto; white-space: normal; }
+  body.document-report-printing .data-table th { padding: 7px 6px; font-size: 7px; }
+  body.document-report-printing .data-table td { padding: 8px 6px; font-size: 8px; }
+  body.document-report-printing .status-badge { padding: 3px 5px; font-size: 7px; }
+  body.document-report-printing .report-recommendation-list { gap: 11px; }
+  body.document-report-printing .report-recommendation-card { break-before: auto; break-after: auto; }
+  body.document-report-printing .report-recommendation-header { min-height: 62px; padding: 11px 13px; grid-template-columns: minmax(180px, 1fr) auto; break-after: avoid; }
+  body.document-report-printing .report-recommendation-meta { font-size: 8px; }
+  body.document-report-printing .report-current-line { grid-template-columns: repeat(4, minmax(0, 1fr)); break-inside: avoid; }
+  body.document-report-printing .report-current-line > div { padding: 9px 10px; }
+  body.document-report-printing .report-current-line strong { font-size: 9px; }
+  body.document-report-printing .report-metric-table { min-width: 0; }
+  body.document-report-printing .report-evidence-grid { padding: 12px 14px; grid-template-columns: 1fr; gap: 10px; }
+  body.document-report-printing .report-evidence-grid p,
+  body.document-report-printing .evidence-item { font-size: 8px; line-height: 1.55; }
+  body.document-report-printing details > :not(summary) { display: block !important; }
+  body.document-report-printing .report-evidence-grid .evidence-list { max-height: none; overflow: visible; }
+  body.document-report-printing .print-blogger-summary { break-before: page; }
+  body.document-report-printing tr { break-inside: avoid; }
+  body.document-report-printing .report-untrackable,
+  body.document-report-printing .report-disclaimer { break-inside: avoid; }
+  body.document-report-printing .report-disclaimer { border-radius: 10px; }
 }

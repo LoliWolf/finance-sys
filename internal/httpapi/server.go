@@ -67,6 +67,8 @@ type performanceStatsService interface {
 	PriceSeries(context.Context, int64, int, int) (*stats.PriceSeriesResponse, error)
 	SecurityRankings(context.Context, stats.Filter) (*stats.SecurityRankingResponse, error)
 	SecuritySummary(context.Context, string, stats.Filter) (*stats.SecurityRankingItem, error)
+	DocumentReports(context.Context, stats.DocumentReportListFilter) (*stats.DocumentReportList, error)
+	DocumentReport(context.Context, int64) (*stats.DocumentReport, error)
 }
 
 func NewServer(
@@ -115,7 +117,9 @@ func (s *Server) Router() http.Handler {
 	router.Route(apiPrefix, func(r chi.Router) {
 		r.Get("/documents", s.handleListDocuments)
 		r.Post("/documents/upload", s.handleUploadDocument)
+		r.Post("/documents/evaluation-runs", s.handleCreateDocumentEvaluationRun)
 		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
+		r.Get("/documents/{id}/report", s.handleGetDocumentReport)
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
 		r.Get("/documents/{id}/recommendations", s.handleListDocumentRecommendations)
 		r.Get("/documents/{id}/resolution-runs", s.handleListDocumentResolutionRuns)
@@ -127,6 +131,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/recommendations/{id}/performance", s.handleGetRecommendationPerformance)
 		r.Get("/recommendations/{id}/price-series", s.handleGetRecommendationPriceSeries)
 		r.Get("/recommendation-performance", s.handleListRecommendationPerformance)
+		r.Get("/document-reports", s.handleListDocumentReports)
 		r.Get("/bloggers/rankings", s.handleBloggerRankings)
 		r.Get("/bloggers/{id}/performance/summary", s.handleBloggerPerformanceSummary)
 		r.Get("/bloggers/{id}/performance/timeseries", s.handleBloggerPerformanceTimeseries)

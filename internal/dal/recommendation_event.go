@@ -16,14 +16,16 @@ var RecommendationEvents = &RecommendationEventDML{}
 type RecommendationEventDML struct{}
 
 type RecommendationEventEvaluationFilter struct {
-	DateFrom   *time.Time
-	DateTo     *time.Time
-	BloggerIDs []int64
-	Symbols    []string
-	EventIDs   []int64
-	OnlyActive bool
-	AfterID    int64
-	Limit      int
+	DateFrom          *time.Time
+	DateTo            *time.Time
+	DocumentIDs       []int64
+	BloggerIDs        []int64
+	Symbols           []string
+	EventIDs          []int64
+	OnlyActive        bool
+	ExcludeSuperseded bool
+	AfterID           int64
+	Limit             int
 }
 
 func (*RecommendationEventDML) Create(ctx context.Context, db *gorm.DB, model *db_model.RecommendationEvent) error {
@@ -115,6 +117,9 @@ func (*RecommendationEventDML) QueryForEvaluation(ctx context.Context, db *gorm.
 	if filter.DateTo != nil {
 		tx = tx.Where("recommend_date <= ?", *filter.DateTo)
 	}
+	if len(filter.DocumentIDs) > 0 {
+		tx = tx.Where("source_document_id IN ?", filter.DocumentIDs)
+	}
 	if len(filter.BloggerIDs) > 0 {
 		tx = tx.Where("blogger_id IN ?", filter.BloggerIDs)
 	}
@@ -126,6 +131,8 @@ func (*RecommendationEventDML) QueryForEvaluation(ctx context.Context, db *gorm.
 	}
 	if filter.OnlyActive {
 		tx = tx.Where("status = ?", "ACTIVE")
+	} else if filter.ExcludeSuperseded {
+		tx = tx.Where("status <> ?", "SUPERSEDED")
 	}
 	if filter.AfterID > 0 {
 		tx = tx.Where("id > ?", filter.AfterID)
