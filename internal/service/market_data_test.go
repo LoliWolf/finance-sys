@@ -233,3 +233,43 @@ func TestStockDailyQuoteFromProviderRowMapsFieldsAndRawContent(t *testing.T) {
 	require.Equal(t, "000001.SZ", raw["ts_code"])
 	require.Equal(t, float64(10.5), raw["close"])
 }
+
+func TestAssociateStockDailyProviderRowsRejectsWrongDate(t *testing.T) {
+	tradeDate := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
+	securities := []db_model.SecurityMaster{{ID: 1, TSCode: "300343.SZ", AssetType: "STOCK"}}
+	rows := []stockDailyProviderRow{{assetType: "A_SHARE", row: marketdata.ProviderRow{Values: map[string]any{
+		"ts_code": "300343.SZ", "trade_date": "20260707", "close": 10.5,
+	}}}}
+	quotes, missing, providerErrors, err := associateStockDailyProviderRows(context.Background(), 99, securities, tradeDate, rows, nil, 7, 10)
+	require.NoError(t, err)
+	require.Empty(t, quotes)
+	require.Equal(t, 1, providerErrors)
+	require.Len(t, missing, 1)
+	require.Equal(t, MissingReasonInvalidIdentity, missing[0].Reason)
+	require.Equal(t, "300343.SZ", missing[0].TSCode)
+}
+
+func TestStockDailyQuoteFromProviderRowRejectsWrongSecurity(t *testing.T) {
+	tradeDate := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
+	quote, err := stockDailyQuoteFromProviderRow(db_model.SecurityMaster{TSCode: "300343.SZ"}, tradeDate, marketdata.ProviderRow{Values: map[string]any{
+		"ts_code": "300006.SZ", "trade_date": "20260706", "close": 10.5,
+	}}, 7)
+	require.ErrorIs(t, err, marketdata.ErrInvalidDailyIdentity)
+	require.Nil(t, quote)
+}
+
+func TestAssociateStockDailyProviderRowsPreservesHistoryForDelistedSecurity(t *testing.T) {
+	tradeDate := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	securities := []db_model.SecurityMaster{{ID: 1, TSCode: "002808.SZ", AssetType: "STOCK", ListStatus: "D", IsActive: false}}
+	rows := []stockDailyProviderRow{{assetType: "A_SHARE", row: marketdata.ProviderRow{Values: map[string]any{
+		"ts_code": "002808.SZ", "trade_date": "20260708", "close": 0.2,
+	}}}}
+	quotes, missing, providerErrors, err := associateStockDailyProviderRows(context.Background(), 99, securities, tradeDate, rows, nil, 7, 10)
+	require.NoError(t, err)
+	require.Empty(t, missing)
+	require.Zero(t, providerErrors)
+	require.Len(t, quotes, 1)
+	require.Equal(t, "002808.SZ", quotes[0].TSCode)
+	require.Equal(t, "D", quotes[0].ListStatus)
+	require.False(t, securities[0].IsActive, "historical sync must not reactivate trading eligibility")
+}

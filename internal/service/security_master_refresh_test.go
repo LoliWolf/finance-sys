@@ -65,6 +65,7 @@ func TestStockDailyQuoteFromProviderRowUsesDCPctChange(t *testing.T) {
 	model.ID = 7
 	quote, err := stockDailyQuoteFromProviderRow(*model, time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC), marketdata.ProviderRow{Values: map[string]any{
 		"ts_code":    "BK1128.DC",
+		"trade_date": "20260807",
 		"open":       1000.0,
 		"high":       1020.0,
 		"low":        990.0,

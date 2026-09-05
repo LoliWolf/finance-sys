@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,10 +32,11 @@ const (
 	MarketDataSyncStatusPartialFailed = "PARTIAL_FAILED"
 	MarketDataSyncStatusFailed        = "FAILED"
 
-	MissingReasonNotReturned   = "NOT_RETURNED"
-	MissingReasonProviderEmpty = "PROVIDER_EMPTY"
-	MissingReasonProviderError = "PROVIDER_ERROR"
-	MissingReasonUnknownSymbol = "UNKNOWN_PROVIDER_SYMBOL"
+	MissingReasonNotReturned     = "NOT_RETURNED"
+	MissingReasonProviderEmpty   = "PROVIDER_EMPTY"
+	MissingReasonProviderError   = "PROVIDER_ERROR"
+	MissingReasonUnknownSymbol   = "UNKNOWN_PROVIDER_SYMBOL"
+	MissingReasonInvalidIdentity = "INVALID_PROVIDER_IDENTITY"
 
 	defaultStockDailyTaskConcurrency = 10
 )
@@ -179,7 +181,7 @@ func (s *MarketDataService) ExecuteStockDailyRun(ctx context.Context, syncRunID 
 		return s.failRun(ctx, syncRunID, "NO_TOKEN", fmt.Errorf("no enabled market_data.tushare token"))
 	}
 
-	securities, err := dal.SecurityMasters.QueryActiveByAssetTypes(ctx, s.db, marketDataSecurityAssetTypes(cfg.StockDaily.SyncAssetTypes))
+	securities, err := dal.SecurityMasters.QueryForQuoteDate(ctx, s.db, marketDataSecurityAssetTypes(cfg.StockDaily.SyncAssetTypes), run.TradeDate)
 	if err != nil {
 		return s.failRun(ctx, syncRunID, "SECURITY_QUERY_FAILED", err)
 	}
@@ -244,35 +246,37 @@ func (s *MarketDataService) ExecuteStockDailyRun(ctx context.Context, syncRunID 
 	providerErrors += rowProviderErrors
 
 	if err := retryRetryableDBError(ctx, 20, s.logger, func() error {
-		if err := dal.StockDailyQuotes.UpsertBatch(ctx, s.db, quotes); err != nil {
-			return err
-		}
-		if err := dal.MarketDataSyncMissingItems.DeleteByRunID(ctx, s.db, syncRunID); err != nil {
-			return err
-		}
-		if err := dal.MarketDataSyncMissingItems.CreateBatch(ctx, s.db, missing); err != nil {
-			return err
-		}
-		status := MarketDataSyncStatusSucceeded
-		failedCount := providerErrors
-		if len(quotes) == 0 && (len(missing) > 0 || providerErrors > 0) {
-			status = MarketDataSyncStatusFailed
-		} else if len(missing) > 0 || providerErrors > 0 {
-			status = MarketDataSyncStatusPartialFailed
-		}
-		now := time.Now().UTC()
-		return dal.MarketDataSyncRuns.UpdateProgressByID(ctx, s.db, syncRunID, map[string]any{
-			"status":         status,
-			"expected_count": len(securities),
-			"fetched_count":  len(quotes) + len(missing),
-			"matched_count":  len(quotes),
-			"upserted_count": len(quotes),
-			"missing_count":  len(missing),
-			"failed_count":   failedCount,
-			"token_alias":    tokenAlias,
-			"finished_at":    now,
-			"error_code":     "",
-			"error_message":  "",
+		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := dal.StockDailyQuotes.UpsertBatch(ctx, tx, quotes); err != nil {
+				return err
+			}
+			if err := dal.MarketDataSyncMissingItems.DeleteByRunID(ctx, tx, syncRunID); err != nil {
+				return err
+			}
+			if err := dal.MarketDataSyncMissingItems.CreateBatch(ctx, tx, missing); err != nil {
+				return err
+			}
+			status := MarketDataSyncStatusSucceeded
+			failedCount := providerErrors
+			if len(quotes) == 0 && (len(missing) > 0 || providerErrors > 0) {
+				status = MarketDataSyncStatusFailed
+			} else if len(missing) > 0 || providerErrors > 0 {
+				status = MarketDataSyncStatusPartialFailed
+			}
+			now := time.Now().UTC()
+			return dal.MarketDataSyncRuns.UpdateProgressByID(ctx, tx, syncRunID, map[string]any{
+				"status":         status,
+				"expected_count": len(securities),
+				"fetched_count":  len(quotes) + len(missing),
+				"matched_count":  len(quotes),
+				"upserted_count": len(quotes),
+				"missing_count":  len(missing),
+				"failed_count":   failedCount,
+				"token_alias":    tokenAlias,
+				"finished_at":    now,
+				"error_code":     "",
+				"error_message":  "",
+			})
 		})
 	}); err != nil {
 		return s.failRun(ctx, syncRunID, "PERSIST_FAILED", err)
@@ -347,6 +351,9 @@ func marketDataSecurityAssetTypes(values []string) []string {
 }
 
 func stockDailyQuoteFromProviderRow(security db_model.SecurityMaster, tradeDate time.Time, row marketdata.ProviderRow, configVersion int64) (*db_model.StockDailyQuote, error) {
+	if err := marketdata.ValidateDailyIdentity(security.TSCode, tradeDate, row.Values); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(row.Values)
 	if err != nil {
 		return nil, err
@@ -415,7 +422,11 @@ func associateStockDailyProviderRows(
 			defer resultMu.Unlock()
 			if err != nil {
 				providerErrors++
-				missing = append(missing, missingItem(syncRunID, security, tradeDate, MissingReasonProviderError, err.Error()))
+				reason := MissingReasonProviderError
+				if errors.Is(err, marketdata.ErrInvalidDailyIdentity) {
+					reason = MissingReasonInvalidIdentity
+				}
+				missing = append(missing, missingItem(syncRunID, security, tradeDate, reason, err.Error()))
 				return nil
 			}
 			quotes = append(quotes, *quote)
@@ -435,6 +446,8 @@ func associateStockDailyProviderRows(
 		}
 		missing = append(missing, missingItem(syncRunID, security, tradeDate, MissingReasonNotReturned, "provider result did not include local security"))
 	}
+	// Concurrent row conversion must not randomize the database lock order.
+	sort.Slice(quotes, func(i, j int) bool { return quotes[i].TSCode < quotes[j].TSCode })
 	return quotes, missing, providerErrors, ctx.Err()
 }
 
@@ -619,7 +632,7 @@ func unknownProviderMissingItem(syncRunID int64, tsCode string, assetType string
 		Symbol:       symbol,
 		TradeDate:    dateOnlyUTC(tradeDate),
 		Reason:       MissingReasonUnknownSymbol,
-		Message:      fmt.Sprintf("provider returned %s row not present in active security_master", assetType),
+		Message:      fmt.Sprintf("provider returned %s row not present in security_master for the requested trade date", assetType),
 		SecurityName: "",
 	}
 }

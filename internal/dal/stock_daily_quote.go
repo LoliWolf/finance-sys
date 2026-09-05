@@ -19,8 +19,11 @@ func (*StockDailyQuoteDML) UpsertBatch(ctx context.Context, db *gorm.DB, models 
 	if len(models) == 0 {
 		return nil
 	}
+	// GORM backfills IDs even if a later batch rolls back. Never reuse those IDs
+	// for an upsert: MySQL also matches conflicts on the primary key.
+	models = append([]db_model.StockDailyQuote(nil), models...)
 	const batchSize = 300
-	return db.WithContext(ctx).Clauses(clause.OnConflict{
+	return db.WithContext(ctx).Omit("id").Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "ts_code"}, {Name: "trade_date"}, {Name: "source"}},
 		DoUpdates: clause.Assignments(stockDailyQuoteUpsertAssignments()),
 	}).CreateInBatches(models, batchSize).Error

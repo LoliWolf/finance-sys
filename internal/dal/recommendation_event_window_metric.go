@@ -17,7 +17,9 @@ func (*RecommendationEventWindowMetricDML) UpsertBatch(ctx context.Context, db *
 	if len(models) == 0 {
 		return nil
 	}
-	return db.WithContext(ctx).Clauses(clause.OnConflict{
+	// Metrics are addressed by their business key, never by a backfilled ID.
+	models = append([]db_model.RecommendationEventWindowMetric(nil), models...)
+	return db.WithContext(ctx).Omit("id").Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "recommendation_event_id"}, {Name: "window_days"}, {Name: "quote_source"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"blogger_id", "security_master_id", "ts_code", "symbol", "security_name", "asset_type", "market", "industry", "sector_type",

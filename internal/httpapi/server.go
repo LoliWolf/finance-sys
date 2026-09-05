@@ -119,6 +119,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/documents/upload", s.handleUploadDocument)
 		r.Post("/documents/evaluation-runs", s.handleCreateDocumentEvaluationRun)
 		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
+		r.Post("/admin/documents/{id}/untrackable-targets/{targetID}/recover", s.handleRecoverUntrackableTarget)
 		r.Get("/documents/{id}/report", s.handleGetDocumentReport)
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
 		r.Get("/documents/{id}/recommendations", s.handleListDocumentRecommendations)

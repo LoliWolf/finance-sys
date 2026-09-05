@@ -370,9 +370,10 @@ button { color: inherit; }
 }
 
 @media print {
-  @page { size: A4 portrait; margin: 11mm; }
-  html, body { min-width: 0; background: #fff; }
-  body.document-report-printing { color: #26231f; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  @page document-report { size: A4 portrait; margin: 0; }
+  html:has(body.document-report-printing),
+  body.document-report-printing { min-width: 0; min-height: 0; background: #f5f1e9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.document-report-printing { page: document-report; color: var(--ink); }
   body.document-report-printing .sidebar,
   body.document-report-printing .topbar,
   body.document-report-printing .no-print,
@@ -381,36 +382,82 @@ button { color: inherit; }
   body.document-report-printing .app-shell { min-height: 0; display: block; }
   body.document-report-printing .workspace { display: block; }
   body.document-report-printing .page-frame { width: 100%; margin: 0; padding: 0; }
-  body.document-report-printing .document-report-detail { width: 100%; }
-  body.document-report-printing .detail-hero { padding: 24px; border-radius: 12px; }
-  body.document-report-printing .detail-hero h1 { font-size: 31px; }
-  body.document-report-printing .metric-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
-  body.document-report-printing .metric-card { min-height: 105px; padding: 12px; border-radius: 10px; box-shadow: none; }
-  body.document-report-printing .metric-card > strong { font-size: 22px; }
-  body.document-report-printing .panel { border-radius: 10px; box-shadow: none; }
-  body.document-report-printing .panel-header { min-height: 58px; padding: 12px 14px; }
+  /* Paint to the paper edge; clone content padding so every page keeps a readable inset. */
+  body.document-report-printing .document-report-detail { width: 100%; padding: 12mm 11mm; -webkit-box-decoration-break: clone; box-decoration-break: clone; overflow-wrap: anywhere; orphans: 3; widows: 3; }
+  body.document-report-printing .detail-hero,
+  body.document-report-printing .metric-card,
+  body.document-report-printing .panel,
+  body.document-report-printing .evidence-item,
+  body.document-report-printing .report-disclaimer { border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
+  body.document-report-printing .detail-hero { margin-bottom: 20px; padding: 0 0 18px; color: var(--ink); border-bottom: 2px solid var(--terracotta); }
+  body.document-report-printing .detail-hero::after { display: none; }
+  body.document-report-printing .detail-hero .kicker { color: var(--terracotta-deep); }
+  body.document-report-printing .detail-hero h1 { font-size: 31px; line-height: 1.25; }
+  body.document-report-printing .detail-hero p { color: var(--ink-soft); font-size: 11px; }
+  body.document-report-printing .detail-meta { margin-top: 14px; gap: 7px 14px; }
+  body.document-report-printing .detail-meta span { padding: 0; border: 0; border-radius: 0; color: var(--ink-soft); background: transparent; font-size: 9px; }
+  body.document-report-printing .metric-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; padding-bottom: 18px; border-bottom: 1px solid var(--line-strong); }
+  body.document-report-printing .metric-card { min-height: 86px; padding: 0 12px; color: var(--ink); }
+  body.document-report-printing .metric-card:first-child { padding-left: 0; }
+  body.document-report-printing .metric-card:last-child { padding-right: 0; }
+  body.document-report-printing .metric-card + .metric-card { border-left: 1px solid var(--line); }
+  body.document-report-printing .metric-card .metric-label,
+  body.document-report-printing .metric-card p { color: var(--ink-soft); font-size: 9px; }
+  body.document-report-printing .metric-label svg { display: none; }
+  body.document-report-printing .metric-card > strong { margin-top: 10px; font-size: 25px; }
+  body.document-report-printing .panel-header { min-height: 58px; padding: 12px 0; }
   body.document-report-printing .panel-header h2 { font-size: 16px; }
   body.document-report-printing .table-wrap { overflow: visible; }
   body.document-report-printing .data-table { min-width: 0; table-layout: auto; white-space: normal; }
-  body.document-report-printing .data-table th { padding: 7px 6px; font-size: 7px; }
-  body.document-report-printing .data-table td { padding: 8px 6px; font-size: 8px; }
-  body.document-report-printing .status-badge { padding: 3px 5px; font-size: 7px; }
-  body.document-report-printing .report-recommendation-list { gap: 11px; }
-  body.document-report-printing .report-recommendation-card { break-before: auto; break-after: auto; }
-  body.document-report-printing .report-recommendation-header { min-height: 62px; padding: 11px 13px; grid-template-columns: minmax(180px, 1fr) auto; break-after: avoid; }
-  body.document-report-printing .report-recommendation-meta { font-size: 8px; }
-  body.document-report-printing .report-current-line { grid-template-columns: repeat(4, minmax(0, 1fr)); break-inside: avoid; }
-  body.document-report-printing .report-current-line > div { padding: 9px 10px; }
-  body.document-report-printing .report-current-line strong { font-size: 9px; }
+  body.document-report-printing .data-table th { padding: 8px 6px; color: var(--ink-soft); background: transparent; font-size: 8px; }
+  body.document-report-printing .data-table td { padding: 8px 6px; font-size: 9px; }
+  body.document-report-printing .status-badge { padding: 0; border-radius: 0; background: transparent; font-size: 8px; }
+  /* Use block flow so recommendation sections and evidence can move to the next page together. */
+  body.document-report-printing .report-recommendation-list { display: block; }
+  body.document-report-printing .report-recommendation-card { margin-bottom: 22px; padding-top: 12px; border-top: 1px solid var(--line-strong); }
+  body.document-report-printing .report-recommendation-card:last-child { margin-bottom: 0; }
+  body.document-report-printing .report-recommendation-header { min-height: 56px; padding: 0 0 12px; grid-template-columns: minmax(180px, 1fr) auto; }
+  body.document-report-printing .report-recommendation-header .avatar { display: none; }
+  body.document-report-printing .report-recommendation-header .identity-cell strong { font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: 18px; }
+  body.document-report-printing .report-recommendation-header .identity-cell small { max-width: none; overflow: visible; }
+  body.document-report-printing .report-recommendation-meta { grid-column: auto; grid-row: auto; justify-content: flex-end; font-size: 9px; }
+  body.document-report-printing .report-recommendation-meta > span { padding: 0; border: 0; border-radius: 0; background: transparent; }
+  body.document-report-printing .direction-pill { min-width: 0; height: auto; font-size: 9px; }
+  body.document-report-printing .report-current-line { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; background: transparent; }
+  body.document-report-printing .report-current-line > div { padding: 12px 0; background: transparent; }
+  body.document-report-printing .report-current-line strong { font-size: 10px; }
+  body.document-report-printing .report-reason { padding: 9px 0; background: transparent; }
   body.document-report-printing .report-metric-table { min-width: 0; }
-  body.document-report-printing .report-evidence-grid { padding: 12px 14px; grid-template-columns: 1fr; gap: 10px; }
+  body.document-report-printing .report-evidence-grid { display: block; padding: 14px 0 0; }
+  body.document-report-printing .report-evidence-grid > * + * { margin-top: 10px; }
   body.document-report-printing .report-evidence-grid p,
-  body.document-report-printing .evidence-item { font-size: 8px; line-height: 1.55; }
+  body.document-report-printing .evidence-item { font-size: 10px; line-height: 1.7; }
   body.document-report-printing details > :not(summary) { display: block !important; }
-  body.document-report-printing .report-evidence-grid .evidence-list { max-height: none; overflow: visible; }
-  body.document-report-printing .print-blogger-summary { break-before: page; }
-  body.document-report-printing tr { break-inside: avoid; }
+  body.document-report-printing .report-evidence-grid .evidence-list { display: block; max-height: none; overflow: visible; }
+  body.document-report-printing .evidence-item { padding: 0 0 0 12px; border-left: 2px solid var(--terracotta); }
+  body.document-report-printing .evidence-item + .evidence-item { margin-top: 10px; }
+  body.document-report-printing .print-blogger-summary { margin-top: 0; break-before: page; }
+  body.document-report-printing .report-disclaimer { padding: 18px 0 0; color: var(--ink); border-top: 1px solid var(--line-strong); }
+  body.document-report-printing .report-disclaimer p,
+  body.document-report-printing .report-disclaimer small { color: var(--ink-soft); }
+  /* Avoid splits when a block fits on a page; oversized text can still flow across pages. */
+  body.document-report-printing .report-cover,
+  body.document-report-printing .report-summary-grid,
+  body.document-report-printing .report-window-summary,
+  body.document-report-printing .report-recommendation-card,
+  body.document-report-printing .report-recommendation-header,
+  body.document-report-printing .report-current-line,
+  body.document-report-printing .report-recommendation-card > .table-wrap,
+  body.document-report-printing .report-evidence-grid > div:first-child,
+  body.document-report-printing .evidence-item,
+  body.document-report-printing tr,
   body.document-report-printing .report-untrackable,
-  body.document-report-printing .report-disclaimer { break-inside: avoid; }
-  body.document-report-printing .report-disclaimer { border-radius: 10px; }
+  body.document-report-printing .report-disclaimer { page-break-inside: avoid; break-inside: avoid; }
+  body.document-report-printing .panel-header,
+  body.document-report-printing .report-recommendation-header,
+  body.document-report-printing .report-current-line,
+  body.document-report-printing .report-section-label,
+  body.document-report-printing .report-evidence-grid summary,
+  body.document-report-printing .evidence-item small { page-break-after: avoid; break-after: avoid; }
+  body.document-report-printing thead { display: table-header-group; }
 }

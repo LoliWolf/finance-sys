@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
 
 	"finance-sys/internal/domain/db_model"
 
@@ -167,6 +168,22 @@ func (*SecurityMasterDML) QueryActiveByAssetTypes(ctx context.Context, db *gorm.
 	tx := db.WithContext(ctx).
 		Where("is_active = ?", true).
 		Where("list_status = ?", "L").
+		Order("ts_code ASC")
+	if len(assetTypes) > 0 {
+		tx = tx.Where("asset_type IN ?", assetTypes)
+	}
+	if err := tx.Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
+// Historical quotes belong to the listing interval, not today's trading status.
+func (*SecurityMasterDML) QueryForQuoteDate(ctx context.Context, db *gorm.DB, assetTypes []string, tradeDate time.Time) ([]db_model.SecurityMaster, error) {
+	var models []db_model.SecurityMaster
+	tx := db.WithContext(ctx).
+		Where("(list_date IS NULL OR list_date <= ?)", tradeDate).
+		Where("(delist_date IS NULL OR delist_date >= ?)", tradeDate).
 		Order("ts_code ASC")
 	if len(assetTypes) > 0 {
 		tx = tx.Where("asset_type IN ?", assetTypes)

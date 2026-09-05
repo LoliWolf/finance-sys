@@ -20,6 +20,8 @@ func (*MarketDataSyncMissingItemDML) CreateBatch(ctx context.Context, db *gorm.D
 	if len(models) == 0 {
 		return nil
 	}
+	// Keep generated IDs private to this attempt, including rolled-back batches.
+	models = append([]db_model.MarketDataSyncMissingItem(nil), models...)
 	const batchSize = 300
-	return db.WithContext(ctx).CreateInBatches(models, batchSize).Error
+	return db.WithContext(ctx).Omit("id").CreateInBatches(models, batchSize).Error
 }
