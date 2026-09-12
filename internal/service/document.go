@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"finance-sys/internal/agentclient"
@@ -35,15 +36,17 @@ type ruleEngine interface {
 }
 
 type DocumentService struct {
-	db         *gorm.DB
-	runtime    *config.Runtime
-	parser     documentParser
-	analyzer   planAnalyzer
-	assembler  *CandidateAssembler
-	rules      ruleEngine
-	observer   *ResolutionObserver
-	processing *ProcessingPools
-	logger     *slog.Logger
+	db             *gorm.DB
+	runtime        *config.Runtime
+	parser         documentParser
+	analyzer       planAnalyzer
+	assembler      *CandidateAssembler
+	rules          ruleEngine
+	observer       *ResolutionObserver
+	processing     *ProcessingPools
+	logger         *slog.Logger
+	analysisMu     sync.Mutex
+	activeAnalyses map[int64]struct{}
 }
 
 func NewDocumentService(
@@ -117,11 +120,39 @@ func (s *DocumentService) AnalyzeDocumentForTradeDate(ctx context.Context, docum
 }
 
 func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
+	release, err := s.acquireDocumentAnalysis(documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	plans, analyzeErr := s.analyzeDocumentUnlocked(ctx, documentID)
+	if analyzeErr != nil {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := dal.Documents.RestoreFailedAnalysis(cleanup, s.db, documentID); err != nil && s.logger != nil {
+			s.logger.Error("restore failed analysis state", "document_id", documentID, "error", err.Error())
+		}
+	}
+	return plans, analyzeErr
+}
+
+func (s *DocumentService) analyzeDocumentUnlocked(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
 	cfg := s.currentConfig()
+	// Include OCR/queue waiting in the same document budget passed to the Agent.
+	budgetMS := cfg.LLM.TimeoutMS
+	if cfg.Agent.Enabled {
+		budgetMS = cfg.Agent.TimeoutMS
+	}
+	if budgetMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(budgetMS)*time.Millisecond)
+		defer cancel()
+	}
 	tradeDate := s.tradeDate(cfg)
 	if override, ok := domain.TradeDateFromContext(ctx); ok {
 		tradeDate = override
 	}
+	ctx = domain.ContextWithTradeDate(ctx, tradeDate)
 	s.logger.InfoContext(ctx, "document service analyze start", "document_id", documentID)
 	documentModel, err := dal.Documents.QueryByID(ctx, s.db, documentID)
 	if err != nil {
@@ -188,7 +219,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after parse failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterParseFailure(parseErr)))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(documentStatusAfterParseFailure(parseErr)))
 		return nil, parseErr
 	}
 	if !parseRunHasAnalyzableText(*parseRun) {
@@ -198,10 +229,10 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after empty parse result", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusInvalid))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusInvalid))
 		return nil, err
 	}
-	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusParsed)); err != nil {
+	if err := s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusParsed)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status parsed failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
@@ -223,7 +254,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after analyzer failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterAnalyzerFailure(analysis, err)))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(documentStatusAfterAnalyzerFailure(analysis, err)))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze llm success", "document_id", documentID, "parse_run_id", parseRun.ID, "intent_count", len(intents))
@@ -235,7 +266,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 				s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after invalid intent", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 				return nil, obsErr
 			}
-			_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+			_ = s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusFailed))
 			return nil, fmt.Errorf("invalid plan intent: %w", err)
 		}
 	}
@@ -249,7 +280,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after candidate assembly failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterAnalysisFailure(resolutions, err)))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(documentStatusAfterAnalysisFailure(resolutions, err)))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze candidate assembly success", "document_id", documentID, "parse_run_id", parseRun.ID, "trackable_intent_count", len(trackableIntents), "raw_intent_count", len(intents))
@@ -275,10 +306,10 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after persist failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusFailed))
 		return nil, err
 	}
-	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusPlanned)); err != nil {
+	if err := s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusPlanned)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status planned failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}

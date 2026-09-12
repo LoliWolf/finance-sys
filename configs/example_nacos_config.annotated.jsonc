@@ -17,7 +17,7 @@
       "api_prefix": "/api/v1",
       "read_timeout_ms": 30000,
       // 文档上传会同步等待模型分析完成，需覆盖长研报的 Agent 最长处理时间。
-      "write_timeout_ms": 900000,
+      "write_timeout_ms": 1000000,
       "idle_timeout_ms": 60000,
       "shutdown_timeout_seconds": 20,
       "max_header_bytes": 1048576,
@@ -113,7 +113,10 @@
     "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
     "api_key": "",
     "model": "qwen2.5:14b-instruct",
-    "timeout_ms": 240000,
+    // Streaming is internal: callers still receive a complete validated JSON response.
+    "stream": true,
+    // Total extraction budget INCLUDING all attempts/backoff, not 1000 seconds per retry.
+    "timeout_ms": 1000000,
     "max_retries": 2,
     // Stable, transparent client metadata for OpenAI-compatible gateways that group traffic by request headers.
     "extra_headers": {
@@ -147,8 +150,9 @@
       "max_json_bytes": 65535,
       "retention_days": 90
     },
-    "timeout_ms": 300000,
-    "max_retries": 1,
+    // Shares the document deadline with the LLM; includes parsing and tool calls.
+    "timeout_ms": 1000000,
+    "max_retries": 0,
     "schema_version": "agent.resolve_document.response.v1",
     "auth": {
       "enabled": false,
@@ -272,6 +276,10 @@
     }
   },
   "trading": {
+    // 从已核实的行情提供方导入日历；超出覆盖期禁止交易，不以工作日代替交易日。
+    "calendar": {"source": "", "version": "", "coverage_from": "", "coverage_to": "", "open_dates": []},
+    // 临时、限证券、限时、限单数的模拟验收，不自动写入 verified_boards。
+    "uat": {"enabled": false, "key": "", "symbols": [], "expires_at": "", "max_orders": 2},
     // 仿真交易默认失败关闭；只有 Nacos、MySQL 运行态和 Bridge 本地三层开关都放行时才能创建新单。
     "enabled": false,
     "environment": "SIMULATION",
@@ -290,8 +298,8 @@
     },
     "decision": {
       "provider": "DETERMINISTIC",
-      "strategy_name": "blogger_follow_v1",
-      "strategy_version": "1.0.0",
+      "strategy_name": "blogger_follow_skills_v2",
+      "strategy_version": "2.1.0",
       "tool_contract_version": "trading-tools/v2",
       "min_recommendation_confidence": 0.65,
       "min_blogger_sample_count": 10,
@@ -300,7 +308,7 @@
       "max_intents_per_run": 5
     },
     "risk": {
-      "version": "risk-v1",
+      "version": "risk-v3",
       "allowed_asset_types": ["STOCK", "ETF"],
       "allowed_markets": ["SH", "SZ"],
       // 板块必须经过账户级仿真 BUY/SELL UAT 后再逐个加入。
@@ -324,7 +332,7 @@
       "default_order_type": "LIMIT",
       "allow_market_order": false,
       "command_poll_interval_ms": 500,
-      "command_claim_timeout_ms": 10000,
+      "command_claim_timeout_ms": 60000,
       "dispatch_timeout_ms": 5000,
       "dispatch_max_retries": 3,
       "cancel_open_orders_at_session_end": true

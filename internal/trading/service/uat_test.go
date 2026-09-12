@@ -7,6 +7,16 @@ import (
 	tradingdomain "finance-sys/internal/trading/domain"
 )
 
+func TestUATIntentIdentitySeparatesSymbolsAndSides(t *testing.T) {
+	buy := uatIntentKey("BUY", "same-campaign", "600000.SH")
+	if buy != uatIntentKey("BUY", "same-campaign", "600000.SH") {
+		t.Fatal("same UAT leg must be idempotent")
+	}
+	if buy == uatIntentKey("BUY", "same-campaign", "000001.SZ") || buy == uatIntentKey("SELL", "same-campaign", "600000.SH") {
+		t.Fatal("different symbols or sides share a UAT intent key")
+	}
+}
+
 func TestOneLotUATLimitPrice(t *testing.T) {
 	price, err := oneLotUATLimitPrice("9.14", "BUY")
 	if err != nil || price != "9.16" {

@@ -143,6 +143,7 @@ type LLMConfig struct {
 	Endpoint     string            `json:"endpoint"`
 	APIKey       string            `json:"api_key"`
 	Model        string            `json:"model"`
+	Stream       bool              `json:"stream"`
 	TimeoutMS    int               `json:"timeout_ms"`
 	MaxRetries   int               `json:"max_retries"`
 	ExtraHeaders map[string]string `json:"extra_headers"`
@@ -310,6 +311,27 @@ type TradingConfig struct {
 	Eastmoney      TradingEastmoneyConfig      `json:"eastmoney"`
 	Reconciliation TradingReconciliationConfig `json:"reconciliation"`
 	Scheduler      TradingSchedulerConfig      `json:"scheduler"`
+	Calendar       TradingCalendarConfig       `json:"calendar"`
+	UAT            TradingUATConfig            `json:"uat"`
+}
+
+// The published calendar is market data with explicit provenance and coverage.
+// A date outside coverage is unknown, never an inferred trading day.
+type TradingCalendarConfig struct {
+	Source       string   `json:"source"`
+	Version      string   `json:"version"`
+	CoverageFrom string   `json:"coverage_from"`
+	CoverageTo   string   `json:"coverage_to"`
+	OpenDates    []string `json:"open_dates"`
+}
+
+// Temporary, symbol-scoped simulation acceptance; does not confer VERIFIED.
+type TradingUATConfig struct {
+	Enabled   bool     `json:"enabled"`
+	Key       string   `json:"key"`
+	Symbols   []string `json:"symbols"`
+	ExpiresAt string   `json:"expires_at"`
+	MaxOrders int      `json:"max_orders"`
 }
 
 type TradingAgentConfig struct {

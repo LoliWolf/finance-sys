@@ -13,6 +13,31 @@ var Documents = &DocumentDML{}
 
 type DocumentDML struct{}
 
+func (*DocumentDML) QueryMetadataByID(ctx context.Context, db *gorm.DB, id int64) (*db_model.Document, error) {
+	var model db_model.Document
+	err := db.WithContext(ctx).Omit("raw_content").Where("id = ?", id).First(&model).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &model, err
+}
+
+// A short atomic claim, not a transaction held open during OCR/LLM calls.
+func (*DocumentDML) ClaimFailedAnalysis(ctx context.Context, db *gorm.DB, id int64) (bool, error) {
+	result := db.WithContext(ctx).Model(&db_model.Document{}).
+		Where("id = ? AND status = ?", id, "FAILED").
+		Where("NOT EXISTS (SELECT 1 FROM recommendation_events WHERE source_document_id = ?)", id).
+		Where("NOT EXISTS (SELECT 1 FROM trade_candidate_plans WHERE document_id = ?)", id).
+		Where("NOT EXISTS (SELECT 1 FROM external_document_ingestions WHERE document_id = ? AND status = 5)", id).
+		Updates(map[string]any{"status": "ANALYZING", "updated_at": gorm.Expr("CURRENT_TIMESTAMP")})
+	return result.RowsAffected == 1, result.Error
+}
+
+func (*DocumentDML) RestoreFailedAnalysis(ctx context.Context, db *gorm.DB, id int64) error {
+	return db.WithContext(ctx).Model(&db_model.Document{}).Where("id = ? AND status IN ?", id, []string{"ANALYZING", "PARSED"}).
+		Updates(map[string]any{"status": "FAILED", "updated_at": gorm.Expr("CURRENT_TIMESTAMP")}).Error
+}
+
 func (*DocumentDML) Create(ctx context.Context, db *gorm.DB, model *db_model.Document) error {
 	return db.WithContext(ctx).Create(model).Error
 }

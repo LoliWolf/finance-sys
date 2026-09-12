@@ -79,7 +79,7 @@ func Validate(cfg *Config) error {
 			require(cfg.Agent.Tushare.TimeoutMS > 0 && cfg.Agent.Tushare.TimeoutMS <= 60000, "agent.tushare.timeout_ms must be in (0,60000] when agent.tushare.enabled is true")
 		}
 		require(cfg.Agent.TimeoutMS > 0, "agent.timeout_ms must be positive when agent.enabled is true")
-		require(!cfg.LLM.Enabled || cfg.Agent.TimeoutMS > cfg.LLM.TimeoutMS, "agent.timeout_ms must be greater than llm.timeout_ms when both agent and llm are enabled")
+		require(!cfg.LLM.Enabled || cfg.Agent.TimeoutMS >= cfg.LLM.TimeoutMS, "agent.timeout_ms must be at least llm.timeout_ms when both agent and llm are enabled")
 		require(cfg.Agent.MaxRetries >= 0, "agent.max_retries must be zero or positive")
 		require(strings.TrimSpace(cfg.Agent.SchemaVersion) != "", "agent.schema_version is required when agent.enabled is true")
 		if cfg.Agent.Auth.Enabled {
@@ -171,6 +171,16 @@ func Validate(cfg *Config) error {
 }
 
 func validateTrading(cfg TradingConfig, require func(bool, string)) {
+	if cfg.Scheduler.Enabled || cfg.UAT.Enabled || (cfg.Enabled && !cfg.KillSwitch) {
+		require(cfg.Calendar.Validate() == nil, "a valid trading.calendar with provenance and coverage is required to arm trading")
+	}
+	if cfg.UAT.Enabled {
+		require(!cfg.Scheduler.Enabled, "trading UAT requires automatic scheduler disabled")
+		require(cfg.UAT.Key != "" && len(cfg.UAT.Symbols) > 0 && len(cfg.UAT.Symbols) <= 6, "UAT requires a key and at most six exact symbols")
+		require(cfg.UAT.MaxOrders > 0 && cfg.UAT.MaxOrders <= 12, "UAT max_orders must be in [1,12]")
+		_, expiryErr := time.Parse(time.RFC3339, cfg.UAT.ExpiresAt)
+		require(expiryErr == nil, "UAT expires_at must use RFC3339")
+	}
 	require(cfg.Environment == "SIMULATION", "trading.environment must be SIMULATION")
 	require(cfg.Provider == "EASTMONEY_GM", "trading.provider must be EASTMONEY_GM")
 	require(!cfg.AllowLive, "trading.allow_live must be false")
@@ -207,6 +217,9 @@ func validateTrading(cfg TradingConfig, require func(bool, string)) {
 		require(validBoards[strings.ToUpper(strings.TrimSpace(board))], fmt.Sprintf("unsupported trading.eastmoney.account_policy.verified_boards value %q", board))
 	}
 	if cfg.Scheduler.Enabled {
+		validateDailySchedule("trading.scheduler.preflight", cfg.Scheduler.Preflight, require)
+		validateDailySchedule("trading.scheduler.morning_cancel", cfg.Scheduler.MorningCancel, require)
+		validateDailySchedule("trading.scheduler.afternoon_cancel", cfg.Scheduler.AfternoonCancel, require)
 		require(len(cfg.Risk.AllowedBoards) > 0, "trading.risk.allowed_boards must not be empty when trading scheduler is enabled")
 		require(len(cfg.Eastmoney.AccountPolicy.VerifiedBoards) > 0, "trading.eastmoney.account_policy.verified_boards must not be empty when trading scheduler is enabled")
 		require(strings.TrimSpace(cfg.Risk.TradingRuleVersion) != "", "trading.risk.trading_rule_version is required when trading scheduler is enabled")

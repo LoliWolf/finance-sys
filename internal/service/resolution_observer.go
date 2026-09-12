@@ -35,6 +35,14 @@ func (o *ResolutionObserver) Start(ctx context.Context, db *gorm.DB, document *d
 		return nil, nil
 	}
 	parseRunID := parseRun.ID
+	metadata := map[string]any{}
+	if date, ok := domain.TradeDateFromContext(ctx); ok {
+		metadata["trade_date"] = date.Format(time.DateOnly)
+	}
+	rawMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
 	model := &db_model.InstrumentResolutionRun{
 		DocumentID:              document.ID,
 		ParseRunID:              &parseRunID,
@@ -48,7 +56,7 @@ func (o *ResolutionObserver) Start(ctx context.Context, db *gorm.DB, document *d
 		TargetsJSON:             []byte("[]"),
 		ToolTracesJSON:          []byte("[]"),
 		ShadowCompareJSON:       []byte("{}"),
-		RawMetadataJSON:         []byte("{}"),
+		RawMetadataJSON:         rawMetadata,
 		RawTargetCount:          0,
 		CandidatePlanInputCount: 0,
 		CandidatePlanCount:      0,
@@ -80,6 +88,7 @@ func (o *ResolutionObserver) FinishSucceeded(ctx context.Context, tx *gorm.DB, r
 	toolTraces := buildToolTraces(analysis, cfg.Agent.Observation.PersistToolTraces)
 	shadowCompare := buildShadowCompare(analysis, intents, plans, nil)
 	rawMetadata := buildRawMetadata(analysis, nil)
+	retainResolutionTradeDate(run, rawMetadata)
 	finishedAt := time.Now()
 	values, err := o.finishValues(cfg, analysis, domain.ResolutionRunStatusSucceeded, "", "", len(intents), len(plans), len(untrackables), targets, toolTraces, shadowCompare, rawMetadata, run.StartedAt, finishedAt)
 	if err != nil {
@@ -117,6 +126,7 @@ func (o *ResolutionObserver) FinishFailed(ctx context.Context, db *gorm.DB, run 
 	toolTraces := buildToolTraces(analysis, cfg.Agent.Observation.PersistToolTraces)
 	shadowCompare := buildShadowCompare(analysis, intents, nil, cause)
 	rawMetadata := buildRawMetadata(analysis, cause)
+	retainResolutionTradeDate(run, rawMetadata)
 	finishedAt := time.Now()
 	values, err := o.finishValues(cfg, analysis, domain.ResolutionRunStatusFailed, errorCode, safeError(cause), len(intents), 0, len(untrackables), targets, toolTraces, shadowCompare, rawMetadata, run.StartedAt, finishedAt)
 	if err != nil {
@@ -419,6 +429,15 @@ func buildShadowCompare(analysis AnalysisObservation, intents []domain.PlanInten
 		compare["final_error"] = truncateString(cause.Error(), 1000)
 	}
 	return compare
+}
+
+func retainResolutionTradeDate(run *db_model.InstrumentResolutionRun, target map[string]any) {
+	var original map[string]any
+	if run != nil && json.Unmarshal(run.RawMetadataJSON, &original) == nil {
+		if date, ok := original["trade_date"].(string); ok && date != "" {
+			target["trade_date"] = date
+		}
+	}
 }
 
 func buildRawMetadata(analysis AnalysisObservation, cause error) map[string]any {

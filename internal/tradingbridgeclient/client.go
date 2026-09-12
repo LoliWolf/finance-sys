@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -185,6 +186,13 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var rejection struct {
+			Code    string `json:"code"`
+			Message string `json:"error"`
+		}
+		if resp.StatusCode == http.StatusUnprocessableEntity && json.Unmarshal(responseBody, &rejection) == nil && rejection.Code == "ORDER_REJECTED" {
+			return &OrderRejectedError{Message: rejection.Message}
+		}
 		return fmt.Errorf("trading Bridge returned %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 	if response == nil || len(responseBody) == 0 {
@@ -195,6 +203,11 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	return nil
 }
+
+type OrderRejectedError struct{ Message string }
+
+func (e *OrderRejectedError) Error() string { return "Bridge rejected before enqueue: " + e.Message }
+func IsOrderRejected(err error) bool        { var target *OrderRejectedError; return errors.As(err, &target) }
 
 func (c *Client) config() config.TradingBridgeConfig {
 	cfg := c.runtime.Config()

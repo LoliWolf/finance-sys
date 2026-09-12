@@ -34,6 +34,7 @@ type Server struct {
 	db            *gorm.DB
 	runtime       *config.Runtime
 	documents     *service.DocumentService
+	documentRetry failedDocumentRetrier
 	security      *service.SecurityService
 	marketData    marketDataService
 	evaluation    recommendationEvaluationService
@@ -49,6 +50,10 @@ type marketDataService interface {
 	CreateStockDailySyncRun(context.Context, service.StockDailySyncRequest) (*service.StockDailySyncResponse, error)
 	RefreshSecurityMaster(context.Context, service.SecurityMasterRefreshRequest) (*service.SecurityMasterRefreshResponse, error)
 	ListSyncRuns(context.Context, service.MarketDataSyncRunQuery) ([]db_model.MarketDataSyncRun, error)
+}
+
+type failedDocumentRetrier interface {
+	RetryFailedDocument(context.Context, int64, *time.Time) (*service.DocumentRetryResult, error)
 }
 
 type recommendationEvaluationService interface {
@@ -83,24 +88,30 @@ func NewServer(
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
+	var retry failedDocumentRetrier
+	if documents != nil {
+		retry = documents
+	}
 	return &Server{
-		db:           db,
-		runtime:      runtime,
-		documents:    documents,
-		security:     security,
-		marketData:   marketData,
-		evaluation:   evaluation,
-		stats:        performanceStats,
-		trading:      trading,
-		reloader:     reloader,
-		logger:       logger,
-		bridgeNonces: make(map[string]time.Time),
+		db:            db,
+		runtime:       runtime,
+		documents:     documents,
+		documentRetry: retry,
+		security:      security,
+		marketData:    marketData,
+		evaluation:    evaluation,
+		stats:         performanceStats,
+		trading:       trading,
+		reloader:      reloader,
+		logger:        logger,
+		bridgeNonces:  make(map[string]time.Time),
 	}
 }
 
 func (s *Server) Router() http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
+	router.Use(s.requestDeadlineMiddleware)
 	router.Use(middleware.Recoverer)
 	router.Use(s.requestLogMiddleware)
 	router.Use(s.authMiddleware)
@@ -119,6 +130,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/documents/upload", s.handleUploadDocument)
 		r.Post("/documents/evaluation-runs", s.handleCreateDocumentEvaluationRun)
 		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
+		r.Post("/documents/{id}/retry-analysis", s.handleRetryDocumentAnalysis)
 		r.Post("/admin/documents/{id}/untrackable-targets/{targetID}/recover", s.handleRecoverUntrackableTarget)
 		r.Get("/documents/{id}/report", s.handleGetDocumentReport)
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
@@ -164,6 +176,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/trading/dashboard", s.handleGetTradingDashboard)
 		r.Post("/trading/dashboard/refresh", s.handleRefreshTradingDashboard)
 		r.Post("/trading/reconciliation-runs", s.handleCreateTradingReconciliationRun)
+		r.Get("/trading/reconciliation-runs/{id}", s.handleGetTradingReconciliation)
 		r.Post("/trading/kill-switch", s.handleSetTradingKillSwitch)
 		r.Get("/internal/trading-tools/recommendation-candidates", s.handleTradingToolRecommendationCandidates)
 		r.Get("/internal/trading-tools/blogger-performance/{bloggerID}", s.handleTradingToolBloggerPerformance)

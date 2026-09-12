@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,6 +46,7 @@ type ModelAnalyzer struct {
 
 type chatCompletionRequest struct {
 	Model          string            `json:"model"`
+	Stream         bool              `json:"stream,omitempty"`
 	Messages       []chatMessage     `json:"messages"`
 	Temperature    float64           `json:"temperature"`
 	ResponseFormat map[string]string `json:"response_format,omitempty"`
@@ -89,6 +91,8 @@ func (a *ModelAnalyzer) Analyze(ctx context.Context, document domain.Document, p
 	if strings.TrimSpace(parsed.CleanedText) == "" {
 		return nil, fmt.Errorf("empty parsed text")
 	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.LLM.TimeoutMS)*time.Millisecond)
+	defer cancel()
 	if a.logger != nil {
 		a.logger.InfoContext(ctx, "llm analyze start", "document_id", document.ID, "parse_run_id", parsed.ID, "chunk_count", len(parsed.Chunks), "model", cfg.LLM.Model, "provider", cfg.LLM.Provider)
 	}
@@ -170,7 +174,13 @@ func (a *ModelAnalyzer) analyzeChunk(ctx context.Context, cfg config.LLMConfig, 
 	}
 
 	var lastErr error
+	usedAttempts := 0
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if ctx.Err() != nil {
+			lastErr = ctx.Err()
+			break
+		}
+		usedAttempts = attempt
 		if a.logger != nil {
 			a.logger.DebugContext(ctx, "llm analyze chunk attempt", "chunk_index", chunk.Index, "attempt", attempt, "max_attempts", attempts)
 		}
@@ -182,16 +192,21 @@ func (a *ModelAnalyzer) analyzeChunk(ctx context.Context, cfg config.LLMConfig, 
 			return intents, nil
 		}
 		lastErr = err
+		var protocolError *streamError
+		if ctx.Err() != nil || errors.As(err, &protocolError) {
+			break
+		}
 		if a.logger != nil && attempt < attempts {
 			a.logger.Warn("llm analyze chunk failed; retrying", "chunk_index", chunk.Index, "attempt", attempt, "error", err.Error())
 		}
 	}
-	return nil, fmt.Errorf("llm analyze chunk %d failed after %d attempts: %w", chunk.Index, attempts, lastErr)
+	return nil, fmt.Errorf("llm analyze chunk %d failed after %d attempts: %w", chunk.Index, usedAttempts, lastErr)
 }
 
 func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, document domain.Document, chunk domain.Chunk) ([]domain.PlanIntent, error) {
 	requestBody := chatCompletionRequest{
 		Model:       cfg.Model,
+		Stream:      cfg.Stream,
 		Temperature: 0,
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
@@ -234,7 +249,12 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	var body []byte
+	if cfg.Stream && resp.StatusCode < http.StatusBadRequest && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		body, err = readChatStream(resp.Body)
+	} else {
+		body, err = io.ReadAll(resp.Body)
+	}
 	if err != nil {
 		return nil, err
 	}

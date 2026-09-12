@@ -81,7 +81,9 @@ async function refreshSnapshot() {
   success.value = ''
   try {
     data.value = await api.refreshTradingDashboard({ trade_date: tradeDate.value })
-    success.value = `账户和持仓已同步，快照时间 ${formatDateTime(data.value.account?.snapshot_at)}`
+    success.value = data.value.refresh_run_id
+      ? `账户对账刷新已入队（任务 ${data.value.refresh_run_id}），完成后页面自动更新`
+      : `账户和持仓已同步，快照时间 ${formatDateTime(data.value.account?.snapshot_at)}`
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '东方财富账户快照刷新失败'
   } finally {

@@ -3,13 +3,20 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"finance-sys/internal/config"
 	"finance-sys/internal/dal"
+	"finance-sys/internal/domain/db_model"
+	"gorm.io/gorm"
 )
+
+var ErrExecutionDeferred = errors.New("execution deferred")
+var ErrClaimLost = errors.New("claim lost")
 
 type Worker struct {
 	service  *Service
@@ -24,35 +31,53 @@ func NewWorker(service *Service, runtime *config.Runtime, logger *slog.Logger) *
 	if host == "" {
 		host = "unknown-host"
 	}
-	return &Worker{service: service, runtime: runtime, logger: logger, workerID: host + "-trading-worker", now: time.Now}
+	return &Worker{service: service, runtime: runtime, logger: logger, workerID: host + "-trading", now: time.Now}
 }
 
 func (w *Worker) Run(ctx context.Context) {
 	if w == nil || w.service == nil || w.runtime == nil {
 		return
 	}
-	lastExitRun := time.Time{}
-	for {
+	var wg sync.WaitGroup
+	for _, lane := range []string{"DECISION", "EXECUTION", "RECONCILIATION", "EXIT"} {
+		wg.Add(1)
+		go func(lane string) { defer wg.Done(); w.loop(ctx, lane) }(lane)
+	}
+	wg.Wait()
+}
+
+func (w *Worker) loop(ctx context.Context, lane string) {
+	for ctx.Err() == nil {
 		cfg := w.runtime.Config()
 		interval := 500 * time.Millisecond
-		if cfg != nil && cfg.Trading.Execution.CommandPollIntervalMS > 0 {
-			interval = time.Duration(cfg.Trading.Execution.CommandPollIntervalMS) * time.Millisecond
+		if cfg == nil {
+			return
 		}
-		now := w.now()
-		if cfg != nil && cfg.Trading.Scheduler.Enabled && cfg.Trading.Enabled && !cfg.Trading.KillSwitch {
-			if sessionWindowOpen(now, cfg.Trading.Scheduler) {
-				if err := w.service.ExecuteNextReadyIntent(ctx, w.workerID, now); err != nil && !errors.Is(err, dal.ErrNotFound) && w.logger != nil {
-					w.logger.ErrorContext(ctx, "execute claimed trading intent failed", "error", err.Error())
-				}
-				if cfg.Trading.Exit.Enabled && (lastExitRun.IsZero() || now.Sub(lastExitRun) >= time.Duration(cfg.Trading.Exit.MonitorIntervalSeconds)*time.Second) {
-					lastExitRun = now
-					if hasCycles, err := w.service.HasOpenPositionCycles(ctx); err == nil && hasCycles {
-						if _, err := w.service.StartRun(ctx, RunRequest{TriggerType: "EXIT_MONITOR", AsOfTime: now}); err != nil && w.logger != nil {
-							w.logger.ErrorContext(ctx, "trading exit monitor decision failed", "error", err.Error())
-						}
-					}
+		var err error
+		switch lane {
+		case "DECISION":
+			if cfg.Trading.Agent.Enabled {
+				err = w.service.ProcessNextDecision(ctx, w.workerID+"-decision")
+			}
+		case "RECONCILIATION":
+			err = w.service.ProcessNextReconciliation(ctx, w.workerID+"-reconcile")
+		case "EXECUTION":
+			if cfg.Trading.Scheduler.Enabled {
+				err = dal.TradingIntents.Expire(ctx, w.service.db, w.now())
+				if err == nil {
+					err = w.service.ExecuteNextReadyIntent(ctx, w.workerID+"-execute", w.now())
 				}
 			}
+		case "EXIT":
+			if cfg.Trading.Exit.MonitorIntervalSeconds > 0 {
+				interval = time.Duration(cfg.Trading.Exit.MonitorIntervalSeconds) * time.Second
+			}
+			if cfg.Trading.Scheduler.Enabled && cfg.Trading.Exit.Enabled && tradingSessionOpen(w.now(), cfg.Trading) {
+				_, err = w.service.ScanExits(ctx, w.now())
+			}
+		}
+		if err != nil && !errors.Is(err, dal.ErrNotFound) && !errors.Is(err, ErrExecutionDeferred) && w.logger != nil {
+			w.logger.ErrorContext(ctx, "trading worker lane failed", "lane", lane, "error", err.Error())
 		}
 		timer := time.NewTimer(interval)
 		select {
@@ -64,54 +89,119 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-func (s *Service) ExecuteNextReadyIntent(ctx context.Context, workerID string, now time.Time) error {
+func (s *Service) ProcessNextDecision(ctx context.Context, worker string) error {
 	cfg := s.runtime.Config()
 	if cfg == nil {
-		return errors.New("runtime config unavailable")
+		return fmt.Errorf("config unavailable")
 	}
-	if !sessionWindowOpen(now, cfg.Trading.Scheduler) {
-		return dal.ErrNotFound
+	now := s.now()
+	lease := time.Duration((cfg.Trading.Agent.TimeoutMS+5000)*(cfg.Trading.Agent.MaxRetries+1)) * time.Millisecond
+	if lease < time.Minute {
+		lease = time.Minute
 	}
-	control, err := dal.TradingRuntimeControls.KillSwitch(ctx, s.db)
-	if err != nil || control.Enabled {
-		return dal.ErrNotFound
-	}
-	claimToken := hashParts(workerID, now.Format(time.RFC3339Nano))
-	deadline := now.Add(time.Duration(cfg.Trading.Execution.CommandClaimTimeoutMS) * time.Millisecond)
-	intent, err := dal.TradingIntents.ClaimNextReady(ctx, s.db, workerID, claimToken, now, deadline)
+	var run *db_model.TradingAgentRun
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if e := dal.TradingRuntimeControls.Lock(ctx, tx); e != nil {
+			return e
+		}
+		var e error
+		run, e = dal.TradingAgentRuns.Claim(ctx, tx, worker, hashParts(worker, now.String()), now, now.Add(lease))
+		return e
+	})
 	if err != nil {
 		return err
 	}
-	err = s.evaluateIntent(ctx, intent, false)
-	executedAt := time.Now()
-	if err == nil {
-		return dal.TradingIntents.Update(ctx, s.db, intent.ID, map[string]any{
-			"execution_status": "COMPLETED", "execution_attempt_count": int(intent.ExecutionAttemptCount) + 1, "executed_at": executedAt,
-			"execution_claim_token": "", "execution_claimed_by": "", "execution_claim_deadline": nil,
-		})
+	runCtx, cancel := context.WithTimeout(ctx, lease-5*time.Second)
+	defer cancel()
+	_, err = s.decideRun(runCtx, run)
+	if err != nil {
+		_, _ = dal.TradingAgentRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, s.now(), map[string]any{"status": "FAILED", "finished_at": s.now(), "error_code": "DECISION_FAILED", "error_message": err.Error()})
 	}
-	attempt := int(intent.ExecutionAttemptCount) + 1
-	status := "RETRY"
-	next := executedAt.Add(time.Duration(attempt) * time.Second)
-	if attempt > cfg.Trading.Execution.DispatchMaxRetries {
-		status = "FAILED"
+	return err
+}
+
+func (s *Service) ExecuteNextReadyIntent(ctx context.Context, worker string, now time.Time) error {
+	cfg := s.runtime.Config()
+	if cfg == nil {
+		return fmt.Errorf("config unavailable")
 	}
-	updateErr := dal.TradingIntents.Update(ctx, s.db, intent.ID, map[string]any{
-		"execution_status": status, "execution_attempt_count": attempt, "next_execution_at": next,
-		"execution_claim_token": "", "execution_claimed_by": "", "execution_claim_deadline": nil,
-		"rejection_code": "EXECUTION_FAILED", "rejection_message": err.Error(),
+	if !cfg.Trading.Scheduler.Enabled || !cfg.Trading.Enabled || cfg.Trading.KillSwitch || !tradingSessionOpen(now, cfg.Trading) {
+		return dal.ErrNotFound
+	}
+	if err := s.requireReadySession(ctx, now); err != nil {
+		return fmt.Errorf("%w: %v", ErrExecutionDeferred, err)
+	}
+	control, err := dal.TradingRuntimeControls.KillSwitch(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	if control.Enabled {
+		return dal.ErrNotFound
+	}
+	lease := time.Duration(cfg.Trading.Execution.CommandClaimTimeoutMS) * time.Millisecond
+	if lease < time.Minute {
+		lease = time.Minute
+	}
+	var intent *db_model.TradingIntent
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if e := dal.TradingRuntimeControls.Lock(ctx, tx); e != nil {
+			return e
+		}
+		var e error
+		intent, e = dal.TradingIntents.ClaimNextReady(ctx, tx, worker, hashParts(worker, now.String()), now, now.Add(lease))
+		return e
 	})
-	if updateErr != nil {
-		return updateErr
+	if err != nil {
+		return err
+	}
+	executeCtx, cancel := context.WithTimeout(ctx, lease-5*time.Second)
+	defer cancel()
+	err = s.evaluateIntent(executeCtx, intent, false)
+	values := map[string]any{"execution_status": "COMPLETED", "execution_attempt_count": intent.ExecutionAttemptCount + 1, "executed_at": s.now(), "execution_claim_token": "", "execution_claimed_by": "", "execution_claim_deadline": nil}
+	if err != nil {
+		if errors.Is(err, ErrClaimLost) {
+			return err
+		}
+		values["execution_status"] = "RETRY"
+		values["next_execution_at"] = s.now().Add(5 * time.Second)
+		values["rejection_message"] = err.Error()
+		values["rejection_code"] = "EXECUTION_DEFERRED"
+	}
+	ok, finishErr := dal.TradingIntents.FinishClaim(ctx, s.db, intent.ID, intent.ExecutionClaimToken, s.now(), values)
+	if finishErr != nil {
+		return finishErr
+	}
+	if !ok {
+		return ErrClaimLost
 	}
 	return err
 }
 
 func (s *Service) HasOpenPositionCycles(ctx context.Context) (bool, error) {
 	cfg := s.runtime.Config()
-	if cfg == nil || cfg.Trading.Bridge.ExpectedAccountID == "" {
+	if cfg == nil {
 		return false, nil
 	}
-	cycles, err := dal.TradingPositionCycles.ListOpen(ctx, s.db, cfg.Trading.Bridge.ExpectedAccountID)
-	return len(cycles) > 0, err
+	c, e := dal.TradingPositionCycles.ListOpen(ctx, s.db, cfg.Trading.Bridge.ExpectedAccountID)
+	return len(c) > 0, e
+}
+
+func tradingSessionOpen(now time.Time, cfg config.TradingConfig) bool {
+	open, err := cfg.Calendar.IsOpen(now)
+	return err == nil && open && sessionWindowOpen(now.In(config.ChinaLocation), cfg.Scheduler)
+}
+
+func (s *Service) requireReadySession(ctx context.Context, now time.Time) error {
+	cfg := s.runtime.Config()
+	if cfg == nil {
+		return fmt.Errorf("config unavailable")
+	}
+	session, err := dal.TradingDailySessions.ByDate(ctx, s.db, cfg.Trading.Bridge.ExpectedAccountID, tradingDay(now))
+	if err != nil {
+		return err
+	}
+	if session.PreflightStatus != "READY" || session.Status == "BLOCKED" || session.Status == "CLOSED" || session.ConfigVersion != cfg.Meta.ConfigVersion {
+		return fmt.Errorf("daily session is not ready for current config")
+	}
+	return nil
 }

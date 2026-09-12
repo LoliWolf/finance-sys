@@ -49,6 +49,24 @@ func TestEvaluateBuyDeterministically(t *testing.T) {
 	}
 }
 
+func TestDailyBuyLimitsDoNotPreventRiskReducingSell(t *testing.T) {
+	in := baseInput(time.Now())
+	in.Intent.Action = "SELL"
+	in.Position = &tradingdomain.PositionSnapshot{Volume: 100, AvailableVolume: 100}
+	in.NewOrdersToday = 100
+	in.DailyTurnoverRatio = "1"
+	in.DailyLossRatio = "0.5"
+	r := New().Evaluate(in)
+	if !r.Approved || r.FinalVolume != 100 {
+		t.Fatalf("risk reducing sell blocked: %+v", r)
+	}
+	in.Trading.KillSwitch = true
+	r = New().Evaluate(in)
+	if r.Approved {
+		t.Fatal("SELL bypassed emergency kill")
+	}
+}
+
 func TestEvaluateRejectsNoPriceLimitListingPeriod(t *testing.T) {
 	now := time.Now()
 	input := baseInput(now)

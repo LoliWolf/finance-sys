@@ -14,6 +14,7 @@ const TableNameTradingPositionCycle = "trading_position_cycles"
 type TradingPositionCycle struct {
 	ID                          int64      `gorm:"column:id;type:bigint;primaryKey;autoIncrement:true" json:"id"`
 	CycleKey                    string     `gorm:"column:cycle_key;type:char(64);not null;uniqueIndex:uk_trading_position_cycles_key,priority:1" json:"cycle_key"`
+	OpenSymbolKey               *string    `gorm:"column:open_symbol_key;type:char(64);uniqueIndex:uk_trading_position_cycles_open_symbol,priority:1" json:"open_symbol_key"`
 	Environment                 string     `gorm:"column:environment;type:varchar(16);not null;default:SIMULATION" json:"environment"`
 	Provider                    string     `gorm:"column:provider;type:varchar(32);not null;default:EASTMONEY_GM" json:"provider"`
 	AccountID                   string     `gorm:"column:account_id;type:varchar(128);not null;index:idx_trading_position_cycles_open,priority:1" json:"account_id"`
@@ -26,10 +27,10 @@ type TradingPositionCycle struct {
 	Status                      string     `gorm:"column:status;type:varchar(32);not null;index:idx_trading_position_cycles_open,priority:2;index:idx_trading_position_cycles_sellable,priority:1;default:OPEN" json:"status"`
 	SourceRecommendationEventID *int64     `gorm:"column:source_recommendation_event_id;type:bigint;index:idx_trading_position_cycles_event,priority:1" json:"source_recommendation_event_id"`
 	SourceBuyIntentID           *int64     `gorm:"column:source_buy_intent_id;type:bigint;index:fk_trading_position_cycles_buy_intent,priority:1" json:"source_buy_intent_id"`
-	EntryOrderID                *int64     `gorm:"column:entry_order_id;type:bigint;index:fk_trading_position_cycles_entry_order,priority:1" json:"entry_order_id"`
+	EntryOrderID                *int64     `gorm:"column:entry_order_id;type:bigint;uniqueIndex:uk_trading_position_cycles_entry_order,priority:1" json:"entry_order_id"`
 	ExitOrderID                 *int64     `gorm:"column:exit_order_id;type:bigint;index:fk_trading_position_cycles_exit_order,priority:1" json:"exit_order_id"`
 	EntryTradeDate              time.Time  `gorm:"column:entry_trade_date;type:date;not null" json:"entry_trade_date"`
-	SellableTradeDate           time.Time  `gorm:"column:sellable_trade_date;type:date;not null;index:idx_trading_position_cycles_sellable,priority:2" json:"sellable_trade_date"`
+	SellableTradeDate           *time.Time `gorm:"column:sellable_trade_date;type:date;index:idx_trading_position_cycles_sellable,priority:2" json:"sellable_trade_date"`
 	EntryPrice                  string     `gorm:"column:entry_price;type:decimal(20,6);not null" json:"entry_price"`
 	InitialVolume               int64      `gorm:"column:initial_volume;type:bigint;not null" json:"initial_volume"`
 	CurrentVolume               int64      `gorm:"column:current_volume;type:bigint;not null" json:"current_volume"`

@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
 
     <section class="filter-bar">
       <div class="field grow"><label>文档关键词</label><div class="search-input"><Search :size="15" /><input v-model="query" placeholder="标题、文件名、作者或机构" @keyup.enter="load(true)" /></div></div>
-      <div class="field"><label>分析状态</label><select v-model="status"><option value="">全部</option><option value="PLANNED">已完成分析</option><option value="INGESTED">已入库</option><option value="PARSED">已解析</option><option value="INVALID">无有效推荐</option><option value="FAILED">分析失败</option></select></div>
+      <div class="field"><label>分析状态</label><select v-model="status"><option value="">全部</option><option value="PLANNED">已完成分析</option><option value="INGESTED">已入库</option><option value="PARSED">已解析</option><option value="ANALYZING">分析中</option><option value="INVALID">无有效推荐</option><option value="FAILED">分析失败</option></select></div>
       <div class="field"><label>上传开始</label><input v-model="dateFrom" type="date" /></div>
       <div class="field"><label>上传结束</label><input v-model="dateTo" type="date" /></div>
       <button class="button" type="button" :disabled="loading" @click="clearFilters">清除</button>

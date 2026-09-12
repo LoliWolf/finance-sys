@@ -31,6 +31,7 @@ const labels: Record<string, string> = {
   UNAVAILABLE: '不可用',
   INGESTED: '已入库',
   PARSED: '已解析',
+  ANALYZING: '分析中',
   PLANNED: '已完成分析',
   INVALID: '无有效推荐',
   EMPTY: '无推荐',

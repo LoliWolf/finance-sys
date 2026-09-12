@@ -573,7 +573,7 @@ def _settings(**overrides):
         "endpoint": "https://llm.test/v1/chat/completions",
         "api_key": "test-key",
         "model": "m4-test-model",
-        "timeout_ms": 1000,
+        "timeout_ms": 5000,
         "max_retries": 0,
     }
     values.update(overrides)

@@ -65,6 +65,18 @@ func Parse(raw, market, assetType string) (Canonical, error) {
 	if assetType != "STOCK" && assetType != "ETF" {
 		return Canonical{}, fmt.Errorf("security symbol %q has unsupported asset type %q", raw, assetType)
 	}
+	expected := inferAssetType(code)
+	validPrefix := false
+	if expected == "ETF" {
+		validPrefix = (market == "SH" && hasPrefix(code, "51", "52", "56", "58")) || (market == "SZ" && hasPrefix(code, "159"))
+	} else if market == "SH" {
+		validPrefix = hasPrefix(code, "600", "601", "603", "605", "688", "689")
+	} else {
+		validPrefix = hasPrefix(code, "000", "001", "002", "003", "300", "301")
+	}
+	if !validPrefix || assetType != expected {
+		return Canonical{}, fmt.Errorf("security prefix, market or asset type is inconsistent")
+	}
 
 	exchange := "SZSE"
 	suffix := "SZ"
@@ -94,6 +106,7 @@ func UnitRule(boardType string) (TradingUnitRule, error) {
 		return TradingUnitRule{
 			MinimumBuyVolume: 100, BuyStep: 100,
 			MinimumSellVolume: 100, SellStep: 100,
+			MaximumBuyVolume: 1000000, MaximumSellVolume: 1000000,
 		}, nil
 	default:
 		return TradingUnitRule{}, fmt.Errorf("unsupported board type %q", boardType)
@@ -124,6 +137,9 @@ func RoundSellVolume(target, available int64, rule TradingUnitRule) (int64, erro
 	}
 	if target <= 0 || target > available {
 		target = available
+	}
+	if target == available && (rule.MaximumSellVolume == 0 || target <= rule.MaximumSellVolume) {
+		return target, nil
 	}
 	if available < rule.MinimumSellVolume {
 		if target != available {
@@ -234,10 +250,19 @@ func inferMarket(code string) string {
 }
 
 func inferAssetType(code string) string {
-	if strings.HasPrefix(code, "5") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") {
+	if hasPrefix(code, "51", "52", "56", "58", "159") {
 		return "ETF"
 	}
 	return "STOCK"
+}
+
+func hasPrefix(value string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(value, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSixDigitCode(value string) bool {

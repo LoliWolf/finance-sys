@@ -13,7 +13,7 @@ const TableNameTradingOrder = "trading_orders"
 // TradingOrder mapped from table <trading_orders>
 type TradingOrder struct {
 	ID                        int64      `gorm:"column:id;type:bigint;primaryKey;autoIncrement:true" json:"id"`
-	TradingIntentID           int64      `gorm:"column:trading_intent_id;type:bigint;not null;index:idx_trading_orders_intent,priority:1" json:"trading_intent_id"`
+	TradingIntentID           int64      `gorm:"column:trading_intent_id;type:bigint;not null;uniqueIndex:uk_trading_orders_one_per_intent,priority:1;index:idx_trading_orders_intent,priority:1" json:"trading_intent_id"`
 	ClientOrderID             string     `gorm:"column:client_order_id;type:varchar(64);not null;uniqueIndex:uk_trading_orders_client,priority:1" json:"client_order_id"`
 	IdempotencyKey            string     `gorm:"column:idempotency_key;type:char(64);not null;uniqueIndex:uk_trading_orders_idempotency,priority:1" json:"idempotency_key"`
 	DispatchSeq               int32      `gorm:"column:dispatch_seq;type:int;not null;index:idx_trading_orders_intent,priority:2;default:1" json:"dispatch_seq"`

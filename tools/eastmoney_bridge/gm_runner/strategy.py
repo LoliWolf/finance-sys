@@ -10,8 +10,9 @@ from dataclasses import asdict
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from bridge_api.config import BridgeConfig
+from bridge_api.config import BridgeConfig, fresh_order_config
 from bridge_api.db import Database, now_iso
+from bridge_api.order_safety import validate_request, validate_quote, identity, aware_time
 
 _config: BridgeConfig | None = None
 _db: Database | None = None
@@ -24,6 +25,10 @@ def configure(config: BridgeConfig, db: Database) -> None:
     global _config, _db
     _config = config
     _db = db
+    # Unknown whether a crashed SDK call was accepted. Never blindly resubmit.
+    with db.connect() as connection:
+        connection.execute("UPDATE bridge_commands SET status='UNKNOWN',error_code='RUNNER_RESTART_UNKNOWN',updated_at=? WHERE command_type='PLACE_ORDER' AND status='RUNNING'", (now_iso(),))
+        connection.execute("UPDATE bridge_commands SET status='RETRY',updated_at=? WHERE command_type<>'PLACE_ORDER' AND status='RUNNING'", (now_iso(),))
 
 
 def init(context: Any) -> None:
@@ -119,13 +124,41 @@ def _claim_command() -> sqlite3.Row | None:
 
 
 def _execute_command(row: sqlite3.Row) -> None:
+    global _config
     cfg, db = _require_state()
     payload = json.loads(row["payload_json"])
     command_type = row["command_type"]
+    attempted = False
     try:
         if command_type == "PLACE_ORDER":
+            if not cfg.global_enabled or cfg.global_kill_switch:
+                # Cached disabled state is conservative, but the fresh config
+                # may explicitly authorize this run. An expired command is never
+                # permitted to wait for that authorization.
+                if aware_time(payload.get("valid_until")) <= dt.datetime.now(dt.timezone.utc):
+                    raise ValueError("expired command")
+            if aware_time(payload.get("valid_until")) <= dt.datetime.now(dt.timezone.utc):
+                raise ValueError("expired command")
+            cfg = fresh_order_config(cfg)
+            _config = cfg
+            if not cfg.global_enabled or cfg.global_kill_switch:
+                raise ValueError("global trading switch refuses placement")
             if db.state("kill_switch", "true").lower() == "true" or db.state("auth_state") != "AUTH_OK" or _account_id != cfg.expected_account_id:
                 raise RuntimeError("PLACE_ORDER blocked by Bridge safety state")
+            _probe_and_snapshot()
+            if db.state("auth_state") != "AUTH_OK" or db.state("terminal_state") != "CONNECTED":
+                raise ValueError("provider is not ready")
+            snapshot = db.latest_snapshot()
+            if snapshot is None or (dt.datetime.now(dt.timezone.utc)-aware_time(snapshot["snapshot_at"])).total_seconds() > cfg.max_snapshot_age_seconds:
+                raise ValueError("account snapshot is stale")
+            available = next((int(p.get("available_volume", 0)) for p in json.loads(snapshot["positions_json"]) if p.get("eastmoney_symbol") == payload.get("symbol")), 0)
+            validate_request(cfg, payload, available)
+            quotes = _refresh_quotes([str(payload["symbol"])])
+            validate_quote(cfg, payload, quotes[0] if quotes else {})
+            # Recheck local kill after data requests and immediately before SDK.
+            if db.state("kill_switch", "true").lower() == "true":
+                raise ValueError("local kill switch refuses placement")
+            attempted = True
             result = order_volume(
                 symbol=str(payload["symbol"]),
                 volume=int(payload["volume"]),
@@ -163,9 +196,11 @@ def _execute_command(row: sqlite3.Row) -> None:
         code = _error_code(exc)
         with db.connect() as connection:
             connection.execute(
-                "UPDATE bridge_commands SET status='FAILED',error_code=?,error_message=?,finished_at=?,updated_at=? WHERE id=?",
-                (str(code or "RUNNER_ERROR"), _safe_error(exc), now_iso(), now_iso(), row["id"]),
+                "UPDATE bridge_commands SET status=?,error_code=?,error_message=?,finished_at=?,updated_at=? WHERE id=?",
+                ("UNKNOWN" if attempted else "FAILED", str(code or "RUNNER_ERROR"), _safe_error(exc), now_iso(), now_iso(), row["id"]),
             )
+        if command_type == "PLACE_ORDER":
+            _record_event("ORDER_STATUS", row["client_order_id"], {"normalized_status": "UNKNOWN" if attempted else "REJECTED", "error_code": "SDK_RESULT_UNKNOWN" if attempted else "BRIDGE_SAFETY_REJECTED", "error_message": type(exc).__name__, "filled_volume": 0})
         if code in cfg.invalid_token_error_codes or code in cfg.auth_service_error_codes:
             _fail_closed("AUTH_FAILED", f"gm command authentication failure:{code}")
 
@@ -187,11 +222,17 @@ def _refresh_quotes(symbols: Any) -> list[dict[str, Any]]:
     requested = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
     captured_at = now_iso()
     try:
-        raw_quotes = current(requested, fields="symbol,price,created_at")
+        raw_quotes = current(requested)
     except Exception as exc:
         if _error_code(exc) != 1028:
             raise
         raw_quotes = current_price(requested)
+    metadata: dict[str, dict[str, Any]] = {}
+    try:
+        metadata = {str(item.get("symbol", "")): _plain(item) for item in get_instruments(symbols=requested, skip_suspended=False, skip_st=False)}
+    except Exception:
+        # Quotes may still be displayed, but missing metadata is non-tradable.
+        pass
     normalized: list[dict[str, Any]] = []
     for raw_quote in raw_quotes or []:
         item = _plain(raw_quote)
@@ -202,6 +243,27 @@ def _refresh_quotes(symbols: Any) -> list[dict[str, Any]]:
                 continue
         except Exception:
             continue
+        info = metadata.get(eastmoney_symbol, {})
+        levels = item.get("quotes") or []
+        book = _plain(levels[0]) if levels else {}
+        extra: dict[str, Any] = {}
+        if info:
+            asset = "STOCK" if int(info.get("sec_type", 0)) == 1 else "ETF" if int(info.get("sec_type_ext", 0)) == 2002 else "UNKNOWN"
+            try:
+                board, ts_code = identity(eastmoney_symbol, asset)
+                metadata_date = _quote_time({"created_at": info.get("trade_date")}, "")[:10]
+                extra = {
+                    "asset_type": asset, "board_type": board, "ts_code": ts_code,
+                    "bid1": _number(book, "bid_p"), "ask1": _number(book, "ask_p"),
+                    "pre_close": _decimal(info, 6, "pre_close"),
+                    "upper_limit": _decimal(info, 6, "upper_limit"), "lower_limit": _decimal(info, 6, "lower_limit"),
+                    "price_tick": _decimal(info, 6, "price_tick"), "trade_n": int(info.get("trade_n", 1)),
+                    "metadata_date": metadata_date,
+                    "security_status": "SUSPENDED" if info.get("is_suspended") else "TRADING",
+                    "listed_date": _quote_time({"created_at": info.get("listed_date")}, "")[:10],
+                }
+            except (ValueError, TypeError):
+                extra = {"security_status": "UNKNOWN"}
         normalized.append(
             {
                 "symbol": eastmoney_symbol.split(".")[-1],
@@ -209,6 +271,7 @@ def _refresh_quotes(symbols: Any) -> list[dict[str, Any]]:
                 "price": price,
                 "observed_at": _quote_time(item, captured_at),
                 "source": "EASTMONEY_GM_CURRENT_PRICE",
+                **extra,
             }
         )
     db.set_state("quotes_json", normalized)
@@ -293,15 +356,15 @@ def _command_by_cl_ord(cl_ord_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
-def _record_event(event_type: str, client_order_id: str, raw: dict[str, Any]) -> None:
+def _event_payload(event_type: str, client_order_id: str, raw: dict[str, Any]) -> dict[str, Any]:
     cfg, db = _require_state()
     provider_status = str(raw.get("status", raw.get("ord_status", "")))
-    normalized = _normalize_status(raw.get("status", raw.get("ord_status")))
+    normalized = str(raw.get("normalized_status") or _normalize_status(raw.get("status", raw.get("ord_status"))))
     event_at = _event_time(raw)
     cl_ord_id = str(raw.get("cl_ord_id", ""))
     exec_id = str(raw.get("exec_id", raw.get("execution_id", "")))
     event_material = json.dumps(
-        {"type": event_type, "account_id": _account_id, "cl_ord_id": cl_ord_id, "exec_id": exec_id, "status": provider_status, "raw": raw},
+        {"type": event_type, "account_id": _account_id, "client_order_id": client_order_id, "cl_ord_id": cl_ord_id, "exec_id": exec_id, "status": provider_status, "raw": raw},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -332,6 +395,13 @@ def _record_event(event_type: str, client_order_id: str, raw: dict[str, Any]) ->
         "event_at": event_at,
         "raw_payload": raw,
     }
+    return payload
+
+
+def _record_event(event_type: str, client_order_id: str, raw: dict[str, Any]) -> None:
+    cfg, db = _require_state()
+    payload = _event_payload(event_type, client_order_id, raw)
+    event_hash,cl_ord_id,exec_id,provider_status,normalized,event_at = (payload[k] for k in ("event_hash","cl_ord_id","exec_id","provider_status","normalized_status","event_at"))
     payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
     raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"), default=str)
     with db.transaction() as connection:
@@ -353,6 +423,13 @@ def _save_snapshot(cash: Any, positions: Any, orders: Any, executions: Any) -> N
     positions_raw = [_plain(item) for item in (positions or [])]
     orders_raw = [_plain(item) for item in (orders or [])]
     executions_raw = [_plain(item) for item in (executions or [])]
+    for kind, items in (("ORDER_STATUS", orders_raw), ("EXECUTION_REPORT", executions_raw)):
+        for item in items:
+            command = _command_by_cl_ord(str(item.get("cl_ord_id", "")))
+            if command is not None:
+                event = _event_payload(kind, command["client_order_id"], dict(item))
+                item["client_order_id"] = command["client_order_id"]
+                item["bridge_event"] = event
     account = {
         "snapshot_version": "",
         "environment": "SIMULATION",
@@ -450,6 +527,10 @@ def _plain(value: Any) -> dict[str, Any]:
 
 
 def _json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if hasattr(value, "isoformat"):
@@ -503,7 +584,12 @@ def _error_code(exc: Exception) -> int:
 
 
 def _safe_error(exc: Exception) -> str:
-    return f"{type(exc).__name__}:{str(exc)[:800]}"
+    value = str(exc)
+    if _config is not None:
+        for secret in (_config.token, _config.hmac_secret):
+            if secret:
+                value = value.replace(secret, "<redacted>")
+    return f"{type(exc).__name__}:{value[:800]}"
 
 
 def _fail_closed(state: str, message: str) -> None:

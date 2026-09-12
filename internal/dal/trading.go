@@ -58,7 +58,9 @@ func tradingRunResult(model *db_model.TradingAgentRun, err error) (*db_model.Tra
 }
 
 func (*TradingAgentRunDML) Update(ctx context.Context, db *gorm.DB, id int64, values map[string]any) error {
-	values["updated_at"] = gorm.Expr("CURRENT_TIMESTAMP(3)")
+	if _, exists := values["updated_at"]; !exists {
+		values["updated_at"] = time.Now()
+	}
 	return db.WithContext(ctx).Model(&db_model.TradingAgentRun{}).Where("id = ?", id).Updates(values).Error
 }
 
@@ -109,32 +111,32 @@ func (*TradingIntentDML) List(ctx context.Context, db *gorm.DB, status, symbol s
 }
 
 func (*TradingIntentDML) Update(ctx context.Context, db *gorm.DB, id int64, values map[string]any) error {
-	values["updated_at"] = gorm.Expr("CURRENT_TIMESTAMP(3)")
+	if _, exists := values["updated_at"]; !exists {
+		values["updated_at"] = time.Now()
+	}
 	return db.WithContext(ctx).Model(&db_model.TradingIntent{}).Where("id = ?", id).Updates(values).Error
 }
 
 func (*TradingIntentDML) ClaimNextReady(ctx context.Context, db *gorm.DB, workerID, claimToken string, now, deadline time.Time) (*db_model.TradingIntent, error) {
 	var model db_model.TradingIntent
-	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		query := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("status = ?", "READY_FOR_EXECUTION").
-			Where("execution_status IN ?", []string{"READY", "RETRY"}).
-			Where("valid_from <= ? AND valid_until >= ?", now, now).
-			Where("next_execution_at IS NULL OR next_execution_at <= ?", now).
-			Where("execution_claim_deadline IS NULL OR execution_claim_deadline < ?", now).
-			Order("CASE WHEN trade_action = 'SELL' THEN 0 ELSE 1 END, valid_until ASC, id ASC").
-			First(&model)
-		if errors.Is(query.Error, gorm.ErrRecordNotFound) {
-			return ErrNotFound
-		}
-		if query.Error != nil {
-			return query.Error
-		}
-		return tx.Model(&db_model.TradingIntent{}).Where("id = ?", model.ID).Updates(map[string]any{
-			"execution_status": "CLAIMED", "execution_claim_token": claimToken, "execution_claimed_by": workerID,
-			"execution_claimed_at": now, "execution_claim_deadline": deadline,
-		}).Error
-	})
+	query := db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+		Where("status = ?", "READY_FOR_EXECUTION").
+		Where("execution_status IN ? OR (execution_status='CLAIMED' AND execution_claim_deadline < ?)", []string{"READY", "RETRY"}, now).
+		Where("valid_from <= ? AND valid_until > ?", now, now).
+		Where("next_execution_at IS NULL OR next_execution_at <= ?", now).
+		Where("execution_claim_deadline IS NULL OR execution_claim_deadline < ?", now).
+		Order("CASE WHEN trade_action = 'SELL' THEN 0 ELSE 1 END, valid_until ASC, id ASC").
+		First(&model)
+	if errors.Is(query.Error, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if query.Error != nil {
+		return nil, query.Error
+	}
+	err := db.WithContext(ctx).Model(&db_model.TradingIntent{}).Where("id = ?", model.ID).Updates(map[string]any{
+		"execution_status": "CLAIMED", "execution_claim_token": claimToken, "execution_claimed_by": workerID,
+		"execution_claimed_at": now, "execution_claim_deadline": deadline,
+	}).Error
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +160,17 @@ func (*TradingRiskCheckDML) CreateBatch(ctx context.Context, db *gorm.DB, models
 type TradingOrderDML struct{}
 
 func (*TradingOrderDML) Create(ctx context.Context, db *gorm.DB, model *db_model.TradingOrder) error {
-	return db.WithContext(ctx).Create(model).Error
+	tx := db.WithContext(ctx)
+	// MySQL unique keys allow multiple NULLs, not multiple empty strings. The
+	// provider IDs are unknown until acknowledgement; omit them on first insert.
+	omitted := []string{}
+	if model.ClOrdID == "" {
+		omitted = append(omitted, "ClOrdID")
+	}
+	if model.OrderID == "" {
+		omitted = append(omitted, "OrderID")
+	}
+	return tx.Omit(omitted...).Create(model).Error
 }
 
 func (*TradingOrderDML) QueryByClientOrderID(ctx context.Context, db *gorm.DB, clientOrderID string) (*db_model.TradingOrder, error) {
@@ -215,7 +227,9 @@ func (*TradingOrderDML) QueryOpen(ctx context.Context, db *gorm.DB) ([]db_model.
 }
 
 func (*TradingOrderDML) Update(ctx context.Context, db *gorm.DB, id int64, values map[string]any) error {
-	values["updated_at"] = gorm.Expr("CURRENT_TIMESTAMP(3)")
+	if _, exists := values["updated_at"]; !exists {
+		values["updated_at"] = time.Now()
+	}
 	return db.WithContext(ctx).Model(&db_model.TradingOrder{}).Where("id = ?", id).Updates(values).Error
 }
 
@@ -348,7 +362,9 @@ func (*TradingReconciliationRunDML) Create(ctx context.Context, db *gorm.DB, mod
 }
 
 func (*TradingReconciliationRunDML) Update(ctx context.Context, db *gorm.DB, id int64, values map[string]any) error {
-	values["updated_at"] = gorm.Expr("CURRENT_TIMESTAMP(3)")
+	if _, exists := values["updated_at"]; !exists {
+		values["updated_at"] = time.Now()
+	}
 	return db.WithContext(ctx).Model(&db_model.TradingReconciliationRun{}).Where("id = ?", id).Updates(values).Error
 }
 
@@ -379,7 +395,7 @@ func (*TradingRuntimeControlDML) SetKillSwitch(ctx context.Context, db *gorm.DB,
 		Columns: []clause.Column{{Name: "control_key"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"enabled": enabled, "reason": reason, "changed_by": changedBy, "config_version": configVersion,
-			"changed_at": now, "updated_at": gorm.Expr("CURRENT_TIMESTAMP(3)"),
+			"changed_at": now, "updated_at": now,
 		}),
 	}).Create(&model).Error
 }
@@ -453,7 +469,9 @@ func (*TradingPositionCycleDML) List(ctx context.Context, db *gorm.DB, accountID
 }
 
 func (*TradingPositionCycleDML) Update(ctx context.Context, db *gorm.DB, id int64, values map[string]any) error {
-	values["updated_at"] = gorm.Expr("CURRENT_TIMESTAMP(3)")
+	if _, exists := values["updated_at"]; !exists {
+		values["updated_at"] = time.Now()
+	}
 	return db.WithContext(ctx).Model(&db_model.TradingPositionCycle{}).Where("id = ?", id).Updates(values).Error
 }
 

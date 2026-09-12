@@ -592,6 +592,7 @@ export interface TradingDashboardCycle {
 }
 
 export interface TradingDashboard {
+  refresh_run_id?: number
   trade_date: string
   runtime: TradingDashboardRuntime
   account: TradingDashboardAccount | null

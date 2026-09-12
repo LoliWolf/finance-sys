@@ -15,6 +15,11 @@ import (
 )
 
 func (s *Service) HandleBridgeEvent(ctx context.Context, event tradingdomain.BridgeEvent) error {
+	return s.applyBridgeEvent(ctx, event, nil)
+}
+
+func (s *Service) applyBridgeEvent(ctx context.Context, event tradingdomain.BridgeEvent, applied func(bool, bool)) error {
+	eventCreated, fillCreated := false, false
 	cfg := s.runtime.Config()
 	if cfg == nil {
 		return fmt.Errorf("runtime config unavailable")
@@ -26,19 +31,36 @@ func (s *Service) HandleBridgeEvent(ctx context.Context, event tradingdomain.Bri
 		_ = dal.TradingRuntimeControls.SetKillSwitch(ctx, s.db, true, "Bridge callback account mismatch", "system", cfg.Meta.ConfigVersion)
 		return fmt.Errorf("Bridge account mismatch")
 	}
-	order, err := dal.TradingOrders.QueryByClientOrderID(ctx, s.db, event.ClientOrderID)
-	if err != nil {
-		return err
+	if event.EventAt.IsZero() || event.FilledVolume < 0 || event.FillVolume < 0 {
+		return fmt.Errorf("invalid Bridge event time or quantity")
 	}
 	raw, _ := json.Marshal(event.RawPayload)
 	if len(raw) == 0 || string(raw) == "null" {
 		raw = []byte(`{}`)
 	}
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := dal.TradingRuntimeControls.Lock(ctx, tx); err != nil {
+			return err
+		}
+		order, err := dal.TradingOrders.QueryByClientOrderID(ctx, tx, event.ClientOrderID)
+		if err != nil {
+			return err
+		}
+		if order.AccountID != event.AccountID || (event.EastmoneySymbol != "" && event.EastmoneySymbol != order.EastmoneySymbol) || (event.Side != "" && event.Side != order.Side) || event.FilledVolume > order.Volume {
+			return fmt.Errorf("Bridge event conflicts with local order")
+		}
 		filledVWAP := fixedDecimal(event.FilledVWAP, 6)
-		updates := map[string]any{
-			"provider_status": event.ProviderStatus, "cl_ord_id": event.ClOrdID,
-			"last_event_at": event.EventAt, "latest_provider_payload_json": raw,
+		updates := map[string]any{}
+		if event.ClOrdID != "" {
+			if order.ClOrdID != "" && order.ClOrdID != event.ClOrdID {
+				return fmt.Errorf("provider order id conflict")
+			}
+			updates["cl_ord_id"] = event.ClOrdID
+		}
+		if order.LastEventAt == nil || !event.EventAt.Before(*order.LastEventAt) {
+			updates["provider_status"] = event.ProviderStatus
+			updates["last_event_at"] = event.EventAt
+			updates["latest_provider_payload_json"] = raw
 		}
 		model := db_model.TradingOrderEvent{
 			TradingOrderID: order.ID, EventHash: event.EventHash, EventType: event.EventType, Source: "BRIDGE_CALLBACK",
@@ -49,10 +71,14 @@ func (s *Service) HandleBridgeEvent(ctx context.Context, event tradingdomain.Bri
 			model.FilledVwap = &filledVWAP
 		}
 		created, createErr := dal.TradingOrderEvents.CreateIdempotent(ctx, tx, &model)
+		eventCreated = created
 		if createErr != nil || !created {
 			return createErr
 		}
 		if event.EventType == "EXECUTION_REPORT" && event.ExecID != "" && event.FillVolume > 0 {
+			if !isPositiveDecimal(event.FillPrice) {
+				return fmt.Errorf("execution price is missing or invalid")
+			}
 			fillPrice := fixedDecimal(event.FillPrice, 6)
 			amount := multiplyDecimal(fillPrice, event.FillVolume)
 			commission := fixedDecimal(event.Commission, 6)
@@ -64,8 +90,10 @@ func (s *Service) HandleBridgeEvent(ctx context.Context, event tradingdomain.Bri
 				Commission: commission, CommissionStatus: commissionStatus, CommissionSource: commissionSource,
 				ExecType: event.ExecType, TradedAt: event.EventAt, RawPayloadJSON: raw,
 			}
-			if _, fillErr := dal.TradingFills.CreateIdempotent(ctx, tx, &fill); fillErr != nil {
+			if fresh, fillErr := dal.TradingFills.CreateIdempotent(ctx, tx, &fill); fillErr != nil {
 				return fillErr
+			} else {
+				fillCreated = fresh
 			}
 			if isPositiveDecimal(commission) {
 				evidence := marshalJSON(map[string]any{"method": "PROVIDER_EXECUTION", "event_hash": event.EventHash})
@@ -83,25 +111,79 @@ func (s *Service) HandleBridgeEvent(ctx context.Context, event tradingdomain.Bri
 			}
 			updates["filled_commission"] = fixedDecimal(orderCommission, 6)
 		}
-		if event.FilledVolume >= order.FilledVolume {
-			updates["filled_volume"] = event.FilledVolume
-			if event.FilledVWAP != "" {
-				updates["filled_vwap"] = filledVWAP
-				updates["filled_amount"] = multiplyDecimal(filledVWAP, event.FilledVolume)
-			}
+		fills, err := dal.TradingFills.ByOrder(ctx, tx, order.ID)
+		if err != nil {
+			return err
 		}
-		if event.NormalizedStatus != "" && tradingdomain.CanTransitionOrder(order.Status, event.NormalizedStatus) {
-			updates["status"] = event.NormalizedStatus
-			if tradingdomain.IsTerminalOrderStatus(event.NormalizedStatus) {
-				updates["finished_at"] = event.EventAt
-			}
+		if err := mergeOrderEvent(order, event, fills); err != nil {
+			return err
 		}
-		return dal.TradingOrders.Update(ctx, tx, order.ID, updates)
+		updates["filled_volume"] = order.FilledVolume
+		updates["filled_vwap"] = order.FilledVwap
+		updates["filled_amount"] = order.FilledAmount
+		updates["status"] = order.Status
+		if tradingdomain.IsTerminalOrderStatus(order.Status) {
+			updates["finished_at"] = event.EventAt
+		}
+		if code, ok := event.RawPayload["error_code"].(string); ok {
+			updates["error_code"] = code
+		}
+		if err := dal.TradingOrders.Update(ctx, tx, order.ID, updates); err != nil {
+			return err
+		}
+		return s.syncPositionCycleAfterEvent(ctx, tx, order, event)
 	})
 	if err != nil {
 		return err
 	}
-	return s.syncPositionCycleAfterEvent(ctx, order, event)
+	if applied != nil {
+		applied(eventCreated, fillCreated)
+	}
+	return nil
+}
+
+func mergeOrderEvent(order *db_model.TradingOrder, event tradingdomain.BridgeEvent, fills []db_model.TradingFill) error {
+	volume := int64(0)
+	amount := new(big.Rat)
+	for _, fill := range fills {
+		if fill.Volume <= 0 || !isPositiveDecimal(fill.Amount) {
+			return fmt.Errorf("invalid stored fill")
+		}
+		volume += fill.Volume
+		amount.Add(amount, decimalRat(fill.Amount))
+	}
+	if volume > order.Volume || event.FilledVolume > order.Volume {
+		return fmt.Errorf("cumulative fills exceed order volume")
+	}
+	if event.FilledVolume > order.FilledVolume {
+		if !isPositiveDecimal(event.FilledVWAP) {
+			return fmt.Errorf("cumulative fill VWAP missing")
+		}
+		order.FilledVolume = event.FilledVolume
+		vwap := fixedDecimal(event.FilledVWAP, 6)
+		order.FilledVwap = &vwap
+		order.FilledAmount = multiplyDecimal(vwap, event.FilledVolume)
+	}
+	if volume >= order.FilledVolume && volume > 0 {
+		order.FilledVolume = volume
+		order.FilledAmount = amount.FloatString(6)
+		vwap := new(big.Rat).Quo(amount, big.NewRat(volume, 1)).FloatString(6)
+		order.FilledVwap = &vwap
+	}
+	if order.FilledVolume == order.Volume && order.Volume > 0 {
+		order.Status = "FILLED"
+		return nil
+	}
+	if event.NormalizedStatus != "" && event.NormalizedStatus != "UNKNOWN" && (order.LastEventAt == nil || !event.EventAt.Before(*order.LastEventAt)) && tradingdomain.CanTransitionOrder(order.Status, event.NormalizedStatus) {
+		order.Status = event.NormalizedStatus
+	}
+	if order.FilledVolume > 0 && !tradingdomain.IsTerminalOrderStatus(order.Status) {
+		order.Status = "PARTIALLY_FILLED"
+	}
+	if event.NormalizedStatus == "UNKNOWN" && !tradingdomain.IsTerminalOrderStatus(order.Status) && order.FilledVolume == 0 {
+		order.Status = "UNKNOWN"
+	}
+	return nil
 }
 
 func reportedCommissionState(commission string) (string, string) {
@@ -124,55 +206,65 @@ func (s *Service) Reconcile(ctx context.Context, runType string) (*db_model.Trad
 	if runType == "" {
 		runType = "MANUAL"
 	}
-	now := time.Now()
+	now := s.now()
+	deadline := now.Add(time.Minute)
 	run := db_model.TradingReconciliationRun{
 		RunKey: hashParts(runType, now.Truncate(time.Second).Format(time.RFC3339)), RunType: runType, Status: "RUNNING",
 		AccountID: cfg.Trading.Bridge.ExpectedAccountID, RequestJSON: marshalJSON(map[string]any{"run_type": runType}),
 		SummaryJSON: []byte(`{}`), StartedAt: now, ErrorMessage: "", ConfigVersion: cfg.Meta.ConfigVersion,
+		ClaimToken: hashParts("manual-reconcile", now.String()), ClaimDeadline: &deadline,
 	}
 	if err := dal.TradingReconciliationRuns.Create(ctx, s.db, &run); err != nil {
 		return nil, err
 	}
+	return s.performReconciliation(ctx, &run)
+}
+
+func (s *Service) performReconciliation(ctx context.Context, run *db_model.TradingReconciliationRun) (*db_model.TradingReconciliationRun, error) {
+	cfg := s.runtime.Config()
+	if cfg == nil {
+		return nil, fmt.Errorf("config unavailable")
+	}
 	if s.bridge == nil {
-		return s.failReconciliation(ctx, &run, "BRIDGE_UNAVAILABLE", "Bridge client unavailable")
+		return s.failReconciliation(ctx, run, "BRIDGE_UNAVAILABLE", "Bridge client unavailable")
 	}
-	requestedAt := time.Now()
-	if _, err := s.bridge.RefreshSnapshot(ctx, hashParts("refresh", run.RunKey)); err != nil {
-		return s.failReconciliation(ctx, &run, "BRIDGE_UNAVAILABLE", err.Error())
-	}
-	wait, maxAge := bridgeSnapshotWaitSettings(cfg)
-	deadline := time.NewTimer(wait)
-	defer deadline.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	var snapshot *tradingdomain.ReconciliationSnapshot
-	for {
-		value, snapshotErr := s.bridge.ReconciliationSnapshot(ctx, "")
-		if snapshotErr == nil && value != nil && !value.Account.SnapshotAt.Before(requestedAt.Add(-maxAge)) {
-			snapshot = value
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return s.failReconciliation(ctx, &run, "BRIDGE_SNAPSHOT_STALE", ctx.Err().Error())
-		case <-deadline.C:
-			return s.failReconciliation(ctx, &run, "BRIDGE_SNAPSHOT_STALE", "timed out waiting for a fresh Bridge snapshot")
-		case <-ticker.C:
-		}
+	snapshot, err := s.freshBridgeSnapshot(ctx, "reconciliation")
+	if err != nil {
+		return s.failReconciliation(ctx, run, "BRIDGE_SNAPSHOT_STALE", err.Error())
 	}
 	if snapshot.Account.AccountID != cfg.Trading.Bridge.ExpectedAccountID {
 		_ = dal.TradingRuntimeControls.SetKillSwitch(ctx, s.db, true, "reconciliation account mismatch", "system", cfg.Meta.ConfigVersion)
-		return s.failReconciliation(ctx, &run, "ACCOUNT_MISMATCH", "Bridge account differs from expected simulation account")
+		return s.failReconciliation(ctx, run, "ACCOUNT_MISMATCH", "Bridge account differs from expected simulation account")
+	}
+	repairedEvents, repairedFills := 0, 0
+	for _, items := range [][]map[string]any{snapshot.Orders, snapshot.Executions} {
+		for _, item := range items {
+			if raw, exists := item["bridge_event"]; exists {
+				var event tradingdomain.BridgeEvent
+				if e := json.Unmarshal(marshalJSON(raw), &event); e != nil {
+					return s.failReconciliation(ctx, run, "RECOVERY_SCHEMA_INVALID", e.Error())
+				}
+				if (event.EventType == "EXECUTION_REPORT" && cfg.Trading.Reconciliation.AutoRepairMissingFills) || (event.EventType != "EXECUTION_REPORT" && cfg.Trading.Reconciliation.AutoRepairMissingEvents) {
+					if e := s.applyBridgeEvent(ctx, event, func(newEvent, newFill bool) {
+						if newEvent {
+							repairedEvents++
+						}
+						if newFill {
+							repairedFills++
+						}
+					}); e != nil {
+						return s.failReconciliation(ctx, run, "RECOVERY_FAILED", e.Error())
+					}
+				}
+			}
+		}
 	}
 	if err := s.persistSnapshot(ctx, snapshot.Account, snapshot.Positions); err != nil {
-		return s.failReconciliation(ctx, &run, "SNAPSHOT_PERSIST_FAILED", err.Error())
-	}
-	if err := s.syncPositionCycles(ctx, snapshot.Account, snapshot.Positions); err != nil {
-		return s.failReconciliation(ctx, &run, "POSITION_CYCLE_SYNC_FAILED", err.Error())
+		return s.failReconciliation(ctx, run, "SNAPSHOT_PERSIST_FAILED", err.Error())
 	}
 	commissionSummary, commissionDiff, err := s.reconcileCommissions(ctx, snapshot.Account)
 	if err != nil {
-		return s.failReconciliation(ctx, &run, "COMMISSION_RECONCILIATION_FAILED", err.Error())
+		return s.failReconciliation(ctx, run, "COMMISSION_RECONCILIATION_FAILED", err.Error())
 	}
 	providerOrders := make(map[string]struct{}, len(snapshot.Orders))
 	for _, item := range snapshot.Orders {
@@ -182,17 +274,25 @@ func (s *Service) Reconcile(ctx context.Context, runType string) (*db_model.Trad
 	}
 	localOpen, err := dal.TradingOrders.QueryOpen(ctx, s.db)
 	if err != nil {
-		return s.failReconciliation(ctx, &run, "LOCAL_QUERY_FAILED", err.Error())
+		return s.failReconciliation(ctx, run, "LOCAL_QUERY_FAILED", err.Error())
 	}
-	diffs := make([]db_model.TradingReconciliationDiff, 0)
+	diffs, err := s.ledgerDiffs(ctx, snapshot.Account, snapshot.Positions)
+	if err != nil {
+		return s.failReconciliation(ctx, run, "LEDGER_UNAVAILABLE", err.Error())
+	}
+	for i := range diffs {
+		diffs[i].ReconciliationRunID = run.ID
+	}
+	for _, item := range snapshot.Orders {
+		if id, ok := item["client_order_id"].(string); !ok || id == "" {
+			diffs = append(diffs, db_model.TradingReconciliationDiff{ReconciliationRunID: run.ID, DiffType: "UNTRACKED_PROVIDER_ORDER", Severity: "P0", EntityType: "ORDER", EntityKey: fmt.Sprint(item["cl_ord_id"]), LocalValueJSON: []byte(`null`), ProviderValueJSON: marshalJSON(item), Resolution: "OPEN", ResolutionMessage: "provider order has no local client-order binding"})
+		}
+	}
 	if commissionDiff != nil {
 		commissionDiff.ReconciliationRunID = run.ID
 		diffs = append(diffs, *commissionDiff)
 	}
 	for _, order := range localOpen {
-		if order.Status == "DISPATCH_PENDING" || order.Status == "BRIDGE_QUEUED" {
-			continue
-		}
 		if _, ok := providerOrders[order.ClientOrderID]; !ok {
 			diffs = append(diffs, db_model.TradingReconciliationDiff{
 				ReconciliationRunID: run.ID, DiffType: "MISSING_PROVIDER_ORDER", Severity: "P0", EntityType: "ORDER",
@@ -202,26 +302,33 @@ func (s *Service) Reconcile(ctx context.Context, runType string) (*db_model.Trad
 		}
 	}
 	if err := dal.TradingReconciliationDiffs.CreateBatch(ctx, s.db, diffs); err != nil {
-		return s.failReconciliation(ctx, &run, "DIFF_PERSIST_FAILED", err.Error())
+		return s.failReconciliation(ctx, run, "DIFF_PERSIST_FAILED", err.Error())
 	}
 	status := "SUCCEEDED"
 	if len(diffs) > 0 {
 		status = "FAILED"
 		_ = dal.TradingRuntimeControls.SetKillSwitch(ctx, s.db, true, "reconciliation found high-severity differences", "system", cfg.Meta.ConfigVersion)
+		_ = s.bridge.SetKillSwitch(ctx, true, "reconciliation ledger difference", hashParts("reconciliation-kill", run.RunKey))
+	} else if err := s.syncPositionCycles(ctx, snapshot.Account, snapshot.Positions); err != nil {
+		return s.failReconciliation(ctx, run, "POSITION_CYCLE_SYNC_FAILED", err.Error())
 	}
-	finished := time.Now()
+	finished := s.now()
 	summary := marshalJSON(map[string]any{
 		"snapshot_version": snapshot.SnapshotVersion, "order_count": len(snapshot.Orders),
 		"fill_count": len(snapshot.Executions), "position_count": len(snapshot.Positions),
 		"diff_count": len(diffs), "commission": commissionSummary,
 	})
-	err = dal.TradingReconciliationRuns.Update(ctx, s.db, run.ID, map[string]any{
+	ok, err := dal.TradingReconciliationRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, finished, map[string]any{
 		"status": status, "snapshot_version": snapshot.SnapshotVersion, "bridge_cursor": snapshot.Cursor,
 		"order_count": len(snapshot.Orders), "fill_count": len(snapshot.Executions), "position_count": len(snapshot.Positions),
 		"diff_count": len(diffs), "summary_json": summary, "finished_at": finished,
+		"repaired_event_count": repairedEvents, "repaired_fill_count": repairedFills,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		return nil, ErrClaimLost
 	}
 	run.Status = status
 	run.SnapshotVersion = snapshot.SnapshotVersion
@@ -232,12 +339,12 @@ func (s *Service) Reconcile(ctx context.Context, runType string) (*db_model.Trad
 	run.DiffCount = int32(len(diffs))
 	run.SummaryJSON = summary
 	run.FinishedAt = &finished
-	return &run, nil
+	return run, nil
 }
 
 func (s *Service) failReconciliation(ctx context.Context, run *db_model.TradingReconciliationRun, code, message string) (*db_model.TradingReconciliationRun, error) {
-	finished := time.Now()
-	_ = dal.TradingReconciliationRuns.Update(ctx, s.db, run.ID, map[string]any{"status": "FAILED", "error_code": code, "error_message": message, "finished_at": finished})
+	finished := s.now()
+	_, _ = dal.TradingReconciliationRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, finished, map[string]any{"status": "FAILED", "error_code": code, "error_message": message, "finished_at": finished})
 	run.Status = "FAILED"
 	run.ErrorCode = code
 	run.ErrorMessage = message

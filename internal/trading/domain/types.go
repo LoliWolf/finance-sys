@@ -39,6 +39,7 @@ type AgentRunRequest struct {
 	ToolBaseURL      string    `json:"tool_base_url"`
 	ConfigVersion    int64     `json:"config_version"`
 	DryRun           bool      `json:"dry_run"`
+	SelectionOnly    bool      `json:"selection_only"`
 }
 
 type AgentRunResponse struct {
@@ -52,6 +53,7 @@ type AgentRunResponse struct {
 	CandidateCount      int                  `json:"candidate_count"`
 	Intents             []TradeIntent        `json:"intents"`
 	SkillDecisions      []AgentSkillDecision `json:"skill_decisions"`
+	InputSnapshot       map[string]any       `json:"input_snapshot"`
 }
 
 type AgentSkillDecision struct {
@@ -152,6 +154,11 @@ type QuoteSnapshot struct {
 	ListingDays     int       `json:"listing_days"`
 	ObservedAt      time.Time `json:"observed_at"`
 	Source          string    `json:"source"`
+	AssetType       string    `json:"asset_type"`
+	PriceTick       string    `json:"price_tick"`
+	TradeN          int       `json:"trade_n"`
+	MetadataDate    string    `json:"metadata_date"`
+	ListedDate      string    `json:"listed_date"`
 }
 
 type BridgeHealth struct {
@@ -172,23 +179,32 @@ type BridgeHealth struct {
 }
 
 type BridgeOrderRequest struct {
-	ClientOrderID      string    `json:"client_order_id"`
-	Environment        string    `json:"environment"`
-	ExpectedAccountID  string    `json:"expected_account_id"`
-	StrategyID         string    `json:"strategy_id"`
-	Symbol             string    `json:"symbol"`
-	TSCode             string    `json:"ts_code"`
-	AssetType          string    `json:"asset_type"`
-	BoardType          string    `json:"board_type"`
-	TradingRuleVersion string    `json:"trading_rule_version"`
-	Side               string    `json:"side"`
-	OrderType          string    `json:"order_type"`
-	PositionEffect     string    `json:"position_effect"`
-	Volume             int64     `json:"volume"`
-	Price              string    `json:"price"`
-	ValidUntil         time.Time `json:"valid_until"`
-	SourceIntentID     int64     `json:"source_intent_id"`
-	RiskSnapshotHash   string    `json:"risk_snapshot_hash"`
+	ClientOrderID      string     `json:"client_order_id"`
+	Environment        string     `json:"environment"`
+	ExpectedAccountID  string     `json:"expected_account_id"`
+	StrategyID         string     `json:"strategy_id"`
+	Symbol             string     `json:"symbol"`
+	TSCode             string     `json:"ts_code"`
+	AssetType          string     `json:"asset_type"`
+	BoardType          string     `json:"board_type"`
+	TradingRuleVersion string     `json:"trading_rule_version"`
+	Side               string     `json:"side"`
+	OrderType          string     `json:"order_type"`
+	PositionEffect     string     `json:"position_effect"`
+	Volume             int64      `json:"volume"`
+	Price              string     `json:"price"`
+	ValidUntil         time.Time  `json:"valid_until"`
+	SourceIntentID     int64      `json:"source_intent_id"`
+	RiskSnapshotHash   string     `json:"risk_snapshot_hash"`
+	UATKey             string     `json:"uat_key,omitempty"`
+	TradeN             int        `json:"trade_n"`
+	ExitPolicy         ExitPolicy `json:"exit_policy"`
+}
+
+type ExitPolicy struct {
+	StopLossRatio       float64 `json:"stop_loss_ratio"`
+	TakeProfitRatio     float64 `json:"take_profit_ratio"`
+	MaxHoldingTradeDays int     `json:"max_holding_trade_days"`
 }
 
 type BridgeCommandResponse struct {

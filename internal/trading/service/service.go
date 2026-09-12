@@ -17,9 +17,11 @@ import (
 	"finance-sys/internal/config"
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain/db_model"
+	"finance-sys/internal/rules"
 	tradingdomain "finance-sys/internal/trading/domain"
 	"finance-sys/internal/trading/instrument"
 	"finance-sys/internal/trading/policy"
+	"finance-sys/internal/tradingbridgeclient"
 	"finance-sys/internal/utils"
 
 	"gorm.io/gorm"
@@ -32,10 +34,11 @@ type Service struct {
 	bridge  BridgeClient
 	policy  *policy.Engine
 	logger  *slog.Logger
+	now     func() time.Time
 }
 
 func New(db *gorm.DB, runtime *config.Runtime, agent AgentClient, bridge BridgeClient, policyEngine *policy.Engine, logger *slog.Logger) *Service {
-	return &Service{db: db, runtime: runtime, agent: agent, bridge: bridge, policy: policyEngine, logger: logger}
+	return &Service{db: db, runtime: runtime, agent: agent, bridge: bridge, policy: policyEngine, logger: logger, now: time.Now}
 }
 
 func (s *Service) StartRun(ctx context.Context, request RunRequest) (*RunView, error) {
@@ -47,10 +50,20 @@ func (s *Service) StartRun(ctx context.Context, request RunRequest) (*RunView, e
 		request.TriggerType = "MANUAL"
 	}
 	if request.AsOfTime.IsZero() {
-		request.AsOfTime = time.Now()
+		request.AsOfTime = s.now()
 	}
-	request.AsOfTime = request.AsOfTime.Truncate(time.Millisecond)
-	runKey := hashParts(cfg.Trading.Decision.StrategyVersion, request.TriggerType, request.AsOfTime.Format(time.RFC3339Nano), strconv.FormatBool(request.DryRun))
+	request.AsOfTime = request.AsOfTime.UTC().Truncate(time.Minute)
+	request.DryRun = request.DryRun || cfg.Trading.KillSwitch || !cfg.Trading.Enabled || cfg.Trading.Decision.Provider == "SHADOW"
+	if request.TriggerType == "PRE_OPEN" {
+		open, err := cfg.Trading.Calendar.IsOpen(request.AsOfTime)
+		if err != nil {
+			return nil, err
+		}
+		if !open {
+			return nil, fmt.Errorf("not a trading day")
+		}
+	}
+	runKey := hashParts(cfg.Trading.Decision.StrategyVersion, request.TriggerType, request.AsOfTime.Format(time.RFC3339Nano), strconv.FormatBool(request.DryRun), s.toolBaseURL(cfg))
 	if existing, err := dal.TradingAgentRuns.QueryByRunKey(ctx, s.db, runKey); err == nil {
 		return s.GetRun(ctx, existing.ID)
 	} else if !errors.Is(err, dal.ErrNotFound) {
@@ -61,32 +74,50 @@ func (s *Service) StartRun(ctx context.Context, request RunRequest) (*RunView, e
 		RunKey: runKey, AsOfTime: request.AsOfTime, TriggerType: request.TriggerType,
 		StrategyName: cfg.Trading.Decision.StrategyName, StrategyVersion: cfg.Trading.Decision.StrategyVersion,
 		DecisionProvider: cfg.Trading.Decision.Provider, ToolBaseURL: s.toolBaseURL(cfg),
-		ConfigVersion: cfg.Meta.ConfigVersion, DryRun: request.DryRun,
+		ConfigVersion: cfg.Meta.ConfigVersion, DryRun: request.DryRun, SelectionOnly: true,
 	}
 	requestJSON, _ := json.Marshal(agentRequest)
-	now := time.Now()
+	now := s.now()
 	run := db_model.TradingAgentRun{
-		RunKey: runKey, TriggerType: request.TriggerType, Status: "RUNNING", DecisionProvider: cfg.Trading.Decision.Provider,
+		RunKey: runKey, TriggerType: request.TriggerType, Status: "QUEUED", DecisionProvider: cfg.Trading.Decision.Provider,
 		StrategyName: cfg.Trading.Decision.StrategyName, StrategyVersion: cfg.Trading.Decision.StrategyVersion,
 		SchemaVersion: cfg.Trading.Agent.SchemaVersion, PromptVersion: "", ToolContractVersion: cfg.Trading.Decision.ToolContractVersion,
 		AsOfTime: request.AsOfTime, InputCursor: "", InputSnapshotHash: utils.SHA256Hex(requestJSON),
-		RequestJSON: requestJSON, RawOutputJSON: []byte(`{}`), DryRun: request.DryRun, WorkerID: "api",
-		QueuedAt: now, StartedAt: &now, ErrorMessage: "", ConfigVersion: cfg.Meta.ConfigVersion,
+		RequestJSON: requestJSON, RawOutputJSON: []byte(`{}`), DryRun: request.DryRun,
+		QueuedAt: now, ErrorMessage: "", ConfigVersion: cfg.Meta.ConfigVersion,
 	}
 	if err := dal.TradingAgentRuns.Create(ctx, s.db, &run); err != nil {
+		if existing, e := dal.TradingAgentRuns.QueryByRunKey(ctx, s.db, runKey); e == nil {
+			return s.GetRun(ctx, existing.ID)
+		}
 		return nil, err
 	}
+	return s.GetRun(ctx, run.ID)
+}
 
+func (s *Service) decideRun(ctx context.Context, run *db_model.TradingAgentRun) (*RunView, error) {
+	cfg := s.runtime.Config()
+	if cfg == nil {
+		return nil, fmt.Errorf("config unavailable")
+	}
+	var agentRequest tradingdomain.AgentRunRequest
+	if err := json.Unmarshal(run.RequestJSON, &agentRequest); err != nil {
+		return nil, err
+	}
+	if run.ConfigVersion != cfg.Meta.ConfigVersion {
+		return nil, fmt.Errorf("CONFIG_CHANGED: re-enqueue decision")
+	}
+	request := agentRequest
 	response, err := s.agent.Run(ctx, agentRequest)
 	if err != nil {
 		finished := time.Now()
-		_ = dal.TradingAgentRuns.Update(ctx, s.db, run.ID, map[string]any{"status": "FAILED", "finished_at": finished, "error_code": "AGENT_CALL_FAILED", "error_message": err.Error()})
+		_, _ = dal.TradingAgentRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, s.now(), map[string]any{"status": "FAILED", "finished_at": finished, "error_code": "AGENT_CALL_FAILED", "error_message": err.Error()})
 		return nil, fmt.Errorf("trading agent run %d failed: %w", run.ID, err)
 	}
 	rawOutput, _ := json.Marshal(response)
 	if err := validateAgentResponse(cfg, agentRequest, response); err != nil {
 		finished := time.Now()
-		_ = dal.TradingAgentRuns.Update(ctx, s.db, run.ID, map[string]any{"status": "FAILED", "finished_at": finished, "raw_output_json": rawOutput, "error_code": "AGENT_SCHEMA_INVALID", "error_message": err.Error()})
+		_, _ = dal.TradingAgentRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, s.now(), map[string]any{"status": "FAILED", "finished_at": finished, "raw_output_json": rawOutput, "error_code": "AGENT_SCHEMA_INVALID", "error_message": err.Error()})
 		return nil, fmt.Errorf("trading agent run %d returned invalid output: %w", run.ID, err)
 	}
 
@@ -94,6 +125,16 @@ func (s *Service) StartRun(ctx context.Context, request RunRequest) (*RunView, e
 	createdIntents := 0
 	intentIDs := make(map[string]int64, len(response.Intents))
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := dal.TradingRuntimeControls.Lock(ctx, tx); err != nil {
+			return err
+		}
+		stored, err := dal.TradingAgentRuns.QueryByID(ctx, tx, run.ID)
+		if err != nil {
+			return err
+		}
+		if stored.ClaimToken != run.ClaimToken || stored.ClaimDeadline == nil || !stored.ClaimDeadline.After(s.now()) {
+			return fmt.Errorf("decision claim lost")
+		}
 		for _, intent := range response.Intents {
 			security, securityErr := instrument.Parse(intent.Symbol, intent.Market, intent.AssetType)
 			if securityErr != nil {
@@ -151,27 +192,31 @@ func (s *Service) StartRun(ctx context.Context, request RunRequest) (*RunView, e
 		if err := dal.TradingSkillDecisions.CreateBatch(ctx, tx, skillModels); err != nil {
 			return err
 		}
-		decisionCompleted := time.Now()
-		return dal.TradingAgentRuns.Update(ctx, tx, run.ID, map[string]any{
+		decisionCompleted := s.now()
+		status := "DECISION_SUCCEEDED"
+		if rejectedOutputs > 0 {
+			status = "DECISION_PARTIAL_SUCCEEDED"
+		}
+		ok, err := dal.TradingAgentRuns.FinishClaim(ctx, tx, run.ID, run.ClaimToken, decisionCompleted, map[string]any{
 			"raw_output_json": rawOutput, "candidate_count": response.CandidateCount,
 			"intent_count": createdIntents, "rejected_output_count": rejectedOutputs,
-			"decision_completed_at": decisionCompleted,
+			"decision_completed_at": decisionCompleted, "status": status, "finished_at": decisionCompleted,
+			"input_snapshot_hash": utils.SHA256Hex(marshalJSON(response.InputSnapshot)),
 		})
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("decision claim lost")
+		}
+		return nil
 	})
 	if err != nil {
 		finished := time.Now()
-		_ = dal.TradingAgentRuns.Update(ctx, s.db, run.ID, map[string]any{"status": "FAILED", "finished_at": finished, "error_code": "PERSIST_INTENTS_FAILED", "error_message": err.Error()})
+		_, _ = dal.TradingAgentRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, s.now(), map[string]any{"status": "FAILED", "finished_at": finished, "error_code": "PERSIST_INTENTS_FAILED", "error_message": err.Error()})
 		return nil, fmt.Errorf("persist trading agent run %d intents: %w", run.ID, err)
 	}
 
-	finished := time.Now()
-	status := "DECISION_SUCCEEDED"
-	if rejectedOutputs > 0 {
-		status = "DECISION_PARTIAL_SUCCEEDED"
-	}
-	if err := dal.TradingAgentRuns.Update(ctx, s.db, run.ID, map[string]any{"status": status, "finished_at": finished}); err != nil {
-		return nil, err
-	}
 	return s.GetRun(ctx, run.ID)
 }
 
@@ -297,26 +342,59 @@ func (s *Service) evaluateIntentWithOptions(ctx context.Context, intent *db_mode
 		return fmt.Errorf("runtime config unavailable")
 	}
 	tradeIntent := dbIntentToDomain(intent)
-	now := time.Now()
-	health, account, positions := s.currentBridgeState(ctx, cfg)
+	snapshot, err := s.freshBridgeSnapshot(ctx, "risk")
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrExecutionDeferred, err)
+	}
+	health, account, positions := snapshot.Health, snapshot.Account, snapshot.Positions
+	ledgerProblems, ledgerErr := s.ledgerDiffs(ctx, account, positions)
+	if ledgerErr != nil {
+		return fmt.Errorf("%w: ledger unavailable: %v", ErrExecutionDeferred, ledgerErr)
+	}
+	if len(ledgerProblems) > 0 {
+		return fmt.Errorf("%w: ledger not reconciled (%s)", ErrExecutionDeferred, ledgerProblems[0].DiffType)
+	}
 	position := findPosition(positions, intent.EastmoneySymbol)
-	latestPrice := ""
-	quoteObservedAt := time.Time{}
-	if quotes, quoteErr := s.refreshBridgeQuotes(ctx, []string{intent.EastmoneySymbol}, now); quoteErr == nil && len(quotes) > 0 {
-		latestPrice = quotes[0].Price
-		quoteObservedAt = quotes[0].ObservedAt
+	quotes, err := s.refreshBridgeQuotes(ctx, []string{intent.EastmoneySymbol}, s.now())
+	if err != nil || len(quotes) != 1 {
+		return fmt.Errorf("%w: fresh quote unavailable", ErrExecutionDeferred)
+	}
+	quote := quotes[0]
+	now := s.now()
+	if quote.AssetType != intent.AssetType || quote.BoardType != intent.BoardType {
+		return fmt.Errorf("provider identity differs from intent")
+	}
+	price, err := rules.TradingPrice(intent.TradeAction, quote, now, time.Duration(cfg.Trading.Risk.MaxSnapshotAgeSeconds)*time.Second)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrExecutionDeferred, err)
+	}
+	tradeIntent.ProposedLimitPrice = price
+	if tradeIntent.Action == "BUY" && (position != nil && position.Volume > 0) {
+		return fmt.Errorf("%w: pyramiding is disabled", ErrExecutionDeferred)
 	}
 	runtimeKill := true
 	if control, controlErr := dal.TradingRuntimeControls.KillSwitch(ctx, s.db); controlErr == nil {
 		runtimeKill = control.Enabled
 	}
 	startOfDay := startOfDayInLocation(now, cfg.Meta.Timezone)
-	newOrders, _ := dal.TradingOrders.CountCreatedSince(ctx, s.db, startOfDay)
-	turnoverAmount, _ := dal.TradingOrders.SumFilledAmountSince(ctx, s.db, startOfDay)
-	cooldownSince := startOfDay.AddDate(0, 0, -max(cfg.Trading.Risk.IntentCooldownTradeDays*3, 15))
+	newOrders, err := dal.TradingOrders.CountCreatedSince(ctx, s.db, startOfDay)
+	if err != nil {
+		return err
+	}
+	turnoverAmount, err := dal.TradingOrders.SumFilledAmountSince(ctx, s.db, startOfDay)
+	if err != nil {
+		return err
+	}
 	duplicate := false
 	if !strings.EqualFold(intent.TradeAction, "SELL") {
-		duplicate, _ = dal.TradingOrders.ExistsRecentForIntent(ctx, s.db, intent.RecommendationEventID, intent.Symbol, cooldownSince)
+		cooldownSince, dateErr := cfg.Trading.Calendar.Previous(now, cfg.Trading.Risk.IntentCooldownTradeDays)
+		if dateErr != nil {
+			return dateErr
+		}
+		duplicate, err = dal.TradingOrders.ExistsRecentForIntent(ctx, s.db, intent.RecommendationEventID, intent.Symbol, cooldownSince)
+		if err != nil {
+			return err
+		}
 	}
 	noPriceLimitPeriod := false
 	if strings.EqualFold(intent.TradeAction, "BUY") && cfg.Trading.Risk.ExcludeNoPriceLimit {
@@ -330,21 +408,35 @@ func (s *Service) evaluateIntentWithOptions(ctx context.Context, intent *db_mode
 	}
 	if strings.EqualFold(intent.TradeAction, "SELL") && intent.PositionCycleID != nil {
 		cycle, cycleErr := dal.TradingPositionCycles.QueryByID(ctx, s.db, *intent.PositionCycleID)
-		if cycleErr != nil || cycle.AccountID != cfg.Trading.Bridge.ExpectedAccountID || !strings.EqualFold(cycle.EastmoneySymbol, intent.EastmoneySymbol) || cycle.Status != "OPEN" {
+		if cycleErr != nil || cycle.AccountID != cfg.Trading.Bridge.ExpectedAccountID || !strings.EqualFold(cycle.EastmoneySymbol, intent.EastmoneySymbol) || cycle.Status == "CLOSED" {
 			return fmt.Errorf("SELL intent position cycle is missing, closed, or mismatched")
+		}
+	}
+	uat := uatKeyFromIntent(intent)
+	uatOK := uatAllowed(cfg.Trading, uat, intent.EastmoneySymbol, now)
+	if allowManualSession && !uatOK {
+		return fmt.Errorf("scoped UAT authorization is missing")
+	}
+	if !uatOK {
+		capability, e := dal.TradingBoardCapabilities.ByBoard(ctx, s.db, cfg.Trading.Bridge.ExpectedAccountID, intent.BoardType)
+		if e != nil || capability.VerificationStatus != "VERIFIED" || capability.TradingRuleVersion != cfg.Trading.Risk.TradingRuleVersion || (intent.TradeAction == "BUY" && !capability.BuyEnabled) || (intent.TradeAction == "SELL" && !capability.SellEnabled) {
+			return fmt.Errorf("BOARD_CAPABILITY_UNVERIFIED: settled UAT evidence required")
 		}
 	}
 	input := policy.Input{
 		Trading: cfg.Trading, RuntimeKillSwitch: runtimeKill, BridgeHealth: health, Intent: tradeIntent,
-		Account: account, Position: position, LatestPrice: latestPrice, QuoteObservedAt: quoteObservedAt,
+		Account: account, Position: position, LatestPrice: quote.Price, QuoteObservedAt: quote.ObservedAt,
 		CurrentTotalPositionRatio: safeRatio(account.MarketValue, account.NAV),
 		CurrentSymbolRatio:        positionRatio(position, account.NAV),
 		DailyTurnoverRatio:        safeRatio(turnoverAmount, account.NAV),
 		DailyLossRatio:            lossRatio(account.FloatingPnL, account.NAV),
 		NewOrdersToday:            int(newOrders), PositionCount: len(positions), DuplicateInCooldown: duplicate,
-		SessionOpen: sessionOpen(now, cfg.Trading.Scheduler) || (allowManualSession && sessionWindowOpen(now, cfg.Trading.Scheduler)), Now: now,
+		SessionOpen: (cfg.Trading.Scheduler.Enabled || allowManualSession) && tradingSessionOpen(now, cfg.Trading), Now: now,
 		NoPriceLimitPeriod: noPriceLimitPeriod,
+		UATAuthorized:      uatOK,
 	}
+	// Freeze the provider's settlement unit with the order, not in a guessed code map.
+	tradeIntent.EvidenceRefs = append(tradeIntent.EvidenceRefs, fmt.Sprintf("trade_n:%d", quote.TradeN))
 	result := s.policy.Evaluate(input)
 	return s.persistDecision(ctx, cfg, intent, tradeIntent, result, dryRun)
 }
@@ -355,13 +447,16 @@ func (s *Service) persistDecision(ctx context.Context, cfg *config.Config, inten
 		observed, _ := json.Marshal(item.Observed)
 		limit, _ := json.Marshal(item.Limit)
 		checks = append(checks, db_model.TradingRiskCheck{
-			TradingIntentID: intent.ID, EvaluationNo: 1, CheckCode: item.Code, CheckOrder: int32(item.Order), Passed: item.Passed,
+			TradingIntentID: intent.ID, EvaluationNo: intent.ExecutionAttemptCount + 1, CheckCode: item.Code, CheckOrder: int32(item.Order), Passed: item.Passed,
 			Decision: item.Decision, ReasonMessage: item.Reason, ObservedJSON: observed, LimitJSON: limit,
 			RiskVersion: cfg.Trading.Risk.Version, ConfigVersion: cfg.Meta.ConfigVersion,
 		})
 	}
 	if !result.Approved {
 		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := s.fenceIntent(ctx, tx, intent); err != nil {
+				return err
+			}
 			if err := dal.TradingRiskChecks.CreateBatch(ctx, tx, checks); err != nil {
 				return err
 			}
@@ -380,6 +475,13 @@ func (s *Service) persistDecision(ctx context.Context, cfg *config.Config, inten
 		AssetType: intent.AssetType, BoardType: intent.BoardType, TradingRuleVersion: cfg.Trading.Risk.TradingRuleVersion, Side: intent.TradeAction,
 		OrderType: "LIMIT", PositionEffect: positionEffect(intent.TradeAction), Volume: result.FinalVolume,
 		Price: result.FinalPrice, ValidUntil: intent.ValidUntil, SourceIntentID: intent.ID,
+		UATKey: uatKeyFromIntent(intent), TradeN: 1,
+		ExitPolicy: tradingdomain.ExitPolicy{StopLossRatio: cfg.Trading.Exit.StopLossRatio, TakeProfitRatio: cfg.Trading.Exit.TakeProfitRatio, MaxHoldingTradeDays: cfg.Trading.Exit.MaxHoldingTradeDays},
+	}
+	for _, ref := range tradeIntent.EvidenceRefs {
+		if ref == "trade_n:0" && intent.AssetType == "ETF" {
+			request.TradeN = 0
+		}
 	}
 	riskJSON, _ := json.Marshal(result)
 	request.RiskSnapshotHash = utils.SHA256Hex(riskJSON)
@@ -399,6 +501,31 @@ func (s *Service) persistDecision(ctx context.Context, cfg *config.Config, inten
 		RiskVersion: cfg.Trading.Risk.Version, ConfigVersion: cfg.Meta.ConfigVersion, ErrorMessage: "",
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.fenceIntent(ctx, tx, intent); err != nil {
+			return err
+		}
+		latest := s.runtime.Config()
+		control, e := dal.TradingRuntimeControls.KillSwitch(ctx, tx)
+		if e != nil {
+			return e
+		}
+		if status != "DRY_RUN" && (latest == nil || latest.Meta.ConfigVersion != cfg.Meta.ConfigVersion || !latest.Trading.Enabled || latest.Trading.KillSwitch || control.Enabled) {
+			return fmt.Errorf("%w: trading configuration or kill switch changed", ErrExecutionDeferred)
+		}
+		if existing, e := dal.TradingOrders.ByIntent(ctx, tx, intent.ID); e == nil && existing != nil {
+			return fmt.Errorf("%w: order already exists for intent", ErrExecutionDeferred)
+		} else if !errors.Is(e, dal.ErrNotFound) {
+			return e
+		}
+		if status != "DRY_RUN" {
+			open, e := dal.TradingOrders.QueryOpen(ctx, tx)
+			if e != nil {
+				return e
+			}
+			if len(open) > 0 {
+				return fmt.Errorf("%w: account already has an in-flight order", ErrExecutionDeferred)
+			}
+		}
 		if err := dal.TradingRiskChecks.CreateBatch(ctx, tx, checks); err != nil {
 			return err
 		}
@@ -416,8 +543,16 @@ func (s *Service) persistDecision(ctx context.Context, cfg *config.Config, inten
 	if status == "DRY_RUN" {
 		return nil
 	}
+	// Persist uncertainty before crossing the external side-effect boundary.
+	// Recovery must reconcile this same client ID; it may not create a new order.
+	if err := dal.TradingOrders.Update(ctx, s.db, order.ID, map[string]any{"status": "UNKNOWN", "dispatch_attempt_count": 1}); err != nil {
+		return err
+	}
 	response, err := s.bridge.PlaceOrder(ctx, idempotencyKey, request)
 	if err != nil {
+		if tradingbridgeclient.IsOrderRejected(err) {
+			return dal.TradingOrders.Update(ctx, s.db, order.ID, map[string]any{"status": "REJECTED", "finished_at": s.now(), "dispatch_attempt_count": 1, "error_code": "BRIDGE_REJECTED_BEFORE_ENQUEUE", "error_message": err.Error()})
+		}
 		return dal.TradingOrders.Update(ctx, s.db, order.ID, map[string]any{
 			"status":                 gorm.Expr("CASE WHEN status = 'DISPATCH_PENDING' THEN 'UNKNOWN' ELSE status END"),
 			"dispatch_attempt_count": 1, "error_code": "BRIDGE_DISPATCH_FAILED", "error_message": err.Error(),
@@ -426,7 +561,7 @@ func (s *Service) persistDecision(ctx context.Context, cfg *config.Config, inten
 	payload, _ := json.Marshal(response)
 	now := time.Now()
 	return dal.TradingOrders.Update(ctx, s.db, order.ID, map[string]any{
-		"status":                 gorm.Expr("CASE WHEN status = 'DISPATCH_PENDING' THEN 'BRIDGE_QUEUED' ELSE status END"),
+		"status":                 gorm.Expr("CASE WHEN status IN ('DISPATCH_PENDING','UNKNOWN') THEN 'BRIDGE_QUEUED' ELSE status END"),
 		"dispatch_attempt_count": 1, "submitted_at": now, "latest_provider_payload_json": payload,
 	})
 }
@@ -540,6 +675,12 @@ func validateAgentResponse(cfg *config.Config, request tradingdomain.AgentRunReq
 	}
 	if response.StrategyVersion != cfg.Trading.Decision.StrategyVersion || response.ToolContractVersion != cfg.Trading.Decision.ToolContractVersion {
 		return fmt.Errorf("strategy or tool contract version mismatch")
+	}
+	if !response.AsOfTime.Equal(request.AsOfTime) {
+		return fmt.Errorf("as_of_time mismatch")
+	}
+	if response.InputSnapshot == nil {
+		return fmt.Errorf("auditable input snapshot is required")
 	}
 	if len(response.Intents) > cfg.Trading.Decision.MaxIntentsPerRun {
 		return fmt.Errorf("agent returned too many intents")
@@ -693,11 +834,12 @@ func sessionOpen(now time.Time, cfg config.TradingSchedulerConfig) bool {
 }
 
 func sessionWindowOpen(now time.Time, cfg config.TradingSchedulerConfig) bool {
+	now = now.In(config.ChinaLocation)
 	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
 		return false
 	}
 	clock := now.Format("15:04:05")
-	return (clock >= cfg.MorningWindow.Start && clock <= cfg.MorningWindow.End) || (clock >= cfg.AfternoonWindow.Start && clock <= cfg.AfternoonWindow.End)
+	return (clock >= cfg.MorningWindow.Start && clock < cfg.MorningWindow.End) || (clock >= cfg.AfternoonWindow.Start && clock < cfg.AfternoonWindow.End)
 }
 
 func startOfDayInLocation(now time.Time, timezone string) time.Time {

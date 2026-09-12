@@ -18,6 +18,7 @@ import (
 const dashboardItemLimit = 200
 
 type TradingDashboardView struct {
+	RefreshRunID   *int64                     `json:"refresh_run_id,omitempty"`
 	TradeDate      string                     `json:"trade_date"`
 	Runtime        TradingDashboardRuntime    `json:"runtime"`
 	Account        *TradingDashboardAccount   `json:"account"`
@@ -146,7 +147,7 @@ type TradingDashboardCycle struct {
 	SecurityName                string     `json:"security_name"`
 	Status                      string     `json:"status"`
 	EntryTradeDate              time.Time  `json:"entry_trade_date"`
-	SellableTradeDate           time.Time  `json:"sellable_trade_date"`
+	SellableTradeDate           *time.Time `json:"sellable_trade_date"`
 	EntryPrice                  string     `json:"entry_price"`
 	InitialVolume               int64      `json:"initial_volume"`
 	CurrentVolume               int64      `json:"current_volume"`
@@ -293,61 +294,16 @@ func (s *Service) RefreshTradingDashboard(ctx context.Context, tradeDate string)
 	if _, _, _, err := dashboardDateRange(tradeDate, cfg.Meta.Timezone); err != nil {
 		return nil, err
 	}
-	if s.bridge == nil {
-		return nil, fmt.Errorf("Windows Bridge client unavailable")
-	}
-	health, err := s.bridge.Health(ctx)
+	run, err := s.QueueReconciliation(ctx, "DASHBOARD", s.now())
 	if err != nil {
-		return nil, fmt.Errorf("Windows Bridge unavailable: %w", err)
+		return nil, err
 	}
-	if health.Runner != "READY" {
-		return nil, fmt.Errorf("Windows Runner is offline; start FinanceSys-Eastmoney-Runner before refreshing")
+	view, err := s.TradingDashboard(ctx, tradeDate)
+	if err != nil {
+		return nil, err
 	}
-	if health.Terminal != "CONNECTED" {
-		return nil, fmt.Errorf("Eastmoney terminal is not connected: %s", health.Terminal)
-	}
-	if health.AuthState != "AUTH_OK" {
-		return nil, fmt.Errorf("Eastmoney authentication is not ready: %s", health.AuthState)
-	}
-	if health.AccountID != cfg.Trading.Bridge.ExpectedAccountID {
-		return nil, fmt.Errorf("Bridge account differs from the configured simulation account")
-	}
-
-	var baseline *tradingdomain.ReconciliationSnapshot
-	if value, baselineErr := s.bridge.ReconciliationSnapshot(ctx, ""); baselineErr == nil {
-		baseline = value
-	}
-	requestedAt := time.Now()
-	if _, err := s.bridge.RefreshSnapshot(ctx, hashParts("dashboard-refresh", requestedAt.Format(time.RFC3339Nano))); err != nil {
-		return nil, fmt.Errorf("request Bridge snapshot refresh: %w", err)
-	}
-	wait, maxAge := bridgeSnapshotWaitSettings(cfg)
-	deadline := time.NewTimer(wait)
-	defer deadline.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		snapshot, snapshotErr := s.bridge.ReconciliationSnapshot(ctx, "")
-		if snapshotErr == nil && dashboardSnapshotAdvanced(baseline, snapshot, requestedAt, maxAge) {
-			if snapshot.Account.AccountID != cfg.Trading.Bridge.ExpectedAccountID || !strings.EqualFold(snapshot.Account.Environment, "SIMULATION") {
-				return nil, fmt.Errorf("refreshed snapshot is not from the configured simulation account")
-			}
-			if err := s.persistSnapshot(ctx, snapshot.Account, snapshot.Positions); err != nil {
-				return nil, fmt.Errorf("persist refreshed account snapshot: %w", err)
-			}
-			if err := s.syncPositionCycles(ctx, snapshot.Account, snapshot.Positions); err != nil {
-				return nil, fmt.Errorf("sync position cycles after refresh: %w", err)
-			}
-			return s.TradingDashboard(ctx, tradeDate)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("wait for refreshed Bridge snapshot: %w", ctx.Err())
-		case <-deadline.C:
-			return nil, fmt.Errorf("timed out waiting for Windows Runner to produce a new account snapshot")
-		case <-ticker.C:
-		}
-	}
+	view.RefreshRunID = &run.ID
+	return view, nil
 }
 
 func dashboardSnapshotAdvanced(baseline, candidate *tradingdomain.ReconciliationSnapshot, requestedAt time.Time, maxAge time.Duration) bool {

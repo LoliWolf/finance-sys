@@ -15,7 +15,10 @@ type TradingReconciliationRun struct {
 	ID                 int64      `gorm:"column:id;type:bigint;primaryKey;autoIncrement:true" json:"id"`
 	RunKey             string     `gorm:"column:run_key;type:char(64);not null;uniqueIndex:uk_trading_reconciliation_runs_key,priority:1" json:"run_key"`
 	RunType            string     `gorm:"column:run_type;type:varchar(32);not null" json:"run_type"`
-	Status             string     `gorm:"column:status;type:varchar(32);not null;index:idx_trading_reconciliation_runs_status,priority:1;default:QUEUED" json:"status"`
+	Status             string     `gorm:"column:status;type:varchar(32);not null;index:idx_trading_reconciliation_claim,priority:1;index:idx_trading_reconciliation_runs_status,priority:1;default:QUEUED" json:"status"`
+	WorkerID           string     `gorm:"column:worker_id;type:varchar(128);not null" json:"worker_id"`
+	ClaimToken         string     `gorm:"column:claim_token;type:char(64);not null" json:"claim_token"`
+	ClaimDeadline      *time.Time `gorm:"column:claim_deadline;type:timestamp(3);index:idx_trading_reconciliation_claim,priority:2" json:"claim_deadline"`
 	AccountID          string     `gorm:"column:account_id;type:varchar(128);not null;index:idx_trading_reconciliation_runs_account,priority:1" json:"account_id"`
 	BridgeCursor       string     `gorm:"column:bridge_cursor;type:varchar(255);not null" json:"bridge_cursor"`
 	SnapshotVersion    string     `gorm:"column:snapshot_version;type:varchar(128);not null" json:"snapshot_version"`
@@ -27,7 +30,7 @@ type TradingReconciliationRun struct {
 	DiffCount          int32      `gorm:"column:diff_count;type:int;not null" json:"diff_count"`
 	RequestJSON        []byte     `gorm:"column:request_json;type:json;not null" json:"request_json"`
 	SummaryJSON        []byte     `gorm:"column:summary_json;type:json;not null" json:"summary_json"`
-	StartedAt          time.Time  `gorm:"column:started_at;type:timestamp(3);not null;index:idx_trading_reconciliation_runs_account,priority:2;index:idx_trading_reconciliation_runs_status,priority:2;default:CURRENT_TIMESTAMP(3)" json:"started_at"`
+	StartedAt          time.Time  `gorm:"column:started_at;type:timestamp(3);not null;index:idx_trading_reconciliation_claim,priority:3;index:idx_trading_reconciliation_runs_account,priority:2;index:idx_trading_reconciliation_runs_status,priority:2;default:CURRENT_TIMESTAMP(3)" json:"started_at"`
 	FinishedAt         *time.Time `gorm:"column:finished_at;type:timestamp(3)" json:"finished_at"`
 	ErrorCode          string     `gorm:"column:error_code;type:varchar(64);not null" json:"error_code"`
 	ErrorMessage       string     `gorm:"column:error_message;type:text;not null" json:"error_message"`

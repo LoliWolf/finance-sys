@@ -11,15 +11,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from .auth import verify
-from .config import BridgeConfig, load_config
+from .config import BridgeConfig, load_config, fresh_order_config
 from .db import Database, now_iso
 from .outbox import OutboxWorker
+from .order_safety import validate_request, validate_quote, validate_unit, aware_time
+
+
+class OrderRejected(ValueError):
+    """Definitive rejection before any PLACE command is committed."""
 
 
 class BridgeState:
     def __init__(self, cfg: BridgeConfig, db: Database) -> None:
         self.cfg = cfg
         self.db = db
+
+    def refresh_config(self) -> None:
+        self.cfg = fresh_order_config(self.cfg)
 
     def health(self) -> dict[str, Any]:
         heartbeat = self.db.state("runner_heartbeat_at")
@@ -98,6 +106,8 @@ def build_handler(state: BridgeState) -> type[BaseHTTPRequestHandler]:
                 verify(state.db, state.cfg, self.command, parsed.path, urllib.parse.parse_qs(parsed.query), body, headers)
                 payload = json.loads(body.decode("utf-8")) if body else {}
                 self._route(parsed.path, urllib.parse.parse_qs(parsed.query), payload)
+            except OrderRejected as exc:
+                self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"code": "ORDER_REJECTED", "error": str(exc)})
             except PermissionError as exc:
                 self._json(HTTPStatus.UNAUTHORIZED, {"error": str(exc)})
             except ValueError as exc:
@@ -107,6 +117,7 @@ def build_handler(state: BridgeState) -> type[BaseHTTPRequestHandler]:
 
         def _route(self, path: str, query: dict[str, list[str]], payload: dict[str, Any]) -> None:
             if self.command == "GET" and path == "/healthz":
+                state.refresh_config()
                 self._json(HTTPStatus.OK, state.health())
                 return
             if self.command == "GET" and path == "/v1/capabilities":
@@ -217,8 +228,24 @@ def build_handler(state: BridgeState) -> type[BaseHTTPRequestHandler]:
             idempotency_key = self.headers.get("Idempotency-Key", "")
             if not client_order_id or not idempotency_key:
                 raise ValueError("client_order_id and Idempotency-Key are required")
+            # Resolve replay before checking expiry/kill: this returns an existing
+            # command and never submits a second one, even after a timeout.
+            with state.db.connect() as connection:
+                existing = connection.execute("SELECT * FROM bridge_commands WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            if existing is not None:
+                if existing["command_type"] != command_type or json.loads(existing["payload_json"]) != payload:
+                    raise ValueError("idempotency key reused with a different command")
+                self._json(HTTPStatus.ACCEPTED, _command_response(existing, True))
+                return
             if command_type == "PLACE_ORDER":
-                _validate_order(state, payload)
+                try:
+                    state.refresh_config()
+                    _validate_order(state, payload)
+                    quotes = json.loads(state.db.state("quotes_json", "[]"))
+                    quote = next((q for q in quotes if q.get("eastmoney_symbol") == payload.get("symbol")), {})
+                    validate_quote(state.cfg, payload, quote)
+                except ValueError as exc:
+                    raise OrderRejected(str(exc)) from exc
             created = now_iso()
             with state.db.transaction() as connection:
                 existing = connection.execute(
@@ -227,6 +254,10 @@ def build_handler(state: BridgeState) -> type[BaseHTTPRequestHandler]:
                 if existing is not None:
                     self._json(HTTPStatus.ACCEPTED, _command_response(existing, True))
                     return
+                if command_type == "PLACE_ORDER" and payload.get("uat_key"):
+                    count = connection.execute("SELECT COUNT(*) FROM bridge_commands WHERE command_type='PLACE_ORDER' AND json_extract(payload_json,'$.uat_key')=?", (payload["uat_key"],)).fetchone()[0]
+                    if count >= int(state.cfg.uat.get("max_orders", 0)):
+                        raise OrderRejected("UAT command budget exhausted")
                 cursor = connection.execute(
                     "INSERT INTO bridge_commands(command_type,client_order_id,idempotency_key,status,payload_json,next_attempt_at,created_at,updated_at) VALUES (?,?,?,'QUEUED',?,?,?,?)",
                     (
@@ -260,26 +291,8 @@ def _validate_order(state: BridgeState, payload: dict[str, Any]) -> None:
     health = state.health()
     if health["kill_switch"] or health["status"] != "READY":
         raise ValueError(f"Bridge refuses new orders while status={health['status']}")
-    if payload.get("environment") != "SIMULATION" or payload.get("expected_account_id") != state.cfg.expected_account_id:
-        raise ValueError("simulation account mismatch")
-    if payload.get("strategy_id") != state.cfg.strategy_id:
-        raise ValueError("strategy_id mismatch")
-    if payload.get("order_type") != "LIMIT" or payload.get("side") not in {"BUY", "SELL"}:
-        raise ValueError("only BUY/SELL LIMIT orders are supported")
-    symbol = _normalize_quote_code(str(payload.get("symbol", "")))
-    if not symbol:
-        raise ValueError("only SHSE/SZSE securities are supported")
-    asset_type = str(payload.get("asset_type", "")).strip().upper()
-    board_type = _board_type(symbol, asset_type)
-    if str(payload.get("board_type", "")).strip().upper() != board_type:
-        raise ValueError("board_type does not match symbol and asset_type")
-    if board_type not in state.cfg.allowed_boards or board_type not in state.cfg.verified_boards:
-        raise ValueError(f"board {board_type} has not passed both risk and account verification")
-    if str(payload.get("trading_rule_version", "")).strip() != state.cfg.trading_rule_version:
-        raise ValueError("trading_rule_version mismatch")
-    volume = int(payload.get("volume", 0))
-    available = _available_volume(state.db, symbol) if payload.get("side") == "SELL" else 0
-    _validate_trading_unit(board_type, str(payload.get("side")), volume, available)
+    available = _available_volume(state.db, str(payload.get("symbol", "")), state.cfg.max_snapshot_age_seconds) if payload.get("side") == "SELL" else 0
+    validate_request(state.cfg, payload, available)
 
 
 def _normalize_quote_symbols(value: Any) -> list[str]:
@@ -329,11 +342,14 @@ def _board_type(symbol: str, asset_type: str) -> str:
     return "SH_MAIN" if symbol.startswith("SHSE.") else "SZ_MAIN"
 
 
-def _available_volume(db: Database, symbol: str) -> int:
+def _available_volume(db: Database, symbol: str, max_age_seconds: int = 15) -> int:
     row = db.latest_snapshot()
     if row is None:
         return 0
     try:
+        age = (dt.datetime.now(dt.timezone.utc)-aware_time(row["snapshot_at"])).total_seconds()
+        if age < -1 or age > max_age_seconds:
+            return 0
         positions = json.loads(row["positions_json"])
     except (TypeError, ValueError, KeyError):
         return 0
@@ -349,25 +365,7 @@ def _available_volume(db: Database, symbol: str) -> int:
 
 
 def _validate_trading_unit(board_type: str, side: str, volume: int, available: int = 0) -> None:
-    if volume <= 0:
-        raise ValueError("volume must be positive")
-    if side == "BUY":
-        if board_type == "STAR":
-            if volume < 200:
-                raise ValueError("STAR buy volume must be at least 200 shares")
-            return
-        if volume < 100 or volume % 100 != 0:
-            raise ValueError("buy volume must be a positive 100-share board lot")
-        return
-    if side != "SELL":
-        raise ValueError("side must be BUY or SELL")
-    minimum = 200 if board_type == "STAR" else 100
-    step_valid = board_type == "STAR" or volume % 100 == 0
-    if volume >= minimum and step_valid:
-        return
-    if available > 0 and volume == available:
-        return
-    raise ValueError("non-standard residual position must be sold in full")
+    validate_unit(board_type, side, volume, available)
 
 
 def _command_response(row: Any, replay: bool) -> dict[str, Any]:

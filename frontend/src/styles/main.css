@@ -144,7 +144,7 @@ button { color: inherit; }
 .status-badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status-ready, .status-succeeded, .status-active, .status-planned { color: #326b54; background: #e1eee6; }
 .status-pending, .status-queued, .status-needs_review, .status-ingested, .status-parsed, .status-needs_evaluation, .status-outdated { color: #94713d; background: #f5ead1; }
-.status-running { color: #456987; background: #e1eaf1; }
+.status-running, .status-analyzing { color: #456987; background: #e1eaf1; }
 .status-failed, .status-partial_failed { color: #a04a41; background: #f4dfdc; }
 .status-incomplete, .status-no_security, .status-unsupported, .status-empty, .status-not_evaluated, .status-invalid { color: #756c62; background: #e8e3dc; }
 .status-partial { color: #456987; background: #e1eaf1; }

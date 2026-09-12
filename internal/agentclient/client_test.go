@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestClientDoesNotRetryOnHTTP4xx(t *testing.T) {
 	require.Equal(t, int32(1), attempts.Load())
 }
 
-func TestClientRetriesOnTimeout(t *testing.T) {
+func TestClientDoesNotRetryAfterSharedDeadline(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
@@ -80,8 +81,26 @@ func TestClientRetriesOnTimeout(t *testing.T) {
 	_, err := client.ResolveDocument(context.Background(), cfg, agentclient.ResolveDocumentRequest{
 		RequestID: "client-timeout-test",
 	})
-	require.ErrorContains(t, err, "agent resolve document failed after 2 attempts")
-	require.Equal(t, int32(2), attempts.Load())
+	require.ErrorContains(t, err, "agent resolve document failed after 1 attempts")
+	require.Equal(t, int32(1), attempts.Load())
+}
+
+func TestClientPropagatesParentDeadline(t *testing.T) {
+	parentDeadline := time.Now().Add(time.Second)
+	var received atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		value, _ := strconv.ParseInt(r.Header.Get("X-Finance-Deadline-Unix-Ms"), 10, 64)
+		received.Store(value)
+		writeAgentResponse(t, w, agentclient.ResolveDocumentResponse{Status: agentclient.AgentStatusResolved})
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancel()
+	cfg := testAgentConfig(server.URL, 0)
+	cfg.TimeoutMS = 1000000
+	_, err := agentclient.NewClient(nil, nil).ResolveDocument(ctx, cfg, agentclient.ResolveDocumentRequest{})
+	require.NoError(t, err)
+	require.Equal(t, parentDeadline.UnixMilli(), received.Load())
 }
 
 func testAgentConfig(endpoint string, maxRetries int) config.AgentConfig {

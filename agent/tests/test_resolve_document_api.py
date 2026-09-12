@@ -31,6 +31,16 @@ def test_resolve_document_api_rejects_invalid_request_schema():
     assert response.status_code == 422
 
 
+def test_expired_or_invalid_shared_deadline_does_not_run_model(monkeypatch):
+    def unexpected(*args):
+        raise AssertionError("model must not run after caller deadline")
+    monkeypatch.setattr("app.main.resolve_document", unexpected)
+    expired = client.post("/v1/resolve-document", json=_request_payload("test"), headers={"X-Finance-Deadline-Unix-Ms": "1"})
+    assert expired.status_code == 504
+    invalid = client.post("/v1/resolve-document", json=_request_payload("test"), headers={"X-Finance-Deadline-Unix-Ms": "invalid"})
+    assert invalid.status_code == 400
+
+
 def _request_payload(text: str):
     return {
         "schema_version": REQUEST_SCHEMA_VERSION,

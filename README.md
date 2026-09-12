@@ -42,6 +42,12 @@ FinanceSys 将这些问题转化为一套可持续运行的研究基础设施：
 
 一条推荐不仅有最终收益，还可以看到推荐前后的价格路径、入场与退出位置、最大浮盈、最大不利波动和最大回撤。所有评价都能回到原始观点和来源文档，避免脱离上下文解读数字。
 
+### 单篇文档报告与失败重试
+
+文档报告详情页支持“重新分析”，仅分析失败（FAILED）且没有成功结果的文章可用；已完成分析、无有效推荐、正在分析和仅已解析的文档均不能通过此入口重试。重试自动保留来源或历史记录中的原推荐日期；旧手动上传文档若缺少日期记录，需要确认原日期，不会默认使用今天。成功后按钮禁用，失败后可以再次重试。
+
+“补算追踪”是独立操作，只计算已有推荐的后续表现，不会重新调用模型。重新分析成功后，可按需再补算追踪并导出报告。
+
 ### 标的热度与表现
 
 从股票、ETF 和板块维度观察市场关注度：哪些标的被更多博主同时提及，参与者是谁，后续平均表现和胜率如何。推荐热度与实际表现被并列展示，帮助区分市场共识、主题行情和真正有质量的判断。
@@ -122,21 +128,54 @@ FinanceSys 希望逐步形成一张中国市场观点网络：连接内容来源
 
 ## 快速开始
 
-本地只需要准备 Go、Python 和文档处理依赖。MySQL、LLM 和行情服务的连接与运行参数集中维护在 Nacos，Nacos 本身作为配置中心需要自行部署。
+本地准备 Go 1.22、Python 3.9+、Node.js/npm 和已安装依赖的分析 Agent 虚拟环境。MySQL、LLM、行情及业务运行参数统一来自 Nacos；不需要在开发机安装中间件。
 
-当前 macOS 生产环境可使用一键启动：
+### 统一正式环境入口
+
+正式环境只使用仓库根目录的 `start_prod.py`，原来的多套编译、启动和调试包装脚本已移除。
+
+macOS（在已登录用户的终端执行）：
 
 ```bash
-./fast_start_prod.sh
+python3 start_prod.py
 ```
 
-脚本会检查 Nacos SDK 所需端口、启动分析 Agent、构建并启动服务，并在退出前确认两端健康。未明确指定生产环境的开发和测试默认使用测试数据库。
+Windows（PowerShell）：
+
+```powershell
+py -3 start_prod.py
+```
+
+默认执行完整测试、前端构建、后端编译，再切换生产 API；明确使用 `FINANCE_SYS_ENV=PROD`，校验生产 Schema 为 `expert_trade`，不会停止测试端口的服务。测试阶段单独强制使用 `TEST` 环境，清除继承的真实库集成测试开关。
+
+脚本从环境变量读取 `NACOS_SERVER_ADDR`；没有时依次读取 `bootstrap_go122.env`、`bootstrap_go122.env.example`。也可以传入 `--env-file 路径`，文件只能包含 Nacos 地址。正式启动必须通过 Nacos 配置和 SDK gRPC 端口预检；脚本不会在预检失败时改用示例业务配置继续发布。构建期间如果生产/测试端口或 Agent 地址发生变化，会中止切换，保留原进程。
+
+常用模式（Windows 把 `python3` 换成 `py -3`）：
+
+```bash
+# 只测试、编译、签名；不请求 Nacos、不启动或停止服务
+python3 start_prod.py --build-only
+
+# 只查看生产 API 与分析 Agent 状态
+python3 start_prod.py --status
+```
+
+macOS 构建会生成 Mach-O UUID，并封装为包含本地网络用途说明的 `FinanceSys.app`，使用固定标识 `cn.financesys.api.production` 做本地 ad-hoc 临时签名，再校验签名和 UUID。启动时注册应用身份，通过 `AssociatedBundleIdentifiers` 关联 launchd 服务，便于系统识别并显示网络授权。没有购买或使用苹果开发者证书；这种签名不等于 Apple Developer ID，也不替代系统的本地网络授权。如果系统提示本地网络权限，需要人工处理，脚本不会关闭系统安全检查。
+
+通过全部校验后，Mac 使用当前用户的 launchd 托管 API（需要图形登录会话）；Windows 启动独立后台进程。原有健康分析 Agent 会复用；仅在配置指向本机回环地址、端口空闲且虚拟环境就绪时自动启动缺失的 Agent。远端或已占用但不健康的 Agent 会报错，不会擅自杀进程。
+
+Mac 包含一个由系统 Clang 编译的轻量原生启动器（需要 Xcode Command Line Tools），通过 Network.framework 发起正常的本地网络授权请求，连接 Nacos 成功后才启动 Go 子进程；它不实现业务逻辑，也不会自动点击授权或修改系统网络策略。
+
+构建产物按版本保留在 `tmp/production/releases/`，日志位于 `tmp/production/logs/`，最近成功部署记录为 `tmp/production/active.json`。新 API 健康检查失败时，会尝试恢复刚才运行的旧二进制并返回失败；不会回滚数据库或 Nacos 配置。首次部署可识别旧 API 的实际进程路径，不依赖过期 PID 文件，也不会覆盖旧二进制或删除历史日志。旧版本不会自动清理。
+
+注意：直接执行 `go build` 仍可用于开发检查，但不能替代正式发布入口。开发调试应先设置 Nacos 地址，并显式使用 `FINANCE_SYS_ENV=TEST` 执行 `go run ./cmd/api`，不要把正式环境脚本当作测试启动器。
 
 提交代码前执行：
 
 ```bash
 GOTOOLCHAIN=local go test ./...
 GOTOOLCHAIN=local go build ./...
+python3 -B -m unittest discover -s scripts/tests -p test_start_prod.py
 ```
 
 ## 项目文档

@@ -19,7 +19,7 @@ def run_deterministic(request: dict[str, Any], config: AgentConfig, client: Tool
     candidates = [] if exit_only else list(client.get("/recommendation-candidates", {"as_of_time": as_of.isoformat(), "limit": config.max_candidates}).get("items", []))
     portfolio = client.get("/portfolio")
     positions = list(portfolio.get("positions", []))
-    cycles = list(portfolio.get("cycles", []))
+    cycles = [] if request.get("selection_only") else list(portfolio.get("cycles", []))
     held_symbols = {str(item.get("symbol", "")) for item in positions if int(item.get("volume", 0)) > 0}
     open_order_symbols = {str(item.get("symbol", "")) for item in portfolio.get("open_orders", [])}
     symbols = sorted({str(item.get("symbol", "")) for item in candidates + positions if item.get("symbol")})
@@ -94,10 +94,14 @@ def run_deterministic(request: dict[str, Any], config: AgentConfig, client: Tool
         scored_candidates.append((score, event_id, candidate, {"blogger_score": fixed(blogger_score), "trend_score": fixed(trend_score), "confidence": fixed(confidence)}))
 
     scored_candidates.sort(key=lambda item: (item[0], str(item[2].get("recommend_date", "")), item[1]), reverse=True)
+    selected_symbols: set[str] = set()
     for score, event_id, candidate, score_parts in scored_candidates:
         if len(intents) >= config.max_intents:
             break
         symbol = str(candidate["symbol"])
+        if symbol in selected_symbols:
+            continue
+        selected_symbols.add(symbol)
         intent_key = _intent_key(str(request["strategy_version"]), as_of, event_id, symbol, "BUY", valid_until)
         intent = {
             "intent_key": intent_key, "recommendation_event_id": event_id, "candidate_plan_id": candidate.get("candidate_plan_id"),
@@ -118,6 +122,7 @@ def run_deterministic(request: dict[str, Any], config: AgentConfig, client: Tool
         "strategy_name": str(request["strategy_name"]), "strategy_version": str(request["strategy_version"]),
         "prompt_version": "deterministic-skills-v2", "tool_contract_version": config.tool_contract_version,
         "candidate_count": len(candidates), "intents": intents, "skill_decisions": decisions,
+        "input_snapshot": {"candidates": candidates, "portfolio": portfolio, "market": market_response, "history": history_response, "blogger_performance": performance_by_blogger},
     }
 
 

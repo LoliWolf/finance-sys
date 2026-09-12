@@ -122,12 +122,12 @@ func (s *Server) handleTradingPreflight(w http.ResponseWriter, r *http.Request) 
 	if !s.requireTradingService(w) {
 		return
 	}
-	session, err := s.trading.Preflight(r.Context(), time.Now())
+	session, err := s.trading.QueueReconciliation(r.Context(), "PREFLIGHT", time.Now())
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"session": session, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, session)
+	writeJSON(w, http.StatusAccepted, session)
 }
 
 func (s *Server) handleCancelTradingOrder(w http.ResponseWriter, r *http.Request) {
@@ -201,12 +201,29 @@ func (s *Server) handleCreateTradingReconciliationRun(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	run, err := s.trading.Reconcile(r.Context(), request.RunType)
+	run, err := s.trading.QueueReconciliation(r.Context(), request.RunType, time.Now())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"run": run, "error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, run)
+}
+
+func (s *Server) handleGetTradingReconciliation(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTradingService(w) {
+		return
+	}
+	id, err := parseID(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	run, err := s.trading.GetReconciliation(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
 }
 
 func (s *Server) handleSetTradingKillSwitch(w http.ResponseWriter, r *http.Request) {

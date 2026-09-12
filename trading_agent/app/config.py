@@ -24,6 +24,7 @@ class AgentConfig:
     take_profit_ratio: float = 0.06
     max_holding_trade_days: int = 20
     sell_limit_discount_ratio: float = 0.002
+    config_version: int = 0
 
 
 def _nacos_address() -> str:
@@ -70,4 +71,5 @@ def load_config() -> AgentConfig:
         take_profit_ratio=float(exit_config["take_profit_ratio"]),
         max_holding_trade_days=int(exit_config["max_holding_trade_days"]),
         sell_limit_discount_ratio=float(exit_config["sell_limit_discount_ratio"]),
+        config_version=int(root["meta"]["config_version"]),
     )

@@ -6,7 +6,7 @@ import os
 import pathlib
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -36,6 +36,12 @@ class BridgeConfig:
     allowed_boards: tuple[str, ...]
     verified_boards: tuple[str, ...]
     trading_rule_version: str
+    environment: str = "SIMULATION"
+    allow_live: bool = False
+    calendar: dict[str, Any] = field(default_factory=dict)
+    windows: tuple[tuple[str, str], ...] = ()
+    uat: dict[str, Any] = field(default_factory=dict)
+    max_snapshot_age_seconds: int = 15
 
 
 def load_root_config(base_dir: pathlib.Path | None = None) -> dict[str, Any]:
@@ -85,6 +91,12 @@ def load_config(base_dir: pathlib.Path | None = None) -> BridgeConfig:
         allowed_boards=tuple(str(value).strip().upper() for value in risk["allowed_boards"]),
         verified_boards=tuple(str(value).strip().upper() for value in account_policy["verified_boards"]),
         trading_rule_version=str(risk["trading_rule_version"]).strip(),
+        environment=str(trading["environment"]),
+        allow_live=bool(trading["allow_live"]),
+        calendar=dict(trading.get("calendar", {})),
+        windows=tuple((str(trading["scheduler"][key]["start"]), str(trading["scheduler"][key]["end"])) for key in ("morning_window", "afternoon_window")),
+        uat=dict(trading.get("uat", {})),
+        max_snapshot_age_seconds=int(risk["max_snapshot_age_seconds"]),
     )
     _validate(cfg)
     return cfg
@@ -112,8 +124,8 @@ def _resolve(base: pathlib.Path, value: str) -> pathlib.Path:
 
 
 def _validate(cfg: BridgeConfig) -> None:
-    if not cfg.simulation_only:
-        raise RuntimeError("Bridge refuses simulation_only=false")
+    if not cfg.simulation_only or cfg.allow_live or cfg.environment != "SIMULATION":
+        raise RuntimeError("Bridge supports SIMULATION only")
     if not cfg.strategy_id:
         raise RuntimeError("strategy_id is required")
     if not cfg.hmac_key_id or not cfg.hmac_secret:
@@ -127,3 +139,16 @@ def _validate(cfg: BridgeConfig) -> None:
         raise RuntimeError("trading.eastmoney.account_policy.verified_boards is invalid")
     if not cfg.trading_rule_version:
         raise RuntimeError("trading.risk.trading_rule_version is required")
+
+
+def fresh_order_config(previous: BridgeConfig) -> BridgeConfig:
+    """Never authorize a queued order from a cached configuration.
+
+    Network failure blocks placement. Credentials/account changes require an
+    explicit restart; do not retarget a running SDK to a different account.
+    """
+    current = load_config()
+    for name in ("expected_account_id", "strategy_id", "token_fingerprint", "hmac_key_id", "hmac_secret", "sqlite_path"):
+        if getattr(current, name) != getattr(previous, name):
+            raise ValueError("identity/credential configuration changed; restart required")
+    return current

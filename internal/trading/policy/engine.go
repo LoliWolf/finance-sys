@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"finance-sys/internal/config"
+	"finance-sys/internal/rules"
 	tradingdomain "finance-sys/internal/trading/domain"
 	"finance-sys/internal/trading/instrument"
 )
@@ -42,6 +43,7 @@ type Input struct {
 	Now                       time.Time
 	TradingUnit               instrument.TradingUnitRule
 	NoPriceLimitPeriod        bool
+	UATAuthorized             bool
 }
 
 type Result struct {
@@ -92,7 +94,7 @@ func (e *Engine) Evaluate(input Input) Result {
 	}
 	pass("ASSET_WHITELIST", map[string]any{"asset_type": input.Intent.AssetType, "market": input.Intent.Market, "side": input.Intent.Action}, map[string]any{"sector_forbidden": true})
 
-	if !instrument.ContainsBoard(input.Trading.Risk.AllowedBoards, input.Intent.BoardType) || !instrument.ContainsBoard(input.Trading.Eastmoney.AccountPolicy.VerifiedBoards, input.Intent.BoardType) {
+	if !input.UATAuthorized && (!instrument.ContainsBoard(input.Trading.Risk.AllowedBoards, input.Intent.BoardType) || !instrument.ContainsBoard(input.Trading.Eastmoney.AccountPolicy.VerifiedBoards, input.Intent.BoardType)) {
 		return reject("BOARD_WHITELIST", "board is not both allowed and verified for the simulation account", map[string]any{
 			"board_type": input.Intent.BoardType, "allowed_boards": input.Trading.Risk.AllowedBoards,
 			"verified_boards": input.Trading.Eastmoney.AccountPolicy.VerifiedBoards,
@@ -116,12 +118,12 @@ func (e *Engine) Evaluate(input Input) Result {
 
 	age := input.Now.Sub(input.Account.SnapshotAt)
 	bridgeReady := input.BridgeHealth.Status == "READY" && input.BridgeHealth.Runner == "READY" && input.BridgeHealth.Terminal == "CONNECTED" && input.BridgeHealth.Account == "READY" && input.BridgeHealth.AuthState == "AUTH_OK"
-	if input.Account.SnapshotAt.IsZero() || age < 0 || age > time.Duration(input.Trading.Risk.MaxSnapshotAgeSeconds)*time.Second || !bridgeReady {
+	if input.Account.SnapshotAt.IsZero() || age < -time.Second || age > time.Duration(input.Trading.Risk.MaxSnapshotAgeSeconds)*time.Second || !bridgeReady {
 		return reject("SNAPSHOT_FRESH", "account snapshot or Bridge health is stale", map[string]any{"snapshot_age_seconds": age.Seconds(), "bridge_status": input.BridgeHealth.Status, "auth_state": input.BridgeHealth.AuthState}, map[string]any{"max_snapshot_age_seconds": input.Trading.Risk.MaxSnapshotAgeSeconds, "bridge_status": "READY"})
 	}
 	pass("SNAPSHOT_FRESH", map[string]any{"snapshot_age_seconds": age.Seconds()}, map[string]any{"max_snapshot_age_seconds": input.Trading.Risk.MaxSnapshotAgeSeconds})
 
-	if !input.SessionOpen || input.Now.Before(input.Intent.ValidFrom) || input.Now.After(input.Intent.ValidUntil) {
+	if !input.SessionOpen || input.Now.Before(input.Intent.ValidFrom) || !input.Now.Before(input.Intent.ValidUntil) {
 		return reject("TRADING_SESSION", "intent is outside the configured trading session or validity window", map[string]any{"session_open": input.SessionOpen, "now": input.Now, "valid_from": input.Intent.ValidFrom, "valid_until": input.Intent.ValidUntil}, map[string]any{"must_be_open_and_valid": true})
 	}
 	pass("TRADING_SESSION", map[string]any{"session_open": true}, map[string]any{"must_be_open_and_valid": true})
@@ -135,12 +137,12 @@ func (e *Engine) Evaluate(input Input) Result {
 	}
 	pass("T1_SELLABLE", map[string]any{"available_volume": available}, map[string]any{"minimum_sell_volume": unit.MinimumSellVolume})
 
-	price, err := normalizePrice(input.Intent.ProposedLimitPrice)
+	price, err := normalizePriceForAsset(input.Intent.ProposedLimitPrice, input.Intent.AssetType)
 	if err != nil {
 		return reject("PRICE_BAND", "invalid proposed limit price", map[string]any{"price": input.Intent.ProposedLimitPrice}, map[string]any{"positive_price": true})
 	}
 	quoteAge := input.Now.Sub(input.QuoteObservedAt)
-	if input.QuoteObservedAt.IsZero() || quoteAge < 0 || quoteAge > time.Duration(input.Trading.Risk.MaxSnapshotAgeSeconds)*time.Second {
+	if input.QuoteObservedAt.IsZero() || quoteAge < -time.Second || quoteAge > time.Duration(input.Trading.Risk.MaxSnapshotAgeSeconds)*time.Second {
 		return reject("PRICE_BAND", "latest quote is unavailable or stale", map[string]any{"latest_price": input.LatestPrice, "quote_age_seconds": quoteAge.Seconds()}, map[string]any{"max_quote_age_seconds": input.Trading.Risk.MaxSnapshotAgeSeconds})
 	}
 	deviation, err := priceDeviation(price, input.LatestPrice)
@@ -162,7 +164,7 @@ func (e *Engine) Evaluate(input Input) Result {
 
 	turnover, turnoverErr := parseRat(input.DailyTurnoverRatio)
 	loss, lossErr := parseRat(input.DailyLossRatio)
-	if turnoverErr != nil || lossErr != nil || input.NewOrdersToday >= input.Trading.Risk.MaxNewOrdersPerDay || turnover.Cmp(ratFromFloat(input.Trading.Risk.MaxDailyTurnoverRatio)) >= 0 || loss.Cmp(ratFromFloat(input.Trading.Risk.DailyLossKillRatio)) >= 0 {
+	if strings.EqualFold(input.Intent.Action, "BUY") && (turnoverErr != nil || lossErr != nil || input.NewOrdersToday >= input.Trading.Risk.MaxNewOrdersPerDay || turnover.Cmp(ratFromFloat(input.Trading.Risk.MaxDailyTurnoverRatio)) >= 0 || loss.Cmp(ratFromFloat(input.Trading.Risk.DailyLossKillRatio)) >= 0) {
 		return reject("DAILY_LIMIT", "daily order, turnover, or loss limit has been reached", map[string]any{"new_orders": input.NewOrdersToday, "turnover_ratio": input.DailyTurnoverRatio, "loss_ratio": input.DailyLossRatio}, map[string]any{"max_new_orders": input.Trading.Risk.MaxNewOrdersPerDay, "max_turnover_ratio": input.Trading.Risk.MaxDailyTurnoverRatio, "daily_loss_kill_ratio": input.Trading.Risk.DailyLossKillRatio})
 	}
 	pass("DAILY_LIMIT", map[string]any{"new_orders": input.NewOrdersToday, "turnover_ratio": input.DailyTurnoverRatio, "loss_ratio": input.DailyLossRatio}, map[string]any{"within_limits": true})
@@ -176,73 +178,25 @@ func (e *Engine) Evaluate(input Input) Result {
 }
 
 func calculateVolume(input Input, price string, available int64) (int64, error) {
-	if strings.EqualFold(input.Intent.Action, "SELL") {
-		volume := available
-		if input.Intent.ProposedVolume != nil && *input.Intent.ProposedVolume < volume {
-			volume = *input.Intent.ProposedVolume
-		}
-		return instrument.RoundSellVolume(volume, available, input.TradingUnit)
-	}
-
-	nav, err := parsePositiveRat(input.Account.NAV)
-	if err != nil {
-		return 0, fmt.Errorf("invalid account nav")
-	}
-	availableCash, err := parsePositiveRat(input.Account.AvailableCash)
-	if err != nil {
-		return 0, fmt.Errorf("invalid available cash")
-	}
-	limitPrice, err := parsePositiveRat(price)
-	if err != nil {
-		return 0, fmt.Errorf("invalid limit price")
-	}
-	proposed, err := parsePositiveRat(input.Intent.ProposedPositionRatio)
-	if err != nil {
-		return 0, fmt.Errorf("invalid proposed position ratio")
-	}
-	currentTotal, err := parseNonNegativeRat(input.CurrentTotalPositionRatio)
-	if err != nil {
-		return 0, fmt.Errorf("invalid total position ratio")
-	}
-	currentSymbol, err := parseNonNegativeRat(input.CurrentSymbolRatio)
-	if err != nil {
-		return 0, fmt.Errorf("invalid symbol position ratio")
-	}
-
-	remainingSymbol := new(big.Rat).Sub(ratFromFloat(input.Trading.Risk.MaxSymbolPositionRatio), currentSymbol)
-	remainingTotal := new(big.Rat).Sub(ratFromFloat(input.Trading.Risk.MaxTotalPositionRatio), currentTotal)
-	effective := minRat(proposed, ratFromFloat(input.Trading.Risk.MaxSingleOrderRatio), remainingSymbol, remainingTotal)
-	if effective.Sign() <= 0 {
-		return 0, fmt.Errorf("position ratio budget is exhausted")
-	}
-	reserve := new(big.Rat).Mul(nav, ratFromFloat(input.Trading.Risk.MinCashReserveRatio))
-	cashBudget := new(big.Rat).Sub(availableCash, reserve)
-	ratioBudget := new(big.Rat).Mul(nav, effective)
-	budget := minRat(cashBudget, ratioBudget)
-	if budget.Sign() <= 0 {
-		return 0, fmt.Errorf("cash reserve leaves no order budget")
-	}
-	raw := new(big.Rat).Quo(budget, limitPrice)
-	units := new(big.Int).Quo(raw.Num(), raw.Denom())
-	volume := units.Int64()
-	if input.Intent.ProposedVolume != nil {
-		proposed, proposedErr := instrument.RoundBuyVolume(*input.Intent.ProposedVolume, input.TradingUnit)
-		if proposedErr != nil || proposed != *input.Intent.ProposedVolume {
-			return 0, fmt.Errorf("proposed volume does not satisfy the board trading unit")
-		}
-		if *input.Intent.ProposedVolume < volume {
-			volume = *input.Intent.ProposedVolume
-		}
-	}
-	return instrument.RoundBuyVolume(volume, input.TradingUnit)
+	return rules.TradingVolume(rules.TradingSizingInput{Side: input.Intent.Action, Price: price, NAV: input.Account.NAV, AvailableCash: input.Account.AvailableCash, RequestedRatio: input.Intent.ProposedPositionRatio, CurrentTotalRatio: input.CurrentTotalPositionRatio, CurrentSymbolRatio: input.CurrentSymbolRatio, Available: available, ProposedVolume: input.Intent.ProposedVolume, Unit: input.TradingUnit, Risk: input.Trading.Risk})
 }
 
 func normalizePrice(value string) (string, error) {
+	return normalizePriceForAsset(value, "STOCK")
+}
+
+func normalizePriceForAsset(value, asset string) (string, error) {
 	r, err := parsePositiveRat(value)
 	if err != nil {
 		return "", err
 	}
-	scaled := new(big.Rat).Mul(r, big.NewRat(100, 1))
+	base := int64(100)
+	precision := 2
+	if asset == "ETF" {
+		base = 1000
+		precision = 3
+	}
+	scaled := new(big.Rat).Mul(r, big.NewRat(base, 1))
 	quotient, remainder := new(big.Int), new(big.Int)
 	quotient.QuoRem(scaled.Num(), scaled.Denom(), remainder)
 	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(scaled.Denom()) >= 0 {
@@ -252,7 +206,7 @@ func normalizePrice(value string) (string, error) {
 	if cents <= 0 {
 		return "", fmt.Errorf("price must be positive")
 	}
-	return fmt.Sprintf("%d.%02d", cents/100, cents%100), nil
+	return new(big.Rat).SetFrac(big.NewInt(cents), big.NewInt(base)).FloatString(precision), nil
 }
 
 func priceDeviation(price, latest string) (*big.Rat, error) {

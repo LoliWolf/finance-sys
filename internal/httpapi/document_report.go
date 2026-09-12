@@ -179,7 +179,7 @@ func normalizeDocumentEvaluationIDs(values []int64) ([]int64, error) {
 
 func validDocumentStatus(value string) bool {
 	switch domain.DocumentStatus(value) {
-	case domain.DocumentStatusIngested, domain.DocumentStatusParsed, domain.DocumentStatusPlanned, domain.DocumentStatusFailed, domain.DocumentStatusInvalid:
+	case domain.DocumentStatusIngested, domain.DocumentStatusParsed, domain.DocumentStatusPlanned, domain.DocumentStatusFailed, domain.DocumentStatusInvalid, domain.DocumentStatusAnalyzing:
 		return true
 	default:
 		return false

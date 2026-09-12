@@ -8,6 +8,7 @@ import httpx
 
 from app.config import AgentSettings, get_settings
 from app.http_client import HTTPTransportError, StdlibHTTPClient, redact_secrets
+from app.request_budget import RequestCancelled, current_budget, remaining_timeout
 from app.schemas import AgentRawIntent
 from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill_prompt_block
 
@@ -93,18 +94,27 @@ class LLMClient:
                 },
             ],
         }
+        if self.llm.stream:
+            payload["stream"] = True
 
         headers = _request_headers(self.llm.extra_headers, self.llm.api_key)
 
         attempts = self.llm.max_retries + 1
+        deadline = time.monotonic() + remaining_timeout(self.llm.timeout_ms / 1000)
+        used_attempts = 0
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
+            remaining = remaining_timeout(deadline - time.monotonic())
+            if remaining <= 0:
+                last_error = RuntimeError("llm total deadline exceeded")
+                break
+            used_attempts = attempt
             try:
                 response = self.http_client.post(
                     self.llm.endpoint,
                     json=payload,
                     headers=headers,
-                    timeout=self.llm.timeout_ms / 1000,
+                    timeout=remaining,
                 )
                 response_text = response.text.strip()
                 if response.status_code < 200 or response.status_code >= 300:
@@ -133,9 +143,17 @@ class LLMClient:
                 last_error = exc
                 if attempt == attempts:
                     break
-                self._sleep(_retry_delay_seconds(attempt))
+                delay = _retry_delay_seconds(attempt)
+                if deadline - time.monotonic() <= delay:
+                    break
+                budget = current_budget.get()
+                if budget:
+                    if budget.cancelled.wait(min(delay, budget.remaining())):
+                        raise RequestCancelled("request cancelled during retry backoff")
+                else:
+                    self._sleep(delay)
 
-        raise RuntimeError(f"llm extraction failed after {attempts} attempts: {last_error}")
+        raise RuntimeError(f"llm extraction failed after {used_attempts} attempts: {last_error}")
 
 
 class _RetryableLLMError(Exception):

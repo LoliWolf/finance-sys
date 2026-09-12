@@ -7,6 +7,7 @@ const apiMocks = vi.hoisted(() => ({
   documentReport: vi.fn(),
   createDocumentEvaluationRun: vi.fn(),
   evaluationRun: vi.fn(),
+  retryDocumentAnalysis: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -135,5 +136,86 @@ describe('DocumentReportDetailView', () => {
 
     expect(window.print).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('刷新失败')
+  })
+
+  it.each(['PLANNED', 'INVALID', 'PARSED', 'INGESTED', 'ANALYZING'])('disables reanalysis for %s documents', async (status) => {
+    const fixture = reportFixture()
+    fixture.document.status = status
+    fixture.summary.recommendation_count = 0
+    apiMocks.documentReport.mockResolvedValue(fixture)
+    const wrapper = mount(DocumentReportDetailView)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="retry-analysis"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="retry-analysis"]').trigger('click')
+    expect(apiMocks.retryDocumentAnalysis).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('retries FAILED once, refreshes the report and disables the action after success', async () => {
+    const failed = reportFixture()
+    failed.document.status = 'FAILED'
+    failed.summary.recommendation_count = 0
+    apiMocks.documentReport.mockResolvedValueOnce(failed).mockResolvedValue(reportFixture())
+    let complete!: (value: unknown) => void
+    apiMocks.retryDocumentAnalysis.mockImplementation(() => new Promise((resolve) => { complete = resolve }))
+    const wrapper = mount(DocumentReportDetailView)
+    await flushPromises()
+    const button = wrapper.get('[data-testid="retry-analysis"]')
+    expect(button.attributes('disabled')).toBeUndefined()
+    await button.trigger('click')
+    await button.trigger('click')
+    expect(apiMocks.retryDocumentAnalysis).toHaveBeenCalledTimes(1)
+    expect(apiMocks.retryDocumentAnalysis).toHaveBeenCalledWith(7, '')
+    expect(button.text()).toContain('正在重新分析')
+    complete({ document_id: 7, status: 'PLANNED', plan_count: 1, trade_date: '2024-01-02' })
+    await flushPromises()
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('重新分析完成')
+    expect(apiMocks.createDocumentEvaluationRun).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps success non-retryable even if refreshing the report fails', async () => {
+    const fixture = reportFixture()
+    fixture.document.status = 'FAILED'
+    fixture.summary.recommendation_count = 0
+    apiMocks.documentReport.mockResolvedValueOnce(fixture).mockRejectedValueOnce(new Error('刷新失败'))
+    apiMocks.retryDocumentAnalysis.mockResolvedValue({ document_id: 7, status: 'INVALID', plan_count: 0, trade_date: '2024-01-02' })
+    const wrapper = mount(DocumentReportDetailView)
+    await flushPromises()
+    await wrapper.get('[data-testid="retry-analysis"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="retry-analysis"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('未提取到有效推荐')
+    wrapper.unmount()
+  })
+
+  it('allows another retry after failure and asks for a date only when the API requires it', async () => {
+    const fixture = reportFixture()
+    fixture.document.status = 'FAILED'
+    fixture.summary.recommendation_count = 0
+    apiMocks.documentReport.mockResolvedValue(fixture)
+    apiMocks.retryDocumentAnalysis.mockRejectedValue(Object.assign(new Error('无法确定原分析日期'), { code: 'RETRY_DATE_REQUIRED' }))
+    const wrapper = mount(DocumentReportDetailView)
+    await flushPromises()
+    await wrapper.get('[data-testid="retry-analysis"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="retry-analysis"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('#retry-original-date').exists()).toBe(true)
+    await wrapper.get('#retry-original-date').setValue('2024-01-02')
+    await wrapper.get('[data-testid="retry-analysis"]').trigger('click')
+    await flushPromises()
+    expect(apiMocks.retryDocumentAnalysis).toHaveBeenLastCalledWith(7, '2024-01-02')
+    wrapper.unmount()
+  })
+
+  it('does not retry a FAILED document that already has recommendations', async () => {
+    const fixture = reportFixture()
+    fixture.document.status = 'FAILED'
+    apiMocks.documentReport.mockResolvedValue(fixture)
+    const wrapper = mount(DocumentReportDetailView)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="retry-analysis"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
   })
 })

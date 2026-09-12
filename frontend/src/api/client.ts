@@ -33,7 +33,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, options)
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: response.statusText }))
-    throw new Error(payload.error || payload.message || `请求失败 (${response.status})`)
+    throw Object.assign(new Error(payload.error || payload.message || `请求失败 (${response.status})`), { status: response.status, code: payload.code })
   }
   return response.json() as Promise<T>
 }
@@ -65,6 +65,10 @@ export const api = {
   documents: () => request<DocumentRecord[]>('/documents'),
   documentReports: (query: Query = {}) => request<DocumentReportList>(`/document-reports${queryString(query)}`),
   documentReport: (id: number) => request<DocumentReport>(`/documents/${id}/report`),
+  retryDocumentAnalysis: (id: number, tradeDate = '') => request<{ document_id: number; status: string; plan_count: number; trade_date: string; warning?: string }>(`/documents/${id}/retry-analysis`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(tradeDate ? { trade_date: tradeDate } : {}),
+  }),
   createDocumentEvaluationRun: (documentIds: number[], forceRebuild = false) => request<DocumentEvaluationRunResponse>('/documents/evaluation-runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

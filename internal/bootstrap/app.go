@@ -96,7 +96,7 @@ func Build(ctx context.Context) (*App, error) {
 			ConfigVersion: snapshot.Config.Meta.ConfigVersion,
 			Source:        snapshot.Source,
 			Sha256:        snapshot.SHA256,
-			RawJSON:       snapshot.Raw,
+			RawJSON:       config.AuditJSON(snapshot.Raw),
 		})
 	}
 

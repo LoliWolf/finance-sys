@@ -15,7 +15,9 @@ import (
 func main() {
 	uatKey := flag.String("uat-key", "", "unique UAT key")
 	symbol := flag.String("symbol", "600000", "six-digit stock symbol")
-	market := flag.String("market", "SH", "SH or SZ")
+	market := flag.String("market", "", "SH or SZ; inferred from canonical code when omitted")
+	assetType := flag.String("asset-type", "", "STOCK or ETF; inferred when omitted")
+	verifyBoard := flag.String("verify-board", "", "verify stored UAT fills/fees for SH_MAIN, SZ_MAIN, CHINEXT, STAR or ETF; never places an order")
 	side := flag.String("side", "BUY", "BUY or SELL")
 	confirm := flag.String("confirm", "", "must equal SIMULATION_ONE_LOT or SIMULATION_ONE_LOT_SELL")
 	flag.Parse()
@@ -27,8 +29,16 @@ func main() {
 		fail(err)
 	}
 	defer app.Close()
+	if *verifyBoard != "" {
+		capability, err := app.TradingService.VerifyBoardAcceptance(ctx, *verifyBoard)
+		if err != nil {
+			fail(err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"board_type": capability.BoardType, "verification_status": capability.VerificationStatus, "evidence": json.RawMessage(capability.EvidenceJSON)})
+		return
+	}
 	view, err := app.TradingService.ExecuteOneLotUAT(ctx, tradingservice.OneLotUATRequest{
-		UATKey: *uatKey, Symbol: *symbol, Market: *market, Action: *side, Confirm: *confirm,
+		UATKey: *uatKey, Symbol: *symbol, Market: *market, Action: *side, Confirm: *confirm, AssetType: *assetType,
 	})
 	if err != nil {
 		fail(err)

@@ -1,8 +1,8 @@
 package domain
 
 var orderTransitions = map[string]map[string]struct{}{
-	"DISPATCH_PENDING": {"BRIDGE_QUEUED": {}, "REJECTED": {}, "UNKNOWN": {}},
-	"BRIDGE_QUEUED":    {"SUBMITTED": {}, "REJECTED": {}, "UNKNOWN": {}},
+	"DISPATCH_PENDING": {"BRIDGE_QUEUED": {}, "SUBMITTED": {}, "PARTIALLY_FILLED": {}, "FILLED": {}, "CANCELED": {}, "REJECTED": {}, "UNKNOWN": {}},
+	"BRIDGE_QUEUED":    {"SUBMITTED": {}, "PARTIALLY_FILLED": {}, "FILLED": {}, "CANCELED": {}, "REJECTED": {}, "UNKNOWN": {}},
 	"SUBMITTED":        {"SUBMITTED": {}, "PARTIALLY_FILLED": {}, "FILLED": {}, "CANCELED": {}, "REJECTED": {}, "UNKNOWN": {}},
 	"PARTIALLY_FILLED": {"PARTIALLY_FILLED": {}, "FILLED": {}, "CANCELED": {}, "UNKNOWN": {}},
 	"UNKNOWN":          {"SUBMITTED": {}, "PARTIALLY_FILLED": {}, "FILLED": {}, "CANCELED": {}, "REJECTED": {}, "UNKNOWN": {}},

@@ -10,6 +10,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/yushikuann/go-tushare-sdk v0.0.0-20240603111829-a761d93914f0
 	gorm.io/driver/mysql v1.6.0
+	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gen v0.3.27
 	gorm.io/gorm v1.31.1
 )
@@ -50,6 +51,7 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect

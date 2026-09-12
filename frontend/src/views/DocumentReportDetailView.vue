@@ -15,6 +15,9 @@ const documentID = computed(() => Number(route.params.id))
 const loading = ref(true)
 const evaluating = ref(false)
 const exporting = ref(false)
+const reanalyzing = ref(false)
+const retryDateRequired = ref(false)
+const retryDate = ref('')
 const error = ref('')
 const notice = ref('')
 const report = ref<DocumentReport | null>(null)
@@ -49,6 +52,36 @@ async function evaluateDocument() {
   } catch (cause) {
     evaluating.value = false
     error.value = cause instanceof Error ? cause.message : '追踪补算提交失败'
+  }
+}
+
+const canReanalyze = computed(() => report.value?.document.status === 'FAILED' && report.value.summary.recommendation_count === 0)
+
+async function reanalyzeDocument() {
+  if (!canReanalyze.value || reanalyzing.value || loading.value || exporting.value || evaluating.value) return
+  if (retryDateRequired.value && !retryDate.value) { error.value = '请先填写原推荐日期'; return }
+  reanalyzing.value = true
+  error.value = ''
+  notice.value = '正在重新分析原文，请勿重复提交；完成后可单独补算追踪。'
+  try {
+    const result = await api.retryDocumentAnalysis(documentID.value, retryDate.value)
+    if (disposed) return
+    retryDateRequired.value = false
+    if (report.value) report.value.document.status = result.status
+    notice.value = result.status === 'INVALID'
+      ? '文章分析已完成，未提取到有效推荐；该结果不属于分析失败，不能再次重试。'
+      : `重新分析完成，产出 ${result.plan_count} 个候选计划，原推荐日期 ${result.trade_date}。可点击“补算追踪”计算表现。`
+    if (result.warning) notice.value += ` ${result.warning}`
+    await load(false)
+  } catch (cause) {
+    if (disposed) return
+    const message = cause instanceof Error ? cause.message : '重新分析失败'
+    retryDateRequired.value = !!cause && typeof cause === 'object' && (cause as { code?: string }).code === 'RETRY_DATE_REQUIRED'
+    notice.value = ''
+    await load(false)
+    error.value = message
+  } finally {
+    reanalyzing.value = false
   }
 }
 
@@ -146,14 +179,17 @@ onBeforeUnmount(() => {
     <div class="report-toolbar no-print">
       <button class="button" type="button" @click="router.push('/document-reports')"><ArrowLeft :size="15" />返回文档列表</button>
       <div>
-        <button class="button" type="button" :disabled="loading" @click="load()"><RefreshCw :size="15" />刷新</button>
-        <button class="button" type="button" :disabled="evaluating || !report?.summary.recommendation_count" @click="evaluateDocument"><Calculator :size="15" />{{ evaluating ? '正在补算…' : '补算追踪' }}</button>
-        <button class="button primary" type="button" :disabled="exporting || !report" @click="exportCurrentReport"><Download :size="15" />{{ exporting ? '准备报告…' : '导出当前版' }}</button>
+        <button class="button" type="button" :disabled="loading || reanalyzing" @click="load()"><RefreshCw :size="15" />刷新</button>
+        <button class="button" data-testid="retry-analysis" type="button" :disabled="!canReanalyze || reanalyzing || loading || exporting || evaluating" title="仅分析失败且无成功推荐结果的文章可重新分析" @click="reanalyzeDocument"><RefreshCw :size="15" />{{ reanalyzing ? '正在重新分析…' : '重新分析' }}</button>
+        <button class="button" type="button" :disabled="evaluating || reanalyzing || !report?.summary.recommendation_count" @click="evaluateDocument"><Calculator :size="15" />{{ evaluating ? '正在补算…' : '补算追踪' }}</button>
+        <button class="button primary" type="button" :disabled="exporting || reanalyzing || !report" @click="exportCurrentReport"><Download :size="15" />{{ exporting ? '准备报告…' : '导出当前版' }}</button>
       </div>
     </div>
 
     <div v-if="error" class="error-banner no-print">{{ error }}</div>
     <div v-if="notice" class="success-banner no-print">{{ notice }}<span v-if="activeRun && evaluating"> 已处理 {{ activeRun.evaluated_event_count }} / {{ activeRun.target_event_count }} 条推荐。</span></div>
+    <div v-if="canReanalyze && retryDateRequired" class="filter-bar no-print"><div class="field"><label for="retry-original-date">原推荐日期（历史记录未保存，请确认后填写）</label><input id="retry-original-date" v-model="retryDate" type="date" :disabled="reanalyzing" /></div></div>
+    <p v-if="canReanalyze && !reanalyzing" class="muted no-print">文章分析失败：可重新分析原文。成功或“无有效推荐”的文章不支持重试；补算追踪不会重新调用模型。</p>
     <StatePanel v-if="loading" loading />
 
     <template v-if="report">

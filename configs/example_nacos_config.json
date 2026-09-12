@@ -12,7 +12,7 @@
       "port_test": 18080,
       "api_prefix": "/api/v1",
       "read_timeout_ms": 30000,
-      "write_timeout_ms": 900000,
+      "write_timeout_ms": 1000000,
       "idle_timeout_ms": 60000,
       "shutdown_timeout_seconds": 20,
       "max_header_bytes": 1048576,
@@ -114,7 +114,8 @@
     "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
     "api_key": "",
     "model": "qwen2.5:14b-instruct",
-    "timeout_ms": 240000,
+    "stream": true,
+    "timeout_ms": 1000000,
     "max_retries": 2,
     "extra_headers": {
       "X-Client-Name": "finance-sys-agent",
@@ -143,8 +144,8 @@
       "max_json_bytes": 65535,
       "retention_days": 90
     },
-    "timeout_ms": 300000,
-    "max_retries": 1,
+    "timeout_ms": 1000000,
+    "max_retries": 0,
     "schema_version": "agent.resolve_document.response.v1",
     "auth": {
       "enabled": false,
@@ -280,6 +281,8 @@
     }
   },
   "trading": {
+    "calendar": {"source": "", "version": "", "coverage_from": "", "coverage_to": "", "open_dates": []},
+    "uat": {"enabled": false, "key": "", "symbols": [], "expires_at": "", "max_orders": 2},
     "enabled": false,
     "environment": "SIMULATION",
     "provider": "EASTMONEY_GM",
@@ -296,8 +299,8 @@
     },
     "decision": {
       "provider": "DETERMINISTIC",
-      "strategy_name": "blogger_follow_v1",
-      "strategy_version": "1.0.0",
+      "strategy_name": "blogger_follow_skills_v2",
+      "strategy_version": "2.1.0",
       "tool_contract_version": "trading-tools/v2",
       "min_recommendation_confidence": 0.65,
       "min_blogger_sample_count": 10,
@@ -306,7 +309,7 @@
       "max_intents_per_run": 5
     },
     "risk": {
-      "version": "risk-v1",
+      "version": "risk-v3",
       "allowed_asset_types": ["STOCK", "ETF"],
       "allowed_markets": ["SH", "SZ"],
       "allowed_boards": ["SH_MAIN"],
@@ -329,7 +332,7 @@
       "default_order_type": "LIMIT",
       "allow_market_order": false,
       "command_poll_interval_ms": 500,
-      "command_claim_timeout_ms": 10000,
+      "command_claim_timeout_ms": 60000,
       "dispatch_timeout_ms": 5000,
       "dispatch_max_retries": 3,
       "cancel_open_orders_at_session_end": true

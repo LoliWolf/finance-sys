@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"finance-sys/internal/config"
@@ -91,6 +92,17 @@ func (s *AutomaticScheduler) Run(ctx context.Context) {
 	if s == nil || s.tasks == nil || s.runtime == nil {
 		return
 	}
+	var lanes sync.WaitGroup
+	for _, lane := range []string{"enqueue", "general", "trading"} {
+		lanes.Add(1)
+		go func(lane string) { defer lanes.Done(); s.runLane(ctx, lane) }(lane)
+	}
+	lanes.Wait()
+}
+
+// Scheduling and trading task claims remain responsive while OCR/OpenList jobs
+// occupy the single general worker. Trading handlers only persist queued work.
+func (s *AutomaticScheduler) runLane(ctx context.Context, lane string) {
 	interval := time.Second
 	for {
 		cfg := s.runtime.Config()
@@ -98,8 +110,29 @@ func (s *AutomaticScheduler) Run(ctx context.Context) {
 			if cfg.Scheduler.PollIntervalMS > 0 {
 				interval = time.Duration(cfg.Scheduler.PollIntervalMS) * time.Millisecond
 			}
-			if err := s.tick(ctx, cfg); err != nil && s.logger != nil {
-				s.logger.ErrorContext(ctx, "automatic scheduler tick failed", "error", err.Error())
+			var err error
+			if lane == "enqueue" {
+				location, e := time.LoadLocation(cfg.Meta.Timezone)
+				if e != nil {
+					err = e
+				} else {
+					err = s.enqueueDueTasks(ctx, cfg, s.now().In(location))
+				}
+			} else {
+				types := []domain.ScheduledTaskType{domain.ScheduledTaskTypeStockDailyPreviousDay, domain.ScheduledTaskTypeEvaluationRecent, domain.ScheduledTaskTypeOpenListDocuments, domain.ScheduledTaskTypeSecurityMasterRefresh}
+				if lane == "trading" {
+					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeTradingPreopenDecision, domain.ScheduledTaskTypeTradingExitMonitor, domain.ScheduledTaskTypeTradingReconciliation, domain.ScheduledTaskTypeTradingEODSnapshot, domain.ScheduledTaskTypeTradingPreflight, domain.ScheduledTaskTypeTradingCancelOpen}
+				}
+				for n := 0; n < maxScheduledTasksPerTick; n++ {
+					var claimed bool
+					claimed, err = s.tasks.ClaimAndExecuteNext(ctx, s.workerID+"-"+lane, time.Duration(cfg.Scheduler.ClaimTimeoutMS)*time.Millisecond, types...)
+					if err != nil || !claimed {
+						break
+					}
+				}
+			}
+			if err != nil && s.logger != nil {
+				s.logger.ErrorContext(ctx, "automatic scheduler lane failed", "lane", lane, "error", err.Error())
 			}
 		}
 		timer := time.NewTimer(interval)
@@ -207,12 +240,13 @@ func (s *AutomaticScheduler) enqueueDueTasks(ctx context.Context, cfg *config.Co
 		}
 	}
 
-	if cfg.Trading.Scheduler.Enabled {
+	tradingOpen, calendarErr := cfg.Trading.Calendar.IsOpen(now)
+	if cfg.Trading.Scheduler.Enabled && calendarErr == nil && tradingOpen {
 		preflight := cfg.Trading.Scheduler.Preflight
 		if preflight.Enabled {
 			scheduledAt := dailyScheduledAt(now, preflight.Hour, preflight.Minute)
 			if !now.Before(scheduledAt) {
-				if _, _, err := s.tasks.Enqueue(ctx, domain.ScheduledTaskTypeTradingPreflight, scheduledAt.Format(time.DateOnly), scheduledAt, map[string]any{"trade_date": scheduledAt.Format(time.DateOnly)}); err != nil {
+				if _, _, err := s.tasks.Enqueue(ctx, domain.ScheduledTaskTypeTradingPreflight, fmt.Sprintf("%s-v%d", scheduledAt.Format(time.DateOnly), cfg.Meta.ConfigVersion), scheduledAt, map[string]any{"trade_date": scheduledAt.Format(time.DateOnly)}); err != nil {
 					return fmt.Errorf("enqueue trading preflight: %w", err)
 				}
 			}
@@ -241,7 +275,7 @@ func (s *AutomaticScheduler) enqueueDueTasks(ctx context.Context, cfg *config.Co
 		}
 
 		interval := cfg.Trading.Reconciliation.IntervalSeconds
-		if cfg.Trading.Reconciliation.Enabled && interval > 0 {
+		if cfg.Trading.Reconciliation.Enabled && interval > 0 && now.Format("15:04:05") >= "08:50:00" && now.Format("15:04:05") <= "15:15:00" {
 			scheduledAt := now.Truncate(time.Duration(interval) * time.Second)
 			if _, _, err := s.tasks.Enqueue(ctx, domain.ScheduledTaskTypeTradingReconciliation, scheduledAt.Format("2006-01-02T15:04:05"), scheduledAt, map[string]string{"run_type": "INTERVAL"}); err != nil {
 				return fmt.Errorf("enqueue trading reconciliation: %w", err)
@@ -323,6 +357,9 @@ func (s *AutomaticScheduler) handleTradingDecision(ctx context.Context, rawInput
 	if err := json.Unmarshal(rawInput, &request); err != nil {
 		return nil, fmt.Errorf("decode trading decision scheduled task input: %w", err)
 	}
+	if request.TriggerType == "PRE_OPEN" && s.now().In(config.ChinaLocation).Format("15:04:05") >= "10:00:00" {
+		return map[string]any{"skipped": "MISSED_PREOPEN_WINDOW"}, nil
+	}
 	return s.trading.StartRun(ctx, request)
 }
 
@@ -336,19 +373,19 @@ func (s *AutomaticScheduler) handleTradingReconciliation(ctx context.Context, ra
 	if err := json.Unmarshal(rawInput, &request); err != nil {
 		return nil, fmt.Errorf("decode trading reconciliation scheduled task input: %w", err)
 	}
-	return s.trading.Reconcile(ctx, request.RunType)
+	return s.trading.QueueReconciliation(ctx, request.RunType, s.now())
 }
 
 func (s *AutomaticScheduler) handleTradingPreflight(ctx context.Context, rawInput json.RawMessage) (any, error) {
 	if s.trading == nil {
 		return nil, fmt.Errorf("trading service is unavailable")
 	}
-	return s.trading.Preflight(ctx, s.now())
+	return s.trading.QueueReconciliation(ctx, "PREFLIGHT", s.now())
 }
 
 func (s *AutomaticScheduler) handleTradingCancelOpen(ctx context.Context, rawInput json.RawMessage) (any, error) {
 	if s.trading == nil {
 		return nil, fmt.Errorf("trading service is unavailable")
 	}
-	return s.trading.CancelOpenOrders(ctx, "SCHEDULED_SESSION_END")
+	return s.trading.QueueReconciliation(ctx, "CANCEL_SESSION_END", s.now())
 }

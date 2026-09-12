@@ -8,7 +8,7 @@ import (
 
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain/db_model"
-	"finance-sys/internal/trading/instrument"
+	tradingdomain "finance-sys/internal/trading/domain"
 )
 
 func (s *Service) Preflight(ctx context.Context, at time.Time) (*db_model.TradingDailySession, error) {
@@ -19,17 +19,30 @@ func (s *Service) Preflight(ctx context.Context, at time.Time) (*db_model.Tradin
 	if at.IsZero() {
 		at = time.Now()
 	}
-	tradeDate := startOfDayInLocation(at, cfg.Meta.Timezone)
+	tradeDate := tradingDay(at)
+	open, calendarErr := cfg.Trading.Calendar.IsOpen(at)
+	if calendarErr != nil {
+		return nil, calendarErr
+	}
+	if !open {
+		return nil, fmt.Errorf("not a trading day")
+	}
 	health := map[string]any{"status": "UNAVAILABLE", "kill_switch": true}
 	authState := "UNKNOWN"
 	bridgeState := "UNAVAILABLE"
 	bridgeReady := false
+	var snapshotPositions []tradingdomain.PositionSnapshot
 	if s.bridge != nil {
-		if value, err := s.bridge.Health(ctx); err == nil && value != nil {
+		if snapshot, err := s.freshBridgeSnapshot(ctx, "preflight"); err == nil && snapshot != nil {
+			value := snapshot.Health
 			health = map[string]any{"status": value.Status, "runner": value.Runner, "terminal": value.Terminal, "account": value.Account, "auth_state": value.AuthState, "kill_switch": value.KillSwitch, "config_version": value.ConfigVersion}
 			authState = value.AuthState
 			bridgeState = value.Status
-			bridgeReady = value.Status == "READY" && value.AuthState == "AUTH_OK" && !value.KillSwitch
+			bridgeReady = value.Runner == "READY" && value.Terminal == "CONNECTED" && value.Account == "READY" && value.AuthState == "AUTH_OK" && value.AccountID == cfg.Trading.Bridge.ExpectedAccountID
+			snapshotPositions = snapshot.Positions
+			if err := s.persistSnapshot(ctx, snapshot.Account, snapshot.Positions); err != nil {
+				return nil, err
+			}
 		}
 	}
 	runtimeKill := true
@@ -38,18 +51,20 @@ func (s *Service) Preflight(ctx context.Context, at time.Time) (*db_model.Tradin
 	}
 	untrackedPositions := make([]string, 0)
 	if s.bridge != nil {
-		_, account, positions := s.currentBridgeState(ctx, cfg)
-		for _, position := range positions {
+		for _, position := range snapshotPositions {
 			if position.Volume <= 0 {
 				continue
 			}
-			if _, err := dal.TradingPositionCycles.QueryOpenBySymbol(ctx, s.db, account.AccountID, position.EastmoneySymbol); errors.Is(err, dal.ErrNotFound) {
+			if _, err := dal.TradingPositionCycles.QueryOpenBySymbol(ctx, s.db, cfg.Trading.Bridge.ExpectedAccountID, position.EastmoneySymbol); errors.Is(err, dal.ErrNotFound) {
 				untrackedPositions = append(untrackedPositions, position.EastmoneySymbol)
+			} else if err != nil {
+				return nil, err
 			}
 		}
 	}
 	openOrders, openOrderErr := dal.TradingOrders.QueryOpen(ctx, s.db)
-	ready := cfg.Trading.Enabled && !cfg.Trading.KillSwitch && !runtimeKill && bridgeReady && cfg.Trading.Environment == "SIMULATION" && !cfg.Trading.AllowLive && len(untrackedPositions) == 0 && openOrderErr == nil && len(openOrders) == 0
+	_, nextErr := cfg.Trading.Calendar.Next(at)
+	ready := bridgeReady && cfg.Trading.Environment == "SIMULATION" && !cfg.Trading.AllowLive && len(untrackedPositions) == 0 && openOrderErr == nil && len(openOrders) == 0 && nextErr == nil
 	status := "BLOCKED"
 	if ready {
 		status = "READY"
@@ -71,50 +86,11 @@ func (s *Service) Preflight(ctx context.Context, at time.Time) (*db_model.Tradin
 	if err := dal.TradingDailySessions.Upsert(ctx, s.db, &session); err != nil {
 		return nil, err
 	}
-	if err := s.persistBoardCapabilities(ctx, cfg.Meta.ConfigVersion); err != nil {
-		return nil, err
-	}
+	// Preflight never turns an allowlist into fabricated UAT evidence.
 	if !ready {
 		return &session, fmt.Errorf("trading preflight blocked")
 	}
 	return &session, nil
-}
-
-func (s *Service) persistBoardCapabilities(ctx context.Context, configVersion int64) error {
-	cfg := s.runtime.Config()
-	if cfg == nil {
-		return fmt.Errorf("runtime config unavailable")
-	}
-	for _, board := range []string{instrument.BoardSHMain, instrument.BoardSZMain, instrument.BoardChiNext, instrument.BoardSTAR, instrument.BoardETF} {
-		rule, err := instrument.UnitRule(board)
-		if err != nil {
-			return err
-		}
-		verified := instrument.ContainsBoard(cfg.Trading.Risk.AllowedBoards, board) && instrument.ContainsBoard(cfg.Trading.Eastmoney.AccountPolicy.VerifiedBoards, board)
-		status := "UNVERIFIED"
-		var verifiedAt *time.Time
-		if verified {
-			status = "VERIFIED"
-			now := time.Now()
-			verifiedAt = &now
-		}
-		assetType := "STOCK"
-		if board == instrument.BoardETF {
-			assetType = "ETF"
-		}
-		model := db_model.TradingBoardCapability{
-			CapabilityKey: hashParts(cfg.Trading.Provider, cfg.Trading.Bridge.ExpectedAccountID, board, assetType), Provider: cfg.Trading.Provider,
-			Environment: "SIMULATION", AccountID: cfg.Trading.Bridge.ExpectedAccountID, BoardType: board, AssetType: assetType,
-			BuyEnabled: verified, SellEnabled: verified, MinimumBuyVolume: rule.MinimumBuyVolume, BuyStep: rule.BuyStep,
-			MinimumSellVolume: rule.MinimumSellVolume, SellStep: rule.SellStep, ResidualSellSupported: true,
-			VerificationStatus: status, VerifiedAt: verifiedAt, EvidenceJSON: marshalJSON(map[string]any{"risk_allowed": instrument.ContainsBoard(cfg.Trading.Risk.AllowedBoards, board), "account_verified": instrument.ContainsBoard(cfg.Trading.Eastmoney.AccountPolicy.VerifiedBoards, board)}),
-			TradingRuleVersion: cfg.Trading.Risk.TradingRuleVersion, ConfigVersion: configVersion,
-		}
-		if err := dal.TradingBoardCapabilities.Upsert(ctx, s.db, &model); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Service) CancelOpenOrders(ctx context.Context, reason string) (map[string]any, error) {
@@ -128,6 +104,9 @@ func (s *Service) CancelOpenOrders(ctx context.Context, reason string) (map[stri
 	canceled := 0
 	errorsByOrder := make(map[string]string)
 	for _, order := range orders {
+		if reason != "EOD" && order.ValidUntil.After(s.now()) {
+			continue
+		}
 		if _, err := s.bridge.CancelOrder(ctx, order.ClientOrderID, hashParts("scheduled-cancel", reason, order.ClientOrderID)); err != nil {
 			errorsByOrder[order.ClientOrderID] = err.Error()
 			continue

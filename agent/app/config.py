@@ -28,6 +28,7 @@ class LLMSettings(BaseModel):
     endpoint: str = Field(default="")
     api_key: str = Field(default="")
     model: str = Field(default="")
+    stream: bool = Field(default=False)
     timeout_ms: int = Field(default=15000, gt=0)
     max_retries: int = Field(default=1, ge=0)
     extra_headers: Dict[str, str] = Field(default_factory=dict)
@@ -56,6 +57,7 @@ class AgentSettings(BaseModel):
     internal_api: InternalAPISettings = Field(default_factory=InternalAPISettings)
     tushare: TushareSettings = Field(default_factory=TushareSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    request_timeout_ms: int = Field(default=1000000, gt=0)
 
 
 @dataclass(frozen=True)
@@ -241,6 +243,7 @@ def _settings_from_nacos_config(config: Dict[str, Any]) -> AgentSettings:
         ),
         tushare=TushareSettings(**(agent.get("tushare") or {})),
         llm=LLMSettings(**llm_config),
+        request_timeout_ms=int(agent.get("timeout_ms") or 1000000),
     )
 
 

@@ -90,10 +90,23 @@ func TestValidateRejectsAgentTimeoutShorterThanLLMTimeout(t *testing.T) {
 	var cfg config.Config
 	require.NoError(t, json.Unmarshal(raw, &cfg))
 	cfg.Agent.Enabled = true
-	cfg.Agent.TimeoutMS = cfg.LLM.TimeoutMS
+	cfg.Agent.TimeoutMS = cfg.LLM.TimeoutMS - 1
 
 	err = config.Validate(&cfg)
-	require.ErrorContains(t, err, "agent.timeout_ms must be greater than llm.timeout_ms")
+	require.ErrorContains(t, err, "agent.timeout_ms must be at least llm.timeout_ms")
+}
+
+func TestValidateAcceptsEqualSharedStreamingBudgets(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	cfg.Agent.Enabled = true
+	cfg.LLM.Stream = true
+	cfg.LLM.TimeoutMS = 1000000
+	cfg.Agent.TimeoutMS = 1000000
+	cfg.Service.HTTP.WriteTimeoutMS = 1000000
+	require.NoError(t, config.Validate(&cfg))
 }
 
 func TestValidateRejectsLLMExtraHeadersOverridingProtectedHeaders(t *testing.T) {

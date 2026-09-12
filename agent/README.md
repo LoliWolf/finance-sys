@@ -52,7 +52,81 @@ Windows PowerShell:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
+## Optional streaming relay diagnostic
+
+`tests/test_llm_streaming_probe.py` includes offline SSE tests and one live test
+that is **skipped by default**. The live test reads Nacos and a selected production
+document through `dbx`, reuses the actual extraction prompt/JSON-output parameters,
+and changes only `stream=true`. It makes one model request with no automatic
+retries, never writes analysis results, and does not change the production client.
+
+From the `agent` directory on macOS:
+
+```bash
+FINANCE_SYS_STREAM_TEST=1 FINANCE_SYS_STREAM_DOCUMENT_ID=7674 \
+  FINANCE_SYS_STREAM_TOTAL_SECONDS=600 \
+  .venv/bin/python -B -m pytest -s -q tests/test_llm_streaming_probe.py -k real_relay
+```
+
+Windows PowerShell:
+
+```powershell
+$env:FINANCE_SYS_STREAM_TEST = '1'
+$env:FINANCE_SYS_STREAM_DOCUMENT_ID = '7674'
+$env:FINANCE_SYS_STREAM_TOTAL_SECONDS = '600'
+try {
+  .\.venv\Scripts\python.exe -B -m pytest -s -q tests/test_llm_streaming_probe.py -k real_relay
+} finally {
+  Remove-Item Env:FINANCE_SYS_STREAM_TEST, Env:FINANCE_SYS_STREAM_DOCUMENT_ID, Env:FINANCE_SYS_STREAM_TOTAL_SECONDS -ErrorAction SilentlyContinue
+}
+```
+
+The diagnostic uses the existing bootstrap address file. `dbx` must be on PATH;
+its connection name defaults to `home` and can be selected with
+`FINANCE_SYS_STREAM_DBX_CONNECTION`. The document ID and time budgets are test
+inputs, not overrides of production business configuration.
+
+Reports under `tmp/diagnostics/llm-stream-test-*.json` contain timing, character
+counts, completion markers and schema validation results only. They never contain
+keys, article text or raw reasoning. Success requires `[DONE]`, `finish_reason=stop`
+and the existing Agent JSON/Pydantic validation. Headers or the first token alone
+are not success. A diagnostic deadline actively closes the connection and may
+appear as `context canceled` in relay logs; distinguish that from upstream errors.
+
 ## API
+
+### Internal streaming and shared deadline
+
+Set `llm.stream=true` in Nacos to consume model SSE incrementally. Reasoning is
+discarded; only a complete `[DONE]` / `finish_reason=stop` response is parsed and
+validated. JSON-only compatible responses are still accepted. Go's direct LLM
+fallback supports the same switch. Go/HTTP callers still receive one JSON result.
+
+The requested release values are **1000000 ms for all three**:
+`llm.timeout_ms`, `agent.timeout_ms`, and `service.http.write_timeout_ms`.
+They are shared total budgets, including retries, not a fresh allowance per
+attempt. OCR and tool work consume the same document budget. Go forwards the
+remaining deadline in `X-Finance-Deadline-Unix-Ms`; the Agent clamps it to its own
+configured limit. Caller disconnect/deadline cancels the graph's HTTP work and
+closes active streaming sockets. Go does not retry an expired caller deadline.
+
+`configs/nacos_streaming_1000s.merge.json` is a **merge patch**, not a complete
+Nacos configuration. Apply it to the latest `expert_trade` JSON via the Nacos API
+with concurrency protection and a new config version during an authorized
+deployment. Preserve model, keys, database, trading and other settings. The old
+binary rejects equal LLM/Agent timeouts: coordinate the configuration update with
+the new API and reload the analysis Agent (its settings are cached). Do not publish
+this patch independently while keeping the old runtime. Never replace the entire
+Nacos document with the patch. No production restart is implied by build-only tests.
+
+To exercise the new production streaming client once, read-only, using the
+1000-second pending settings in memory (from the `agent` directory):
+
+```bash
+FINANCE_SYS_STREAM_PRODUCTION_TEST=1 .venv/bin/python -B -m pytest -s -q tests/test_llm_streaming_probe.py -k real_production
+```
+
+This optional test does not update Nacos or write recommendation results.
 
 - `GET /healthz`
 - `POST /v1/resolve-document`

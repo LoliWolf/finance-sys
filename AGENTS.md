@@ -72,6 +72,21 @@ RecommendationEvent 推荐事实
 - `migrations`: 数据库迁移。
 - `configs`: Nacos JSON 配置示例。
 
+## 正式环境构建与启动
+
+- 正式发布唯一入口为根目录 `start_prod.py`：macOS 执行 `python3 start_prod.py`；Windows 执行 `py -3 start_prod.py`。不再恢复或新增另一套平行启动脚本。
+- `--build-only` 仅执行脚本回归测试、前端类型检查/测试/构建、Go 测试/构建和 Mac 签名校验，不读取 Nacos、不启停服务；代码任务默认用此模式验收，未获部署授权不得直接运行默认模式。
+- `--status` 通过 Nacos 获取生产端口并只读检查 API、分析 Agent；默认模式才会切换生产服务。
+- 启动入口强制 `FINANCE_SYS_ENV=PROD`，且启动前核实生产 Schema 是 `expert_trade`。构建测试阶段必须隔离为 `TEST`，清除真实库集成测试和 DML 授权环境变量，禁止让自动发布测试写生产库。
+- Nacos 地址优先从 `NACOS_SERVER_ADDR` 读取，其次 `bootstrap_go122.env`、`bootstrap_go122.env.example`；显式 `--env-file` 优先级最高。只能通过 Nacos HTTP API 读取业务配置；脚本默认启动必须验证 Nacos HTTP/gRPC 可达，预检失败不得改用示例业务配置继续发布；构建期间部署地址或端口改变则中止切换。
+- Mac 构建使用 `-ldflags=-B=gobuildid` 生成有效 Mach-O UUID，再以 `cn.financesys.api.production` 做 ad-hoc 签名，必须通过 `codesign --verify --strict`、签名标识及 `LC_UUID` 校验。不要把链接器默认的 `a.out` 签名当作合格发布产物；无需购买 Apple Developer ID，但也不能宣称临时签名等于苹果证书签名或能绕过本地网络权限。
+- Mac 产物封装为 `FinanceSys.app`，Info.plist 包含固定 Bundle ID 和 `NSLocalNetworkUsageDescription`；启动时注册 LaunchServices，并在 launchd plist 用 `AssociatedBundleIdentifiers` 关联应用身份。不能只给裸二进制换签名就假定系统能找到对应授权条目；出现本地网络授权必须人工确认。
+- `scripts/macos/api_launcher.m` 只是同一发布入口使用的原生启动组件：通过 Network.framework 请求本地网络访问，成功后启动 Go API 子进程，并传递停止信号。不要将它扩展为第二套业务服务或用它绕过网络授权；Windows 不构建该组件。
+- Mac 生产 API 由当前图形登录用户的 launchd 托管，标签为 `cn.financesys.api.production`；新建分析 Agent 的标签为 `cn.financesys.agent.production`。Windows 使用独立后台进程，不能声称其已经具备服务管理器的自动重启能力。
+- 构建和签名全部完成之后才能停止旧 API；切换前、停止前均检查实际进程路径，保护无关进程及测试端口。已有健康分析 Agent 必须优先复用，不能因为发布 API 顺带重启 Agent 或 Windows Bridge。
+- 发布产物、日志、成功部署记录分别在 `tmp/production/releases/`、`tmp/production/logs/`、`tmp/production/active.json`；不记录数据库密码、完整 Nacos 配置或 token。新版本启动失败只尝试恢复上一个实际运行的二进制，不进行数据库/Nacos 回滚，不自动删除旧版本。
+- 开发调试直接使用 `go run ./cmd/api`，先设置 Nacos 地址并明确 `FINANCE_SYS_ENV=TEST`；普通 `go build ./...` 是检查命令，不是正式发布入口。
+
 ## 开发规则
 
 - 修改 Go 代码后执行 `gofmt -w`。
@@ -85,6 +100,7 @@ RecommendationEvent 推荐事实
 ```bash
 env GOTOOLCHAIN=local go test ./...
 env GOTOOLCHAIN=local go build ./...
+python3 -B -m unittest discover -s scripts/tests -p test_start_prod.py
 ```
 
 ## 飞书知识库目录
