@@ -16,3 +16,8 @@ session returns after a market session or a transient SDK disconnect, it
 restarts the Runner after five seconds. The Runner remains fail-closed and
 never bypasses the Bridge kill switch, account check, token check or
 simulation-only validation.
+
+The Runner uses the Windows Python launcher (`py -3.10`); install the SDK in
+that interpreter instead of committing a user-specific Python path. Keep
+bootstrap files, real CA certificates/private keys, logs and SQLite data local;
+the repository contains no environment-specific trust material.

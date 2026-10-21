@@ -482,10 +482,79 @@ def stop_launched(label, process, system, expected_binary):
         stop_process(process, system)
 
 
-def ensure_agent(cfg, root, environment, logs, system):
+def stop_verified_agent(cfg, root, system):
+    """Explicit operator opt-in only; never stop a merely similarly named Python."""
+    endpoint = urlsplit(cfg["agent"]["endpoint"])
+    try:
+        local = endpoint.hostname == "localhost" or ipaddress.ip_address(endpoint.hostname).is_loopback
+    except ValueError:
+        local = False
+    if not local:
+        raise DeploymentError("Explicit Agent restart supports only this host's loopback Agent")
+    if system != "Darwin":
+        raise DeploymentError("Explicit Agent restart requires verified launchd ownership on this host")
+    port = endpoint.port or 80
+    result = run([tool("lsof"), "-nP", "-t", "-iTCP:" + str(port), "-sTCP:LISTEN"], capture=True, check=False)
+    pids = sorted(set(int(value) for value in result.stdout.split()))
+    if len(pids) != 1:
+        raise DeploymentError("Cannot uniquely verify the analysis Agent listener")
+    expected = str(root / "agent/.venv/bin/python")
+    if not Path(expected).is_file():
+        raise DeploymentError("Analysis Agent virtualenv is missing")
+    # macOS framework Python re-execs into Python.app, so compare with a child
+    # of the exact venv interpreter rather than guessing the framework path.
+    probe = run([expected, "-I", "-c", "import os,subprocess; print(subprocess.check_output(['/bin/ps','-p',str(os.getpid()),'-o','comm='],text=True).strip())"], capture=True)
+    actual_expected = Path(probe.stdout.strip()).resolve()
+    if process_path(pids[0], system) != actual_expected:
+        raise DeploymentError("Agent listener executable does not match the project interpreter")
+    verified = []
+    for label in (AGENT_LABEL, "com.loliwolf.finance-sys.agent"):
+        raw = run([tool("launchctl"), "print", launchd_target(label)], capture=True, check=False)
+        if raw.returncode:
+            continue
+        pid = re.search(r"^\s*pid = (\d+)$", raw.stdout, re.MULTILINE)
+        args = re.search(r"arguments = \{\n(.*?)\n\s*\}", raw.stdout, re.DOTALL)
+        argv = [line.strip() for line in args.group(1).splitlines()] if args else []
+        if not pid or int(pid.group(1)) != pids[0] or len(argv) < 3 or argv[-3:] != [expected, "-m", "app.runner"]:
+            raise DeploymentError("Unverified Agent job; refusing to restart " + label)
+        if len(argv) > 3:
+            allowed = ("NACOS_SERVER_ADDR=", "FINANCE_SYS_ENV=", "PYTHONPATH=", "PATH=")
+            if argv[0] != "/usr/bin/env" or any(not value.startswith(allowed) for value in argv[1:-3]):
+                raise DeploymentError("Unrecognized Agent launcher arguments")
+            supplied = dict(value.split("=", 1) for value in argv[1:-3])
+            if supplied.get("PYTHONPATH") != str(root / "agent") or supplied.get("FINANCE_SYS_ENV") != "PROD":
+                raise DeploymentError("Agent launcher is not the production project module")
+        elif (str(root / "agent") not in raw.stdout or not re.search(r"FINANCE_SYS_ENV\s*(?:=>|=)\s*PROD", raw.stdout)):
+            raise DeploymentError("Cannot verify Agent module directory and production environment")
+        verified.append((label, raw.stdout, argv))
+    if len(verified) != 1:
+        raise DeploymentError("Agent listener does not have exactly one verified launchd owner")
+    label, before, before_argv = verified[0]
+    latest = run([tool("launchctl"), "print", launchd_target(label)], capture=True, check=False)
+    before_pid = re.search(r"^\s*pid = (\d+)$", before, re.MULTILINE).group(1)
+    latest_args = re.search(r"arguments = \{\n(.*?)\n\s*\}", latest.stdout, re.DOTALL)
+    latest_argv = [line.strip() for line in latest_args.group(1).splitlines()] if latest_args else []
+    if latest.returncode or not re.search(r"^\s*pid = " + before_pid + r"$", latest.stdout, re.MULTILINE) or latest_argv != before_argv or process_path(pids[0], system) != actual_expected:
+        raise DeploymentError("Agent identity changed before restart")
+    info("Explicitly upgrade verified analysis Agent PID " + before_pid)
+    run([tool("launchctl"), "bootout", launchd_target(label)])
+    deadline = time.monotonic() + 25
+    while time.monotonic() < deadline:
+        current = run([tool("lsof"), "-nP", "-t", "-iTCP:" + str(port), "-sTCP:LISTEN"], capture=True, check=False)
+        if not current.stdout.strip():
+            return
+        if current.stdout.strip() != before_pid:
+            raise DeploymentError("Agent port was taken by another process during restart")
+        time.sleep(0.25)
+    raise DeploymentError("Verified Agent listener did not stop")
+
+
+def ensure_agent(cfg, root, environment, logs, system, restart=False):
     endpoint = urlsplit(cfg["agent"]["endpoint"])
     url = "{}://{}/healthz".format(endpoint.scheme, endpoint.netloc)
-    if healthy(url):
+    if restart:
+        stop_verified_agent(cfg, root, system)
+    elif healthy(url):
         info("Reuse healthy analysis Agent: " + url)
         return
     try:
@@ -515,12 +584,15 @@ def ensure_agent(cfg, root, environment, logs, system):
     info("Analysis Agent is healthy: " + url)
 
 
-def deploy(root, binary, cfg, address, system):
+def deploy(root, binary, cfg, address, system, restart_agent=False):
     environment = clean_environment(production=True, address=address)
     port = cfg["service"]["http"]["port"]
     previous = listener(port, root, system)
     logs = root / "tmp/production/logs" / release_directory(binary).name
-    ensure_agent(cfg, root, environment, logs, system)
+    if restart_agent:
+        ensure_agent(cfg, root, environment, logs, system, restart=True)
+    else:
+        ensure_agent(cfg, root, environment, logs, system)
     stop_api_jobs(root, system, previous)
     if previous:
         info("Stop verified production API PID {} (test port is untouched)".format(previous["pid"]))
@@ -561,7 +633,10 @@ def main(argv=None):
     mode.add_argument("--build-only", action="store_true", help="test/build/sign only; no Nacos request, process start/stop, or launchd changes")
     mode.add_argument("--status", action="store_true", help="read Nacos and show production API/Agent health without changing anything")
     parser.add_argument("--env-file", help="bootstrap file containing only NACOS_SERVER_ADDR; overrides the address environment variable")
+    parser.add_argument("--restart-agent", action="store_true", help="explicitly upgrade the verified local analysis Agent after build/sign gates; default still reuses a healthy Agent")
     args = parser.parse_args(argv)
+    if args.restart_agent and (args.build_only or args.status):
+        parser.error("--restart-agent cannot be combined with --build-only or --status")
     system = platform.system()
     if system not in ("Darwin", "Windows"):
         raise DeploymentError("This production launcher supports macOS and Windows")
@@ -591,7 +666,7 @@ def main(argv=None):
         cfg = load_nacos(address)
         if deployment_targets(cfg) != targets_before_build:
             raise DeploymentError("Production/Agent address or ports changed during the build; no service was stopped. Run again after confirming Nacos.")
-        deploy(ROOT, binary, cfg, address, system)
+        deploy(ROOT, binary, cfg, address, system, restart_agent=args.restart_agent)
 
 
 if __name__ == "__main__":

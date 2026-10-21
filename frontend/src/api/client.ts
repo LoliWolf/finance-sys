@@ -10,11 +10,13 @@ import type {
   PriceSeriesResponse,
   RecommendationDetail,
   RecommendationLedgerList,
+  RecommendationExportReport,
   RecommendationPerformanceList,
   SecurityRankingItem,
   SecurityRankingResponse,
   TradingDashboard,
 } from './types'
+import type { PageExportSnapshot, PageReportKind } from '../reports/types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
 
@@ -39,6 +41,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  pageExport: (kind: PageReportKind, query: Query = {}, signal?: AbortSignal) => request<PageExportSnapshot>(`${kind === 'trading' ? '/trading/dashboard/report' : `/page-reports/${kind}`}${queryString(query)}`, { signal, cache: 'no-store' }),
   health: async () => {
     const response = await fetch('/healthz')
     if (!response.ok) throw new Error('服务不可用')
@@ -49,6 +52,7 @@ export const api = {
   bloggerTimeseries: (id: number, query: Query = {}) => request<BloggerTimeseriesResponse>(`/bloggers/${id}/performance/timeseries${queryString(query)}`),
   bloggerRecommendations: (id: number, query: Query = {}) => request<RecommendationPerformanceList>(`/bloggers/${id}/recommendations/performance${queryString(query)}`),
   recommendations: (query: Query = {}) => request<RecommendationLedgerList>(`/recommendation-performance${queryString(query)}`),
+  recommendationExport: (query: Query = {}, signal?: AbortSignal) => request<RecommendationExportReport>(`/recommendation-performance/report${queryString(query)}`, { signal, cache: 'no-store' }),
   recommendationDetail: (id: number) => request<RecommendationDetail>(`/recommendations/${id}/performance`),
   priceSeries: (id: number, query: Query = {}) => request<PriceSeriesResponse>(`/recommendations/${id}/price-series${queryString(query)}`),
   securityRankings: (query: Query = {}) => request<SecurityRankingResponse>(`/securities/rankings${queryString(query)}`),

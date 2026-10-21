@@ -33,8 +33,11 @@ class FakeClient:
         if path == "/daily-history":
             return {
                 "items": [
-                    {"symbol": "600000", "trade_date": f"2026-08-{day:02d}", "close_price": price}
-                    for day, price in zip(range(18, 25), [9.0, 9.2, 9.4, 9.7, 9.9, 10.1, 10.2])
+                    {"symbol": symbol, "trade_date": f"2026-08-{day:02d}", "close_price": price,
+                     "high_price": price + .05, "low_price": price - .05, "volume": 1000}
+                    for symbol in ("600000", "510300")
+                    for day in range(1, 21)
+                    for price in ([9.8 + day*.02] if symbol == "600000" else [10.0])
                 ]
             }
         raise AssertionError(path)
@@ -91,6 +94,31 @@ def test_strategy_rejects_sector_and_missing_performance():
         SectorClient(),
     )
     assert result["intents"] == []
+
+
+def test_missing_source_price_uses_market_quote_and_requires_quote():
+    class MissingPriceClient(FakeClient):
+        def __init__(self, quoted=True):
+            self.quoted = quoted
+
+        def get(self, path, params=None):
+            value = super().get(path, params)
+            if path == "/recommendation-candidates":
+                value["items"][0].update(reference_price="0", entry_price="0")
+            if path == "/market-snapshot" and not self.quoted:
+                return {"items": []}
+            return value
+
+    request = {
+        "run_key": "d" * 64, "as_of_time": "2026-08-25T09:40:00+08:00",
+        "strategy_name": "s", "strategy_version": "1", "tool_base_url": "http://local",
+    }
+    result = run_deterministic(request, config(), MissingPriceClient())
+    assert len(result["intents"]) == 1
+    assert result["intents"][0]["proposed_limit_price"] == "10.230000"
+    assert result["intents"][0]["proposed_position_ratio"] == "0.03000000"
+    assert result["input_snapshot"]["candidates"][0]["reference_price"] == "0"
+    assert run_deterministic(request, config(), MissingPriceClient(False))["intents"] == []
 
 
 def test_exit_skill_generates_sell_before_buy():

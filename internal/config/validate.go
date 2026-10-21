@@ -3,8 +3,10 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func Validate(cfg *Config) error {
@@ -32,6 +34,7 @@ func Validate(cfg *Config) error {
 	validateDatabase("database_test", cfg.DatabaseTest, require)
 	require(cfg.Processing.OCRMaxConcurrency > 0, "processing.ocr_max_concurrency must be positive")
 	require(cfg.Processing.LLMMaxConcurrency > 0, "processing.llm_max_concurrency must be positive")
+	require(cfg.Processing.LLMMaxConcurrency <= 1024, "processing.llm_max_concurrency must not exceed 1024")
 	require(cfg.NacosClient.PollIntervalSeconds > 0, "nacos_client.poll_interval_seconds must be positive")
 	require(cfg.Document.MaxFileSizeMB > 0, "document.max_file_size_mb must be positive")
 	require(len(cfg.Document.AllowedExtensions) > 0, "document.allowed_extensions must not be empty")
@@ -42,6 +45,8 @@ func Validate(cfg *Config) error {
 	require(cfg.Document.PDFOCR.TimeoutMS > 0, "document.pdf_ocr.timeout_ms must be positive")
 	require(cfg.LLM.TimeoutMS > 0, "llm.timeout_ms must be positive")
 	require(cfg.LLM.MaxRetries >= 0, "llm.max_retries must be zero or positive")
+	require(cfg.LLM.Temperature >= 0 && cfg.LLM.Temperature <= 1, "llm.temperature must be in [0,1]")
+	require(utf8.RuneCountInString(cfg.LLM.ExtractionPrompt) <= 16000, "llm.extraction_prompt must not exceed 16000 characters")
 	for headerName := range cfg.LLM.ExtraHeaders {
 		trimmedHeaderName := strings.TrimSpace(headerName)
 		require(trimmedHeaderName != "", "llm.extra_headers must not contain empty header names")
@@ -201,6 +206,13 @@ func validateTrading(cfg TradingConfig, require func(bool, string)) {
 	require(strings.TrimSpace(cfg.Decision.StrategyVersion) != "", "trading.decision.strategy_version is required")
 	require(strings.TrimSpace(cfg.Decision.ToolContractVersion) != "", "trading.decision.tool_contract_version is required")
 	require(cfg.Decision.MinRecommendationConfidence >= 0 && cfg.Decision.MinRecommendationConfidence <= 1, "trading.decision.min_recommendation_confidence must be in [0,1]")
+	require(cfg.Decision.RecommendationDateMode == "" || cfg.Decision.RecommendationDateMode == "WEEK_NATURAL_DAYS" || cfg.Decision.RecommendationDateMode == "PREVIOUS_TRADING_DAY_TO_NOW" || cfg.Decision.RecommendationDateMode == "ROLLING_NATURAL_DAYS", "trading.decision.recommendation_date_mode must be WEEK_NATURAL_DAYS (default), PREVIOUS_TRADING_DAY_TO_NOW or ROLLING_NATURAL_DAYS")
+	require(cfg.Decision.MaxCandidateScan == 0 || (cfg.Decision.MaxCandidateScan >= cfg.Decision.MaxCandidatesPerRun && cfg.Decision.MaxCandidateScan <= 10000), "trading.decision.max_candidate_scan must be 0 or between page size and 10000")
+	require(cfg.Decision.SelectionStrategy == "" || cfg.Decision.SelectionStrategy == "TREND_PULLBACK_V1", "trading.decision.selection_strategy must be TREND_PULLBACK_V1")
+	require(cfg.Decision.BenchmarkSymbol == "" || regexp.MustCompile(`^[0-9]{6}\.(SH|SZ)$`).MatchString(cfg.Decision.BenchmarkSymbol), "trading.decision.benchmark_symbol must be a canonical SH/SZ symbol")
+	require(cfg.Decision.MaxEntryExtensionRatio >= 0 && cfg.Decision.MaxEntryExtensionRatio <= .2, "trading.decision.max_entry_extension_ratio must be in [0,.2]")
+	require(cfg.Decision.MaxATRRatio >= 0 && cfg.Decision.MaxATRRatio <= .3, "trading.decision.max_atr_ratio must be in [0,.3]")
+	require(cfg.Decision.RecommendationLookbackDays >= 0 && cfg.Decision.RecommendationLookbackDays <= 365, "trading.decision.recommendation_lookback_days must be 0 (default 5) or 1..365 natural days including today")
 	require(cfg.Decision.MinBloggerWinRate >= 0 && cfg.Decision.MinBloggerWinRate <= 1, "trading.decision.min_blogger_win_rate must be in [0,1]")
 	require(cfg.Decision.MaxCandidatesPerRun > 0, "trading.decision.max_candidates_per_run must be positive")
 	require(cfg.Decision.MaxIntentsPerRun > 0 && cfg.Decision.MaxIntentsPerRun <= cfg.Decision.MaxCandidatesPerRun, "trading.decision.max_intents_per_run must be positive and not exceed max_candidates_per_run")
@@ -286,6 +298,9 @@ func validateTrading(cfg TradingConfig, require func(bool, string)) {
 		require(len(cfg.Eastmoney.AccountPolicy.AllowedAccountIDs) == 1 && cfg.Eastmoney.AccountPolicy.AllowedAccountIDs[0] == cfg.Eastmoney.ExpectedAccountID, "trading allowed_account_ids must contain only expected_account_id")
 	}
 
+	require(cfg.Reconciliation.ValuationMaxAttempts >= 0 && cfg.Reconciliation.ValuationMaxAttempts <= 5, "trading.reconciliation.valuation_max_attempts must be 0 (default 3) or 1..5")
+	require(cfg.Reconciliation.ValuationRetryIntervalMS == 0 || (cfg.Reconciliation.ValuationRetryIntervalMS >= 100 && cfg.Reconciliation.ValuationRetryIntervalMS <= 5000), "trading.reconciliation.valuation_retry_interval_ms must be 0 (default 1000) or 100..5000")
+	require(cfg.Reconciliation.RefreshTimeoutSeconds >= 0 && cfg.Reconciliation.RefreshTimeoutSeconds <= 40, "trading.reconciliation.refresh_timeout_seconds must be 0 (default 10) or 1..40; total snapshot confirmation budget")
 	if cfg.Reconciliation.Enabled {
 		require(cfg.Reconciliation.IntervalSeconds > 0, "trading.reconciliation.interval_seconds must be positive when enabled")
 		require(cfg.Reconciliation.RefreshTimeoutSeconds > 0, "trading.reconciliation.refresh_timeout_seconds must be positive when enabled")

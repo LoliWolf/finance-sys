@@ -85,6 +85,9 @@ func (s *Service) freshBridgeSnapshot(ctx context.Context, reason string) (*trad
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		value, err := s.bridge.ReconciliationSnapshot(ctx, "")
 		if err == nil && value != nil && value.Account.AccountID == cfg.Trading.Bridge.ExpectedAccountID && value.Account.Environment == "SIMULATION" && !value.Account.SnapshotAt.IsZero() && s.now().Sub(value.Account.SnapshotAt) <= maxAge && !value.Account.SnapshotAt.After(s.now().Add(time.Second)) && (baseline == nil || value.SnapshotVersion != baseline.SnapshotVersion) {
 			value.Health = *health
@@ -98,4 +101,15 @@ func (s *Service) freshBridgeSnapshot(ctx context.Context, reason string) (*trad
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Service) requireNoRunningReconciliation(ctx context.Context, db *gorm.DB, account string) error {
+	running, err := dal.TradingReconciliationRuns.HasRunning(ctx, db, account)
+	if err != nil {
+		return err
+	}
+	if running {
+		return fmt.Errorf("%w: account reconciliation in progress", ErrExecutionDeferred)
+	}
+	return nil
 }

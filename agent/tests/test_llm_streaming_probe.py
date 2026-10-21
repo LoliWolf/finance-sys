@@ -165,7 +165,8 @@ def test_sse_total_deadline_is_explicit():
 def test_stream_request_preserves_production_extraction_parameters():
     from app.config import AgentSettings, LLMSettings
     request = project_stream_request(AgentSettings(llm=LLMSettings(enabled=True, provider="openai_compatible", endpoint="http://test/v1/chat/completions", model="test-model")), "测试文章")
-    assert set(request.payload) == {"model", "messages", "response_format", "stream"}
+    assert set(request.payload) == {"model", "messages", "response_format", "stream", "temperature"}
+    assert request.payload["temperature"] == 0.0
     assert request.payload["response_format"] == {"type": "json_object"}
     assert request.payload["stream"] is True
 

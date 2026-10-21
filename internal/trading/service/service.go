@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"finance-sys/internal/config"
@@ -35,6 +36,8 @@ type Service struct {
 	policy  *policy.Engine
 	logger  *slog.Logger
 	now     func() time.Time
+	// Serialize local reconciliation with risk evaluation through Bridge dispatch.
+	accountActivity sync.Mutex
 }
 
 func New(db *gorm.DB, runtime *config.Runtime, agent AgentClient, bridge BridgeClient, policyEngine *policy.Engine, logger *slog.Logger) *Service {
@@ -337,11 +340,18 @@ func (s *Service) evaluateIntent(ctx context.Context, intent *db_model.TradingIn
 }
 
 func (s *Service) evaluateIntentWithOptions(ctx context.Context, intent *db_model.TradingIntent, dryRun, allowManualSession bool) error {
+	if !s.accountActivity.TryLock() {
+		return fmt.Errorf("%w: account operation in progress", ErrExecutionDeferred)
+	}
+	defer s.accountActivity.Unlock()
 	cfg := s.runtime.Config()
 	if cfg == nil {
 		return fmt.Errorf("runtime config unavailable")
 	}
 	tradeIntent := dbIntentToDomain(intent)
+	if err := s.requireNoRunningReconciliation(ctx, s.db, cfg.Trading.Bridge.ExpectedAccountID); err != nil {
+		return err
+	}
 	snapshot, err := s.freshBridgeSnapshot(ctx, "risk")
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrExecutionDeferred, err)
@@ -518,6 +528,9 @@ func (s *Service) persistDecision(ctx context.Context, cfg *config.Config, inten
 			return e
 		}
 		if status != "DRY_RUN" {
+			if err := s.requireNoRunningReconciliation(ctx, tx, cfg.Trading.Bridge.ExpectedAccountID); err != nil {
+				return err
+			}
 			open, e := dal.TradingOrders.QueryOpen(ctx, tx)
 			if e != nil {
 				return e

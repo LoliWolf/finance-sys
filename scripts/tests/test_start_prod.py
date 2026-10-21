@@ -212,6 +212,54 @@ class ProductionLauncherTests(unittest.TestCase):
             prod.ensure_agent(config(), self.root, {}, self.root / "logs", "Darwin")
             launch.assert_not_called()
 
+    def test_explicit_agent_restart_rejects_readonly_modes(self):
+        for flag in ("--build-only", "--status"):
+            with patch.object(prod, "build_release") as build, patch.object(prod, "load_nacos") as nacos:
+                with self.assertRaises(SystemExit):
+                    prod.main([flag, "--restart-agent"])
+                build.assert_not_called()
+                nacos.assert_not_called()
+
+    def agent_restart_fixture(self, module="app.runner", latest_pid=123):
+        python = self.root / "agent/.venv/bin/python"
+        python.parent.mkdir(parents=True, exist_ok=True)
+        python.write_text("fake interpreter")
+        original = "/verified/framework/python"
+        calls = []
+        stopped = []
+        def invoke(argv, **kwargs):
+            calls.append(argv)
+            if argv[0] == str(python):
+                return subprocess.CompletedProcess(argv, 0, original + "\n")
+            if argv[0] == "lsof":
+                return subprocess.CompletedProcess(argv, 0, "" if stopped else "123\n")
+            if argv[:2] == ["launchctl", "bootout"]:
+                stopped.append(argv[-1])
+                return subprocess.CompletedProcess(argv, 0, "")
+            if argv[:2] == ["launchctl", "print"]:
+                if argv[-1].endswith(prod.AGENT_LABEL):
+                    return subprocess.CompletedProcess(argv, 1, "")
+                count = sum(c[:2] == ["launchctl", "print"] and c[-1].endswith("com.loliwolf.finance-sys.agent") for c in calls)
+                pid = 123 if count == 1 else latest_pid
+                raw = f"program = /usr/bin/env\narguments = {{\n/usr/bin/env\nFINANCE_SYS_ENV=PROD\nPYTHONPATH={self.root / 'agent'}\n{python}\n-m\n{module}\n}}\npid = {pid}\n"
+                return subprocess.CompletedProcess(argv, 0, raw)
+            raise AssertionError(argv)
+        return invoke, stopped, Path(original)
+
+    def test_explicit_agent_restart_only_stops_verified_owner(self):
+        invoke, stopped, executable = self.agent_restart_fixture()
+        with patch.object(prod, "tool", side_effect=lambda s:s), patch.object(prod, "run", side_effect=invoke), patch.object(prod, "process_path", return_value=executable):
+            prod.stop_verified_agent(config(), self.root, "Darwin")
+        self.assertEqual(stopped, [prod.launchd_target("com.loliwolf.finance-sys.agent")])
+
+    def test_explicit_agent_restart_refuses_other_module_or_pid_change(self):
+        for module, pid in (("other.runner",123),("app.runner",124)):
+            invoke, stopped, executable = self.agent_restart_fixture(module,pid)
+            with patch.object(prod, "tool", side_effect=lambda s:s), patch.object(prod, "run", side_effect=invoke), patch.object(prod, "process_path", return_value=executable):
+                with self.assertRaises(prod.DeploymentError):
+                    prod.stop_verified_agent(config(), self.root, "Darwin")
+            self.assertEqual(stopped, [])
+
     def test_remote_unhealthy_agent_fails_without_starting_local_copy(self):
         cfg = config()
         cfg["agent"]["endpoint"] = "http://192.0.2.1:8108/v1/resolve-document"

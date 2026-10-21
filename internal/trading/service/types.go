@@ -49,16 +49,17 @@ type MarketSnapshot struct {
 }
 
 type DailyHistoryItem struct {
-	Symbol     string  `json:"symbol"`
-	TSCode     string  `json:"ts_code"`
-	TradeDate  string  `json:"trade_date"`
-	OpenPrice  float64 `json:"open_price"`
-	HighPrice  float64 `json:"high_price"`
-	LowPrice   float64 `json:"low_price"`
-	ClosePrice float64 `json:"close_price"`
-	PctChg     float64 `json:"pct_chg"`
-	Volume     float64 `json:"volume"`
-	Source     string  `json:"source"`
+	Symbol        string  `json:"symbol"`
+	TSCode        string  `json:"ts_code"`
+	TradeDate     string  `json:"trade_date"`
+	OpenPrice     float64 `json:"open_price"`
+	HighPrice     float64 `json:"high_price"`
+	LowPrice      float64 `json:"low_price"`
+	ClosePrice    float64 `json:"close_price"`
+	PreClosePrice float64 `json:"pre_close_price"`
+	PctChg        float64 `json:"pct_chg"`
+	Volume        float64 `json:"volume"`
+	Source        string  `json:"source"`
 }
 
 type PortfolioView struct {

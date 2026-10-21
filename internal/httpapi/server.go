@@ -68,6 +68,8 @@ type performanceStatsService interface {
 	BloggerTimeseries(context.Context, int64, stats.Filter) (*stats.BloggerTimeseriesResponse, error)
 	RecommendationPerformanceList(context.Context, stats.Filter) (*stats.RecommendationPerformanceList, error)
 	RecommendationLedger(context.Context, stats.Filter) (*stats.RecommendationLedgerList, error)
+	RecommendationExport(context.Context, stats.Filter) (*stats.RecommendationExportReport, error)
+	PageExport(context.Context, stats.PageExportRequest) (*stats.PageExportReport, error)
 	RecommendationDetail(context.Context, int64) (*stats.RecommendationDetail, error)
 	PriceSeries(context.Context, int64, int, int) (*stats.PriceSeriesResponse, error)
 	SecurityRankings(context.Context, stats.Filter) (*stats.SecurityRankingResponse, error)
@@ -144,6 +146,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/recommendations/{id}/performance", s.handleGetRecommendationPerformance)
 		r.Get("/recommendations/{id}/price-series", s.handleGetRecommendationPriceSeries)
 		r.Get("/recommendation-performance", s.handleListRecommendationPerformance)
+		r.Get("/recommendation-performance/report", s.handleRecommendationExport)
+		r.Get("/page-reports/{kind}", s.handlePageExport)
 		r.Get("/document-reports", s.handleListDocumentReports)
 		r.Get("/bloggers/rankings", s.handleBloggerRankings)
 		r.Get("/bloggers/{id}/performance/summary", s.handleBloggerPerformanceSummary)
@@ -174,6 +178,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/trading/account", s.handleGetTradingAccount)
 		r.Get("/trading/positions", s.handleGetTradingPositions)
 		r.Get("/trading/dashboard", s.handleGetTradingDashboard)
+		r.Get("/trading/dashboard/report", s.handleTradingReport)
 		r.Post("/trading/dashboard/refresh", s.handleRefreshTradingDashboard)
 		r.Post("/trading/reconciliation-runs", s.handleCreateTradingReconciliationRun)
 		r.Get("/trading/reconciliation-runs/{id}", s.handleGetTradingReconciliation)
@@ -344,7 +349,13 @@ func (s *Server) handleAnalyzeDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logRequest(r, slog.LevelInfo, "handle analyze document start", logAttrs...)
 	var plans []domain.CandidatePlan
-	if hasTradeDate {
+	if r.URL.Query().Get("reuse_parsed_text") == "true" {
+		if !hasTradeDate {
+			writeError(w, http.StatusBadRequest, service.ErrDocumentRetryDateRequired)
+			return
+		}
+		plans, err = s.documents.ReanalyzeParsedDocumentForTradeDate(r.Context(), id, tradeDate)
+	} else if hasTradeDate {
 		plans, err = s.documents.AnalyzeDocumentForTradeDate(r.Context(), id, tradeDate)
 	} else {
 		plans, err = s.documents.AnalyzeDocument(r.Context(), id)

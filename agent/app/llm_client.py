@@ -73,13 +73,16 @@ class LLMClient:
             raise RuntimeError("llm.model is required when LLM extraction is enabled")
 
         skill = skill or load_instrument_resolution_skill()
+        if max_intents < 0:
+            raise ValueError("max_intents must be non-negative; 0 means unlimited")
         payload = {
             "model": self.llm.model,
+            "temperature": self.llm.temperature,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
-                    "content": build_system_prompt(skill),
+                    "content": build_system_prompt(skill, self.llm.extraction_prompt),
                 },
                 {
                     "role": "user",
@@ -130,6 +133,8 @@ class LLMClient:
                     raise _NonRetryableLLMError(message)
                 try:
                     return _parse_chat_completion(response.json(), max_intents)
+                except _NonRetryableLLMError:
+                    raise
                 except Exception as exc:
                     raise _RetryableLLMError(f"invalid llm response: {exc}") from exc
             except _NonRetryableLLMError as exc:
@@ -188,8 +193,8 @@ def _is_provider_moderation_block(response_text: str) -> bool:
     )
 
 
-def build_system_prompt(skill: SkillSpec) -> str:
-    return (
+def build_system_prompt(skill: SkillSpec, extraction_prompt: str = "") -> str:
+    contract = (
         "Extract Chinese equity trading intents from research text. "
         "Also extract the document author into the top-level author field. "
         "Use the first human analyst or author appearing in source order near the "
@@ -202,12 +207,17 @@ def build_system_prompt(skill: SkillSpec) -> str:
         "The following project-local rules are trusted system instructions:\n"
         f"{render_skill_prompt_block(skill)}"
     )
+    if extraction_prompt.strip():
+        return extraction_prompt.strip() + "\n\nRequired output contract:\n" + contract
+    return contract
 
 
 def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> DocumentExtraction:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("llm response missing choices")
+    if choices[0].get("finish_reason") in {"length", "content_filter"}:
+        raise _NonRetryableLLMError("llm completion was truncated or filtered; no partial result returned")
     message = choices[0].get("message", {})
     if not isinstance(message, dict):
         raise RuntimeError("llm response missing message")
@@ -216,6 +226,13 @@ def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> Documen
     raw_items = data.get("raw_intents")
     if not isinstance(raw_items, list):
         raise RuntimeError("llm response missing raw_intents")
+    if max_intents < 0:
+        raise ValueError("max_intents must be non-negative; 0 means unlimited")
+    if max_intents and len(raw_items) > max_intents:
+        raise _NonRetryableLLMError(
+            f"intent limit exceeded: extracted {len(raw_items)}, caller limit {max_intents}; "
+            "no partial result returned; use max_intents=0 for unlimited extraction"
+        )
     author = data.get("author", "")
     if not isinstance(author, str):
         raise RuntimeError("llm response author must be a string")
@@ -223,7 +240,7 @@ def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> Documen
         author=_normalize_first_author(author),
         raw_intents=[
             AgentRawIntent(**_normalize_raw_intent_item(item))
-            for item in raw_items[:max_intents]
+            for item in raw_items
         ],
     )
 

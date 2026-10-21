@@ -238,6 +238,10 @@ func securityMasterFromProviderRow(row marketdata.ProviderRow, assetType string,
 		return nil, nil, false
 	}
 	symbol := firstProviderString(row, "symbol", "index_code")
+	if assetType == "ETF" {
+		// index_code identifies the tracked index, never the listed ETF itself.
+		symbol = strings.SplitN(tsCode, ".", 2)[0]
+	}
 	if symbol == "" {
 		if dot := strings.Index(tsCode, "."); dot > 0 {
 			symbol = tsCode[:dot]

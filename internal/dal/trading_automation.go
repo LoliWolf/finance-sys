@@ -169,9 +169,21 @@ func (*TradingReconciliationRunDML) Claim(ctx context.Context, tx *gorm.DB, work
 }
 
 func (*TradingReconciliationRunDML) FinishClaim(ctx context.Context, db *gorm.DB, id int64, token string, now time.Time, values map[string]any) (bool, error) {
+	return TradingReconciliationRuns.UpdateClaim(ctx, db, id, token, now, values)
+}
+
+// UpdateClaim also checkpoints RUNNING attempts without releasing the execution barrier.
+func (*TradingReconciliationRunDML) UpdateClaim(ctx context.Context, db *gorm.DB, id int64, token string, now time.Time, values map[string]any) (bool, error) {
 	values["updated_at"] = now
 	r := db.WithContext(ctx).Model(&db_model.TradingReconciliationRun{}).Where("id=? AND status='RUNNING' AND claim_token=? AND claim_deadline>=?", id, token, now).Updates(values)
 	return r.RowsAffected == 1, r.Error
+}
+
+func (*TradingReconciliationRunDML) HasRunning(ctx context.Context, db *gorm.DB, account string) (bool, error) {
+	var n int64
+	// An expired lease remains a barrier until a recovery worker finishes it.
+	err := db.WithContext(ctx).Model(&db_model.TradingReconciliationRun{}).Where("account_id=? AND status='RUNNING'", account).Count(&n).Error
+	return n > 0, err
 }
 
 func (*TradingBoardCapabilityDML) ByBoard(ctx context.Context, db *gorm.DB, account, board string) (*db_model.TradingBoardCapability, error) {

@@ -164,6 +164,10 @@ type TradingDashboardCycle struct {
 }
 
 func (s *Service) TradingDashboard(ctx context.Context, tradeDate string) (*TradingDashboardView, error) {
+	return s.tradingDashboard(ctx, tradeDate, dashboardItemLimit)
+}
+
+func (s *Service) tradingDashboard(ctx context.Context, tradeDate string, dailyLimit int) (*TradingDashboardView, error) {
 	cfg := s.runtime.Config()
 	if cfg == nil {
 		return nil, fmt.Errorf("runtime config unavailable")
@@ -214,11 +218,11 @@ func (s *Service) TradingDashboard(ctx context.Context, tradeDate string) (*Trad
 		}
 	}
 
-	fills, err := dal.TradingFills.ListByAccountAndTradedAt(ctx, s.db, accountID, from, to, dashboardItemLimit)
+	fills, err := dal.TradingFills.ListByAccountAndTradedAt(ctx, s.db, accountID, from, to, dailyLimit)
 	if err != nil {
 		return nil, err
 	}
-	orders, err := dal.TradingOrders.ListByAccountAndCreatedAt(ctx, s.db, accountID, from, to, dashboardItemLimit)
+	orders, err := dal.TradingOrders.ListByAccountAndCreatedAt(ctx, s.db, accountID, from, to, dailyLimit)
 	if err != nil {
 		return nil, err
 	}

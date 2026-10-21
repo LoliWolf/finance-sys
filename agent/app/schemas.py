@@ -53,10 +53,11 @@ class AgentDocumentChunk(StrictBaseModel):
 
 
 class AgentLimits(StrictBaseModel):
-    max_intents: int = Field(default=20, ge=1, le=100)
+    # 0 is explicitly unlimited; positive limits fail on overflow, never slice.
+    max_intents: int = Field(default=0, ge=0, le=100)
     max_evidence_per_intent: int = Field(default=4, ge=1, le=20)
     max_risks_per_intent: int = Field(default=5, ge=0, le=20)
-    max_untrackable_targets: int = Field(default=20, ge=0, le=100)
+    max_untrackable_targets: int = Field(default=0, ge=0, le=100)
 
 
 class AgentResolveDocumentRequest(StrictBaseModel):

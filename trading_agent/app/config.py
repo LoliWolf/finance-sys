@@ -25,6 +25,11 @@ class AgentConfig:
     max_holding_trade_days: int = 20
     sell_limit_discount_ratio: float = 0.002
     config_version: int = 0
+    max_candidate_scan: int = 5000
+    selection_strategy: str = "TREND_PULLBACK_V1"
+    benchmark_symbol: str = "510300.SH"
+    max_entry_extension_ratio: float = 0.05
+    max_atr_ratio: float = 0.08
 
 
 def _nacos_address() -> str:
@@ -72,4 +77,9 @@ def load_config() -> AgentConfig:
         max_holding_trade_days=int(exit_config["max_holding_trade_days"]),
         sell_limit_discount_ratio=float(exit_config["sell_limit_discount_ratio"]),
         config_version=int(root["meta"]["config_version"]),
+        max_candidate_scan=int(decision.get("max_candidate_scan") or 5000),
+        selection_strategy=str(decision.get("selection_strategy") or "TREND_PULLBACK_V1"),
+        benchmark_symbol=str(decision.get("benchmark_symbol") or "510300.SH"),
+        max_entry_extension_ratio=float(decision.get("max_entry_extension_ratio") or 0.05),
+        max_atr_ratio=float(decision.get("max_atr_ratio") or 0.08),
     )

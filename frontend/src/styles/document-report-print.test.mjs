@@ -83,6 +83,7 @@ describe('document report print styles', () => {
     // jsdom drops page-size descriptors; verify the declaration and check A4 in the PDF QA.
     expect(stylesheet).toMatch(/@page document-report\s*\{\s*size:\s*A4 portrait;\s*margin:\s*0;\s*\}/)
     expect(getComputedStyle(document.body).page).toBe('document-report')
+    expect(getComputedStyle(document.documentElement).page).toBe('document-report')
     expect(getComputedStyle(document.body).backgroundColor).toBe('rgb(245, 241, 233)')
     expect(getComputedStyle(document.body).printColorAdjust).toBe('exact')
     expect(computed('.document-report-detail').padding).toBe('12mm 11mm')
@@ -101,6 +102,17 @@ describe('document report print styles', () => {
     expect(computed('.avatar').display).toBe('none')
   })
 
+  it('uses one named page at the document boundary for every export mode', () => {
+    for (const portal of [false, true]) {
+      document.body.classList.toggle('page-report-printing', portal)
+      expect(getComputedStyle(document.documentElement).page).toBe('document-report')
+      expect(getComputedStyle(document.body).page).toBe('document-report')
+    }
+    document.body.classList.remove('page-report-printing', 'document-report-printing')
+    expect(getComputedStyle(document.documentElement).page).not.toBe('document-report')
+    expect(getComputedStyle(document.body).page).not.toBe('document-report')
+  })
+
   it('does not change the interactive screen layout', () => {
     document.body.classList.remove('document-report-printing')
     expect(computed('.report-recommendation-list').display).toBe('grid')
@@ -111,5 +123,36 @@ describe('document report print styles', () => {
     expect(computed('.panel').borderRadius).toBe('17px')
     expect(computed('.metric-card').borderRadius).toBe('16px')
     expect(computed('.document-report-detail').boxDecorationBreak).not.toBe('clone')
+  })
+
+  it('reuses the paper theme for ledger export without clipping its full-width table', () => {
+    fixture.innerHTML = `<div class="recommendation-ledger-screen no-print">Interactive list</div>
+      <section class="document-report-detail recommendation-export-report print-only">
+        <table class="data-table report-export-table"><thead><tr><th>Window</th></tr></thead><tbody><tr><td class="report-export-thesis">Full thesis</td></tr></tbody></table>
+      </section>`
+    expect(computed('.recommendation-ledger-screen').display).toBe('none')
+    expect(computed('.recommendation-export-report').display).toBe('block')
+    expect(computed('.recommendation-export-report').padding).toBe('12mm 11mm')
+    expect(computed('.report-export-table').width).toBe('100%')
+    expect(computed('.report-export-table').minWidth).toBe('0px')
+    expect(computed('.report-export-table').tableLayout).toBe('fixed')
+    expect(computed('.report-export-thesis').whiteSpace).toBe('pre-wrap')
+    expect(computed('.report-export-thesis').overflowWrap).toBe('anywhere')
+    expect(computed('thead').display).toBe('table-header-group')
+  })
+
+  it('isolates the other page reports from forms and uses the same paper theme', () => {
+    document.body.classList.add('page-report-printing')
+    fixture.innerHTML = `<div id="app"><button>Actions</button><input value="Never export this form" /></div>
+      <section class="document-report-detail page-export-report print-only"><div class="page-report-prose"><p>Full evidence</p></div><table class="data-table page-report-table"><thead><tr><th>Header</th></tr></thead><tbody><tr><td>Complete text</td></tr></tbody></table></section>`
+    try {
+      expect(computed('#app').display).toBe('none')
+      expect(computed('.page-export-report').display).toBe('block')
+      expect(computed('.page-export-report').padding).toBe('12mm 11mm')
+      expect(computed('.page-report-table').tableLayout).toBe('fixed')
+      expect(computed('td').whiteSpace).toBe('pre-wrap')
+      expect(computed('td').overflowWrap).toBe('anywhere')
+      expect(computed('thead').display).toBe('table-header-group')
+    } finally { document.body.classList.remove('page-report-printing') }
   })
 })

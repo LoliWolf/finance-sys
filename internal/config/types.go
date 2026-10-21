@@ -138,15 +138,17 @@ type OpenListDocumentSourceConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled      bool              `json:"enabled"`
-	Provider     LLMProvider       `json:"provider"`
-	Endpoint     string            `json:"endpoint"`
-	APIKey       string            `json:"api_key"`
-	Model        string            `json:"model"`
-	Stream       bool              `json:"stream"`
-	TimeoutMS    int               `json:"timeout_ms"`
-	MaxRetries   int               `json:"max_retries"`
-	ExtraHeaders map[string]string `json:"extra_headers"`
+	Enabled          bool              `json:"enabled"`
+	Provider         LLMProvider       `json:"provider"`
+	Endpoint         string            `json:"endpoint"`
+	APIKey           string            `json:"api_key"`
+	Model            string            `json:"model"`
+	Temperature      float64           `json:"temperature"`
+	ExtractionPrompt string            `json:"extraction_prompt"`
+	Stream           bool              `json:"stream"`
+	TimeoutMS        int               `json:"timeout_ms"`
+	MaxRetries       int               `json:"max_retries"`
+	ExtraHeaders     map[string]string `json:"extra_headers"`
 }
 
 type AgentConfig struct {
@@ -350,10 +352,17 @@ type TradingDecisionConfig struct {
 	StrategyVersion             string  `json:"strategy_version"`
 	ToolContractVersion         string  `json:"tool_contract_version"`
 	MinRecommendationConfidence float64 `json:"min_recommendation_confidence"`
+	RecommendationDateMode      string  `json:"recommendation_date_mode"`     // Empty defaults to WEEK_NATURAL_DAYS: 7 Chinese calendar dates including today.
+	RecommendationLookbackDays  int     `json:"recommendation_lookback_days"` // Only used by ROLLING_NATURAL_DAYS; 0 defaults to 5.
 	MinBloggerSampleCount       int     `json:"min_blogger_sample_count"`
 	MinBloggerWinRate           float64 `json:"min_blogger_win_rate"`
 	MaxCandidatesPerRun         int     `json:"max_candidates_per_run"`
 	MaxIntentsPerRun            int     `json:"max_intents_per_run"`
+	MaxCandidateScan            int     `json:"max_candidate_scan"`        // 0 defaults to 5000; overflow fails the whole decision.
+	SelectionStrategy           string  `json:"selection_strategy"`        // Empty defaults to TREND_PULLBACK_V1.
+	BenchmarkSymbol             string  `json:"benchmark_symbol"`          // Empty defaults to 510300.SH.
+	MaxEntryExtensionRatio      float64 `json:"max_entry_extension_ratio"` // 0 defaults to .05 above MA5.
+	MaxATRRatio                 float64 `json:"max_atr_ratio"`             // 0 defaults to .08.
 }
 
 type TradingRiskConfig struct {
@@ -463,6 +472,8 @@ type TradingReconciliationConfig struct {
 	Enabled                   bool `json:"enabled"`
 	IntervalSeconds           int  `json:"interval_seconds"`
 	RefreshTimeoutSeconds     int  `json:"refresh_timeout_seconds"`
+	ValuationMaxAttempts      int  `json:"valuation_max_attempts"`      // 0 uses 3; includes the initial snapshot.
+	ValuationRetryIntervalMS  int  `json:"valuation_retry_interval_ms"` // 0 uses 1000.
 	AutoRepairMissingEvents   bool `json:"auto_repair_missing_events"`
 	AutoRepairMissingFills    bool `json:"auto_repair_missing_fills"`
 	KillOnMoneyOrPositionDiff bool `json:"kill_on_money_or_position_diff"`

@@ -147,6 +147,39 @@ export interface RecommendationLedgerList {
   items: RecommendationLedgerItem[]
 }
 
+export interface RecommendationExportWindow {
+  window_days: number
+  sample_count: number
+  evaluated_count: number
+  pending_count: number
+  unavailable_count: number
+  rise_count: number
+  rise_rate: number | null
+  avg_return_ratio: number | null
+}
+
+export interface RecommendationExportReport {
+  generated_at: string
+  data_as_of: string | null
+  quote_source: string
+  calc_version: string
+  filters: Record<string, string>
+  total: number
+  max_items: number
+  blogger_count: number
+  security_count: number
+  windows: number[]
+  summary: RecommendationExportWindow[]
+  bloggers: Array<{
+    blogger_id: number
+    blogger_name: string
+    institution: string
+    recommendation_count: number
+    windows: RecommendationExportWindow[]
+  }>
+  items: RecommendationLedgerItem[]
+}
+
 export type MetricStatus = 'READY' | 'PENDING' | 'INCOMPLETE' | 'NO_SECURITY' | 'UNSUPPORTED' | 'FAILED' | 'NOT_EVALUATED' | 'OUTDATED'
 
 export interface WindowMetric {

@@ -15,6 +15,7 @@ import { api } from '../api/client'
 import type { TradingDashboard } from '../api/types'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
+import PageExportButton from '../components/PageExportButton.vue'
 import StatePanel from '../components/StatePanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { formatCurrency, formatDate, formatDateTime, formatNumber, formatPercent, returnTone } from '../utils/format'
@@ -25,6 +26,7 @@ const error = ref('')
 const success = ref('')
 const data = ref<TradingDashboard | null>(null)
 const tradeDate = ref(localDate(new Date()))
+let loadVersion = 0
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 
 function localDate(value: Date) {
@@ -62,32 +64,39 @@ function snapshotAge(seconds: number) {
 }
 
 async function load(silent = false) {
+  const version = ++loadVersion
   if (silent) refreshing.value = true
   else loading.value = true
   error.value = ''
   try {
-    data.value = await api.tradingDashboard({ trade_date: tradeDate.value })
+    const response = await api.tradingDashboard({ trade_date: tradeDate.value })
+    if (version !== loadVersion) return
+    data.value = response
   } catch (cause) {
+    if (version !== loadVersion) return
     error.value = cause instanceof Error ? cause.message : '模拟交易数据加载失败'
   } finally {
-    loading.value = false
-    refreshing.value = false
+    if (version === loadVersion) { loading.value = false; refreshing.value = false }
   }
 }
 
 async function refreshSnapshot() {
+  const version = ++loadVersion
   refreshing.value = true
   error.value = ''
   success.value = ''
   try {
-    data.value = await api.refreshTradingDashboard({ trade_date: tradeDate.value })
+    const response = await api.refreshTradingDashboard({ trade_date: tradeDate.value })
+    if (version !== loadVersion) return
+    data.value = response
     success.value = data.value.refresh_run_id
       ? `账户对账刷新已入队（任务 ${data.value.refresh_run_id}），完成后页面自动更新`
       : `账户和持仓已同步，快照时间 ${formatDateTime(data.value.account?.snapshot_at)}`
   } catch (cause) {
+    if (version !== loadVersion) return
     error.value = cause instanceof Error ? cause.message : '东方财富账户快照刷新失败'
   } finally {
-    refreshing.value = false
+    if (version === loadVersion) { refreshing.value = false; loading.value = false }
   }
 }
 
@@ -131,6 +140,7 @@ onBeforeUnmount(() => {
         <button class="button" type="button" :disabled="loading || refreshing" @click="refreshSnapshot">
           <RefreshCw :size="16" :class="{ spin: loading || refreshing }" />刷新快照
         </button>
+        <PageExportButton kind="trading" :query="{ trade_date: tradeDate }" :disabled="loading || refreshing || !data || data.trade_date !== tradeDate || !!error" label="导出账务报告" />
       </template>
     </PageHeader>
 

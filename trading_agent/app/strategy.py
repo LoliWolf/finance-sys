@@ -7,7 +7,8 @@ from typing import Any
 
 from .config import AgentConfig
 from .http_client import ToolClient
-from .skills import blogger_quality, composite_buy_score, decision_key, exit_signal, fixed, trend_confirmation
+from .selection import scan_candidates, bars_before, technical_selection
+from .skills import blogger_quality, composite_buy_score, decision_key, exit_signal, fixed
 
 CST = dt.timezone(dt.timedelta(hours=8))
 
@@ -16,19 +17,29 @@ def run_deterministic(request: dict[str, Any], config: AgentConfig, client: Tool
     as_of = _parse_time(str(request["as_of_time"]))
     run_key = str(request["run_key"])
     exit_only = str(request.get("trigger_type", "")).upper() == "EXIT_MONITOR"
-    candidates = [] if exit_only else list(client.get("/recommendation-candidates", {"as_of_time": as_of.isoformat(), "limit": config.max_candidates}).get("items", []))
+    if config.selection_strategy != "TREND_PULLBACK_V1":
+        raise ValueError("unsupported selection strategy")
+    candidates = [] if exit_only else scan_candidates(client, as_of.isoformat(), config.max_candidates, config.max_candidate_scan)
     portfolio = client.get("/portfolio")
     positions = list(portfolio.get("positions", []))
     cycles = [] if request.get("selection_only") else list(portfolio.get("cycles", []))
     held_symbols = {str(item.get("symbol", "")) for item in positions if int(item.get("volume", 0)) > 0}
     open_order_symbols = {str(item.get("symbol", "")) for item in portfolio.get("open_orders", [])}
     symbols = sorted({str(item.get("symbol", "")) for item in candidates + positions if item.get("symbol")})
-    market_response = client.get("/market-snapshot", {"symbols": ",".join(symbols), "as_of_time": as_of.isoformat()}) if symbols else {"items": []}
+    def market_tool(path, codes, **extra):
+        result = {"items": []}
+        for offset in range(0, len(codes), 20):
+            result["items"].extend(client.get(path, {"symbols": ",".join(codes[offset:offset+20]), "as_of_time": as_of.isoformat(), **extra}).get("items", []))
+        return result
+    market_response = market_tool("/market-snapshot", symbols)
     prices = {str(item.get("symbol")): str(item.get("price", "")) for item in market_response.get("items", []) if not item.get("missing_reason") and item.get("price")}
-    history_response = client.get("/daily-history", {"symbols": ",".join(symbols), "as_of_time": as_of.isoformat(), "limit": 20}) if symbols and not exit_only else {"items": []}
+    history_symbols = sorted(set(symbols + [config.benchmark_symbol])) if symbols and not exit_only else []
+    history_response = market_tool("/daily-history", history_symbols, limit=20)
     history_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for item in history_response.get("items", []):
         history_by_symbol.setdefault(str(item.get("symbol", "")), []).append(item)
+    history_by_symbol = {k: bars_before(v, as_of.date().isoformat()) for k, v in history_by_symbol.items()}
+    benchmark = history_by_symbol.get(config.benchmark_symbol.split(".")[0], [])
 
     intents: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
@@ -78,13 +89,15 @@ def run_deterministic(request: dict[str, Any], config: AgentConfig, client: Tool
             continue
         blogger_id = int(candidate.get("blogger_id", 0))
         if blogger_id not in performance_by_blogger:
-            performance_by_blogger[blogger_id] = client.get(f"/blogger-performance/{blogger_id}", {"window_days": 30})
+            performance_by_blogger[blogger_id] = client.get(f"/blogger-performance/{blogger_id}", {"window_days": 30, "as_of_time": as_of.isoformat()})
         performance = performance_by_blogger[blogger_id]
         blogger_pass, blogger_score, blogger_reason, blogger_observed = blogger_quality(performance, config.min_blogger_sample_count, config.min_blogger_win_rate)
-        trend_pass, trend_score, trend_reason, trend_observed = trend_confirmation(history_by_symbol.get(symbol, []))
+        trend_pass, trend_score, trend_reason, trend_observed = technical_selection(
+            history_by_symbol.get(symbol, []), benchmark, prices.get(symbol, "0"),
+            config.max_entry_extension_ratio, config.max_atr_ratio)
         event_id = int(candidate.get("recommendation_event_id", 0))
         decisions.append(_decision(run_key, "", None, "BUY_FILTER", "blogger_quality", "blogger-quality-v1", "PASS" if blogger_pass else "REJECT", blogger_score, blogger_reason, {"blogger_id": blogger_id, **blogger_observed}, {}, as_of, f"event:{event_id}"))
-        decisions.append(_decision(run_key, "", None, "BUY_FILTER", "trend_confirmation", "trend-confirmation-v1", "PASS" if trend_pass else "REJECT", trend_score, trend_reason, {"symbol": symbol, **trend_observed}, {}, as_of, f"event:{event_id}"))
+        decisions.append(_decision(run_key, "", None, "BUY_FILTER", "trend_pullback", "trend-pullback-v1", "PASS" if trend_pass else "REJECT", trend_score, trend_reason, {"symbol": symbol, **trend_observed}, {}, as_of, f"event:{event_id}"))
         if not blogger_pass or not trend_pass:
             continue
         price = prices.get(symbol, "")
@@ -109,9 +122,9 @@ def run_deterministic(request: dict[str, Any], config: AgentConfig, client: Tool
             "asset_type": str(candidate["asset_type"]).upper(), "board_type": str(candidate.get("board_type", "")).upper(),
             "action": "BUY", "proposed_order_type": "LIMIT",
             "proposed_limit_price": _decimal(prices[symbol]).quantize(Decimal("0.000001")).to_eng_string(),
-            "proposed_position_ratio": min(_decimal(candidate.get("position_ratio", "0.03")), Decimal("0.05")).quantize(Decimal("0.00000001")).to_eng_string(),
+            "proposed_position_ratio": "0.03000000",
             "valid_from": valid_from.isoformat(), "valid_until": valid_until.isoformat(), "confidence": fixed(score),
-            "evidence_refs": list(candidate.get("evidence_refs", [])),
+            "evidence_refs": sorted({ref for row in candidates if row.get("symbol") == symbol for ref in row.get("evidence_refs", [])}),
             "reason": "推荐事实、博主质量和本地日线趋势均满足确定性选股规则",
         }
         intents.append(intent)
@@ -120,7 +133,7 @@ def run_deterministic(request: dict[str, Any], config: AgentConfig, client: Tool
     return {
         "schema_version": config.schema_version, "run_key": run_key, "as_of_time": str(request["as_of_time"]),
         "strategy_name": str(request["strategy_name"]), "strategy_version": str(request["strategy_version"]),
-        "prompt_version": "deterministic-skills-v2", "tool_contract_version": config.tool_contract_version,
+        "prompt_version": "weekly-trend-pullback-v1", "tool_contract_version": config.tool_contract_version,
         "candidate_count": len(candidates), "intents": intents, "skill_decisions": decisions,
         "input_snapshot": {"candidates": candidates, "portfolio": portfolio, "market": market_response, "history": history_response, "blogger_performance": performance_by_blogger},
     }

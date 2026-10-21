@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, BookText, CalendarClock, CandlestickChart, ExternalLink, Target } from 'lucide-vue-next'
 import { api } from '../api/client'
@@ -7,6 +7,7 @@ import type { PriceSeriesResponse, RecommendationDetail } from '../api/types'
 import ChartPanel from '../components/ChartPanel.vue'
 import MetricCard from '../components/MetricCard.vue'
 import StatePanel from '../components/StatePanel.vue'
+import PageExportButton from '../components/PageExportButton.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { assetTypeLabel, formatDate, formatNumber, formatPercent, marketLabel, returnTone, sectorTypeLabel } from '../utils/format'
 
@@ -17,8 +18,10 @@ const loading = ref(true)
 const error = ref('')
 const detail = ref<RecommendationDetail | null>(null)
 const series = ref<PriceSeriesResponse | null>(null)
+let loadVersion = 0
 
 async function load() {
+  const version = ++loadVersion
   loading.value = true
   error.value = ''
   try {
@@ -26,12 +29,14 @@ async function load() {
       api.recommendationDetail(eventID.value),
       api.priceSeries(eventID.value, { days_before: 5, days_after: 90 }),
     ])
+    if (version !== loadVersion) return
     detail.value = detailData
     series.value = seriesData
   } catch (cause) {
+    if (version !== loadVersion) return
     error.value = cause instanceof Error ? cause.message : '推荐详情加载失败'
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
@@ -84,11 +89,13 @@ const priceOption = computed(() => {
 })
 
 onMounted(load)
+watch(eventID, load)
 </script>
 
 <template>
   <div>
     <button class="button" type="button" style="margin-bottom: 22px" @click="router.back()"><ArrowLeft :size="15" />返回上一页</button>
+    <PageExportButton class="detail-export-toolbar" kind="recommendation" :query="{ event_id: eventID }" :disabled="loading || !detail || !!error" label="导出复盘报告" />
     <div v-if="error" class="error-banner">{{ error }}</div>
     <StatePanel v-if="loading" loading />
 

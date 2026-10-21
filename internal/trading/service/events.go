@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -214,7 +215,15 @@ func (s *Service) Reconcile(ctx context.Context, runType string) (*db_model.Trad
 		SummaryJSON: []byte(`{}`), StartedAt: now, ErrorMessage: "", ConfigVersion: cfg.Meta.ConfigVersion,
 		ClaimToken: hashParts("manual-reconcile", now.String()), ClaimDeadline: &deadline,
 	}
-	if err := dal.TradingReconciliationRuns.Create(ctx, s.db, &run); err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := dal.TradingRuntimeControls.Lock(ctx, tx); err != nil {
+			return err
+		}
+		if err := s.requireNoRunningReconciliation(ctx, tx, run.AccountID); err != nil {
+			return err
+		}
+		return dal.TradingReconciliationRuns.Create(ctx, tx, &run)
+	}); err != nil {
 		return nil, err
 	}
 	return s.performReconciliation(ctx, &run)
@@ -223,83 +232,140 @@ func (s *Service) Reconcile(ctx context.Context, runType string) (*db_model.Trad
 func (s *Service) performReconciliation(ctx context.Context, run *db_model.TradingReconciliationRun) (*db_model.TradingReconciliationRun, error) {
 	cfg := s.runtime.Config()
 	if cfg == nil {
-		return nil, fmt.Errorf("config unavailable")
+		return s.failReconciliation(ctx, run, "CONFIG_UNAVAILABLE", "config unavailable")
 	}
+	maxAttempts, interval, budget := reconciliationConfirmationSettings(cfg.Trading.Reconciliation)
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	if err := s.lockReconciliationActivity(ctx); err != nil {
+		return s.failReconciliation(ctx, run, "RECONCILIATION_BUSY", err.Error())
+	}
+	defer s.accountActivity.Unlock()
 	if s.bridge == nil {
 		return s.failReconciliation(ctx, run, "BRIDGE_UNAVAILABLE", "Bridge client unavailable")
 	}
-	snapshot, err := s.freshBridgeSnapshot(ctx, "reconciliation")
-	if err != nil {
-		return s.failReconciliation(ctx, run, "BRIDGE_SNAPSHOT_STALE", err.Error())
+	var snapshot *tradingdomain.ReconciliationSnapshot
+	var diffs []db_model.TradingReconciliationDiff
+	var commissionSummary map[string]any
+	var err error
+	repairedEvents, repairedFills := int(run.RepairedEventCount), int(run.RepairedFillCount)
+	var prior struct {
+		Attempts []reconciliationSnapshotAttempt `json:"snapshot_attempts"`
 	}
-	if snapshot.Account.AccountID != cfg.Trading.Bridge.ExpectedAccountID {
-		_ = dal.TradingRuntimeControls.SetKillSwitch(ctx, s.db, true, "reconciliation account mismatch", "system", cfg.Meta.ConfigVersion)
-		return s.failReconciliation(ctx, run, "ACCOUNT_MISMATCH", "Bridge account differs from expected simulation account")
+	if err := json.Unmarshal(run.SummaryJSON, &prior); err != nil {
+		return s.failReconciliation(ctx, run, "ATTEMPT_AUDIT_INVALID", "cannot decode previous confirmation evidence")
 	}
-	repairedEvents, repairedFills := 0, 0
-	for _, items := range [][]map[string]any{snapshot.Orders, snapshot.Executions} {
-		for _, item := range items {
-			if raw, exists := item["bridge_event"]; exists {
-				var event tradingdomain.BridgeEvent
-				if e := json.Unmarshal(marshalJSON(raw), &event); e != nil {
-					return s.failReconciliation(ctx, run, "RECOVERY_SCHEMA_INVALID", e.Error())
-				}
-				if (event.EventType == "EXECUTION_REPORT" && cfg.Trading.Reconciliation.AutoRepairMissingFills) || (event.EventType != "EXECUTION_REPORT" && cfg.Trading.Reconciliation.AutoRepairMissingEvents) {
-					if e := s.applyBridgeEvent(ctx, event, func(newEvent, newFill bool) {
-						if newEvent {
-							repairedEvents++
+	attempts := prior.Attempts
+	if attempts == nil {
+		attempts = []reconciliationSnapshotAttempt{}
+	}
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return s.failReconciliation(ctx, run, "SNAPSHOT_CONFIRMATION_FAILED", err.Error())
+		}
+		if current := s.runtime.Config(); current == nil || current.Meta.ConfigVersion != cfg.Meta.ConfigVersion {
+			return s.failReconciliation(ctx, run, "CONFIG_CHANGED", "configuration changed during reconciliation")
+		}
+		snapshot, err = s.freshBridgeSnapshot(ctx, fmt.Sprintf("reconciliation-%d-%d", run.ID, attempt))
+		if err != nil {
+			return s.failReconciliation(ctx, run, "SNAPSHOT_CONFIRMATION_FAILED", err.Error())
+		}
+		if snapshot.Account.AccountID != cfg.Trading.Bridge.ExpectedAccountID {
+			_ = dal.TradingRuntimeControls.SetKillSwitch(ctx, s.db, true, "reconciliation account mismatch", "system", cfg.Meta.ConfigVersion)
+			return s.failReconciliation(ctx, run, "ACCOUNT_MISMATCH", "Bridge account differs from expected simulation account")
+		}
+		for _, previous := range attempts {
+			if previous.SnapshotVersion == snapshot.SnapshotVersion || snapshot.Account.SnapshotAt.Before(previous.SnapshotAt) {
+				return s.failReconciliation(ctx, run, "SNAPSHOT_CONFIRMATION_FAILED", "repeated or regressed snapshot cannot confirm consistency")
+			}
+		}
+		for _, items := range [][]map[string]any{snapshot.Orders, snapshot.Executions} {
+			for _, item := range items {
+				if raw, exists := item["bridge_event"]; exists {
+					var event tradingdomain.BridgeEvent
+					if e := json.Unmarshal(marshalJSON(raw), &event); e != nil {
+						return s.failReconciliation(ctx, run, "RECOVERY_SCHEMA_INVALID", e.Error())
+					}
+					if (event.EventType == "EXECUTION_REPORT" && cfg.Trading.Reconciliation.AutoRepairMissingFills) || (event.EventType != "EXECUTION_REPORT" && cfg.Trading.Reconciliation.AutoRepairMissingEvents) {
+						if e := s.applyBridgeEvent(ctx, event, func(newEvent, newFill bool) {
+							if newEvent {
+								repairedEvents++
+							}
+							if newFill {
+								repairedFills++
+							}
+						}); e != nil {
+							return s.failReconciliation(ctx, run, "RECOVERY_FAILED", e.Error())
 						}
-						if newFill {
-							repairedFills++
-						}
-					}); e != nil {
-						return s.failReconciliation(ctx, run, "RECOVERY_FAILED", e.Error())
 					}
 				}
 			}
 		}
-	}
-	if err := s.persistSnapshot(ctx, snapshot.Account, snapshot.Positions); err != nil {
-		return s.failReconciliation(ctx, run, "SNAPSHOT_PERSIST_FAILED", err.Error())
-	}
-	commissionSummary, commissionDiff, err := s.reconcileCommissions(ctx, snapshot.Account)
-	if err != nil {
-		return s.failReconciliation(ctx, run, "COMMISSION_RECONCILIATION_FAILED", err.Error())
-	}
-	providerOrders := make(map[string]struct{}, len(snapshot.Orders))
-	for _, item := range snapshot.Orders {
-		if value, ok := item["client_order_id"].(string); ok && value != "" {
-			providerOrders[value] = struct{}{}
+		if err := s.persistSnapshot(ctx, snapshot.Account, snapshot.Positions); err != nil {
+			return s.failReconciliation(ctx, run, "SNAPSHOT_PERSIST_FAILED", err.Error())
+		}
+		var commissionDiff *db_model.TradingReconciliationDiff
+		commissionSummary, commissionDiff, err = s.reconcileCommissions(ctx, snapshot.Account)
+		if err != nil {
+			return s.failReconciliation(ctx, run, "COMMISSION_RECONCILIATION_FAILED", err.Error())
+		}
+		providerOrders := make(map[string]struct{}, len(snapshot.Orders))
+		for _, item := range snapshot.Orders {
+			if value, ok := item["client_order_id"].(string); ok && value != "" {
+				providerOrders[value] = struct{}{}
+			}
+		}
+		localOpen, err := dal.TradingOrders.QueryOpen(ctx, s.db)
+		if err != nil {
+			return s.failReconciliation(ctx, run, "LOCAL_QUERY_FAILED", err.Error())
+		}
+		diffs, err = s.ledgerDiffs(ctx, snapshot.Account, snapshot.Positions)
+		if err != nil {
+			return s.failReconciliation(ctx, run, "LEDGER_UNAVAILABLE", err.Error())
+		}
+		for i := range diffs {
+			diffs[i].ReconciliationRunID = run.ID
+		}
+		for _, item := range snapshot.Orders {
+			if id, ok := item["client_order_id"].(string); !ok || id == "" {
+				diffs = append(diffs, db_model.TradingReconciliationDiff{ReconciliationRunID: run.ID, DiffType: "UNTRACKED_PROVIDER_ORDER", Severity: "P0", EntityType: "ORDER", EntityKey: fmt.Sprint(item["cl_ord_id"]), LocalValueJSON: []byte(`null`), ProviderValueJSON: marshalJSON(item), Resolution: "OPEN", ResolutionMessage: "provider order has no local client-order binding"})
+			}
+		}
+		if commissionDiff != nil {
+			commissionDiff.ReconciliationRunID = run.ID
+			diffs = append(diffs, *commissionDiff)
+		}
+		for _, order := range localOpen {
+			if _, ok := providerOrders[order.ClientOrderID]; !ok {
+				diffs = append(diffs, db_model.TradingReconciliationDiff{
+					ReconciliationRunID: run.ID, DiffType: "MISSING_PROVIDER_ORDER", Severity: "P0", EntityType: "ORDER",
+					EntityKey: order.ClientOrderID, LocalValueJSON: marshalJSON(order), ProviderValueJSON: []byte(`null`),
+					Resolution: "OPEN", ResolutionMessage: "provider snapshot does not contain a non-terminal local order",
+				})
+			}
+		}
+		attempts = append(attempts, newReconciliationSnapshotAttempt(snapshot, diffs))
+		run.SummaryJSON = marshalJSON(map[string]any{"snapshot_attempts": attempts, "confirmation_max_attempts": maxAttempts, "confirmation_budget_ms": budget.Milliseconds()})
+		run.RepairedEventCount = int32(repairedEvents)
+		run.RepairedFillCount = int32(repairedFills)
+		ok, checkpointErr := dal.TradingReconciliationRuns.UpdateClaim(ctx, s.db, run.ID, run.ClaimToken, s.now(), map[string]any{
+			"summary_json": run.SummaryJSON, "repaired_event_count": repairedEvents, "repaired_fill_count": repairedFills,
+		})
+		if checkpointErr != nil {
+			return s.failReconciliation(ctx, run, "ATTEMPT_PERSIST_FAILED", checkpointErr.Error())
+		}
+		if !ok {
+			return nil, ErrClaimLost
+		}
+		if !valuationOnlyDiffs(diffs) || attempt >= maxAttempts {
+			break
+		}
+		if err := waitReconciliationRetry(ctx, interval); err != nil {
+			return s.failReconciliation(ctx, run, "SNAPSHOT_CONFIRMATION_FAILED", err.Error())
 		}
 	}
-	localOpen, err := dal.TradingOrders.QueryOpen(ctx, s.db)
-	if err != nil {
-		return s.failReconciliation(ctx, run, "LOCAL_QUERY_FAILED", err.Error())
-	}
-	diffs, err := s.ledgerDiffs(ctx, snapshot.Account, snapshot.Positions)
-	if err != nil {
-		return s.failReconciliation(ctx, run, "LEDGER_UNAVAILABLE", err.Error())
-	}
-	for i := range diffs {
-		diffs[i].ReconciliationRunID = run.ID
-	}
-	for _, item := range snapshot.Orders {
-		if id, ok := item["client_order_id"].(string); !ok || id == "" {
-			diffs = append(diffs, db_model.TradingReconciliationDiff{ReconciliationRunID: run.ID, DiffType: "UNTRACKED_PROVIDER_ORDER", Severity: "P0", EntityType: "ORDER", EntityKey: fmt.Sprint(item["cl_ord_id"]), LocalValueJSON: []byte(`null`), ProviderValueJSON: marshalJSON(item), Resolution: "OPEN", ResolutionMessage: "provider order has no local client-order binding"})
-		}
-	}
-	if commissionDiff != nil {
-		commissionDiff.ReconciliationRunID = run.ID
-		diffs = append(diffs, *commissionDiff)
-	}
-	for _, order := range localOpen {
-		if _, ok := providerOrders[order.ClientOrderID]; !ok {
-			diffs = append(diffs, db_model.TradingReconciliationDiff{
-				ReconciliationRunID: run.ID, DiffType: "MISSING_PROVIDER_ORDER", Severity: "P0", EntityType: "ORDER",
-				EntityKey: order.ClientOrderID, LocalValueJSON: marshalJSON(order), ProviderValueJSON: []byte(`null`),
-				Resolution: "OPEN", ResolutionMessage: "provider snapshot does not contain a non-terminal local order",
-			})
-		}
+	if err := ctx.Err(); err != nil {
+		return s.failReconciliation(ctx, run, "SNAPSHOT_CONFIRMATION_FAILED", err.Error())
 	}
 	if err := dal.TradingReconciliationDiffs.CreateBatch(ctx, s.db, diffs); err != nil {
 		return s.failReconciliation(ctx, run, "DIFF_PERSIST_FAILED", err.Error())
@@ -307,8 +373,9 @@ func (s *Service) performReconciliation(ctx context.Context, run *db_model.Tradi
 	status := "SUCCEEDED"
 	if len(diffs) > 0 {
 		status = "FAILED"
-		_ = dal.TradingRuntimeControls.SetKillSwitch(ctx, s.db, true, "reconciliation found high-severity differences", "system", cfg.Meta.ConfigVersion)
-		_ = s.bridge.SetKillSwitch(ctx, true, "reconciliation ledger difference", hashParts("reconciliation-kill", run.RunKey))
+		if err := s.haltForReconciliation(ctx, run, "reconciliation ledger difference"); err != nil {
+			return s.failReconciliation(ctx, run, "KILL_SWITCH_FAILED", err.Error())
+		}
 	} else if err := s.syncPositionCycles(ctx, snapshot.Account, snapshot.Positions); err != nil {
 		return s.failReconciliation(ctx, run, "POSITION_CYCLE_SYNC_FAILED", err.Error())
 	}
@@ -317,20 +384,23 @@ func (s *Service) performReconciliation(ctx context.Context, run *db_model.Tradi
 		"snapshot_version": snapshot.SnapshotVersion, "order_count": len(snapshot.Orders),
 		"fill_count": len(snapshot.Executions), "position_count": len(snapshot.Positions),
 		"diff_count": len(diffs), "commission": commissionSummary,
+		"snapshot_attempts": attempts, "confirmation_max_attempts": maxAttempts, "confirmation_budget_ms": budget.Milliseconds(),
 	})
 	ok, err := dal.TradingReconciliationRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, finished, map[string]any{
 		"status": status, "snapshot_version": snapshot.SnapshotVersion, "bridge_cursor": snapshot.Cursor,
 		"order_count": len(snapshot.Orders), "fill_count": len(snapshot.Executions), "position_count": len(snapshot.Positions),
 		"diff_count": len(diffs), "summary_json": summary, "finished_at": finished,
 		"repaired_event_count": repairedEvents, "repaired_fill_count": repairedFills,
+		"error_code": "", "error_message": "",
 	})
 	if err != nil {
-		return nil, err
+		return s.failReconciliation(ctx, run, "RUN_FINISH_FAILED", err.Error())
 	}
 	if !ok {
 		return nil, ErrClaimLost
 	}
 	run.Status = status
+	run.ErrorCode, run.ErrorMessage = "", ""
 	run.SnapshotVersion = snapshot.SnapshotVersion
 	run.BridgeCursor = snapshot.Cursor
 	run.OrderCount = int32(len(snapshot.Orders))
@@ -343,13 +413,32 @@ func (s *Service) performReconciliation(ctx context.Context, run *db_model.Tradi
 }
 
 func (s *Service) failReconciliation(ctx context.Context, run *db_model.TradingReconciliationRun, code, message string) (*db_model.TradingReconciliationRun, error) {
+	// A canceled request must neither leave a false success nor skip the safety latch.
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	haltErr := s.haltForReconciliation(cleanup, run, "reconciliation failed: "+code)
 	finished := s.now()
-	_, _ = dal.TradingReconciliationRuns.FinishClaim(ctx, s.db, run.ID, run.ClaimToken, finished, map[string]any{"status": "FAILED", "error_code": code, "error_message": message, "finished_at": finished})
-	run.Status = "FAILED"
+	values := map[string]any{
+		"error_code": code, "error_message": message,
+		"summary_json": run.SummaryJSON, "repaired_event_count": run.RepairedEventCount, "repaired_fill_count": run.RepairedFillCount,
+	}
+	// If either safety latch cannot be confirmed, retain the durable RUNNING
+	// execution barrier so a recovery worker (not a new order) is the next action.
+	if haltErr == nil {
+		values["status"] = "FAILED"
+		values["finished_at"] = finished
+	}
+	ok, persistErr := dal.TradingReconciliationRuns.UpdateClaim(cleanup, s.db, run.ID, run.ClaimToken, finished, values)
+	if !ok && persistErr == nil {
+		persistErr = ErrClaimLost
+	}
+	if haltErr == nil && persistErr == nil {
+		run.Status = "FAILED"
+		run.FinishedAt = &finished
+	}
 	run.ErrorCode = code
 	run.ErrorMessage = message
-	run.FinishedAt = &finished
-	return run, fmt.Errorf("%s: %s", code, message)
+	return run, errors.Join(fmt.Errorf("%s: %s", code, message), haltErr, persistErr)
 }
 
 func multiplyDecimal(value string, volume int64) string {

@@ -146,17 +146,25 @@ func (*RecommendationEventDML) QueryForEvaluation(ctx context.Context, db *gorm.
 	return models, nil
 }
 
-func (*RecommendationEventDML) QueryForTrading(ctx context.Context, db *gorm.DB, asOf time.Time, minConfidence float64, afterID int64, limit int) ([]db_model.RecommendationEvent, error) {
+func (*RecommendationEventDML) QueryForTrading(ctx context.Context, db *gorm.DB, asOf time.Time, recommendFrom, recommendThrough string, minConfidence float64, afterID int64, limit int) ([]db_model.RecommendationEvent, error) {
 	var models []db_model.RecommendationEvent
 	tx := db.WithContext(ctx).
 		Where("asset_type IN ?", []string{"A_SHARE", "STOCK", "ETF"}).
 		Where("market IN ?", []string{"SH", "SZ"}).
 		Where("direction IN ?", []string{"LONG", "BUY"}).
-		Where("status = ?", "ACTIVE").
+		// Missing source prices do not invalidate a recommendation fact. Only
+		// admit this specific review reason; all other review states fail closed.
+		Where(`(status = ? OR (status = ? AND reference_price = 0 AND EXISTS (
+			SELECT 1 FROM trade_candidate_plans p
+			WHERE p.id = recommendation_events.plan_id AND p.status = ?
+			AND p.reference_price = 0 AND p.pricing_note = ?
+		)))`, "ACTIVE", "NEEDS_REVIEW", "NEEDS_REVIEW", "missing explicit price in source text").
 		Where("confidence >= ?", minConfidence).
-		Where("recommend_date <= ?", asOf).
+		Where("recommend_date >= ? AND recommend_date <= ?", recommendFrom, recommendThrough).
 		Where("created_at <= ?", asOf).
-		Order("recommend_date DESC, id DESC")
+		Where("updated_at <= ?", asOf).
+		// ID keyset order matches after_id, including late-ingested older dates.
+		Order("id DESC")
 	if afterID > 0 {
 		tx = tx.Where("id < ?", afterID)
 	}

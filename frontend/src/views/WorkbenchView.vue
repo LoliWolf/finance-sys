@@ -4,6 +4,7 @@ import { Archive, FileUp, LoaderCircle, Play, RefreshCw, Settings2 } from 'lucid
 import { api } from '../api/client'
 import type { DocumentRecord, EvaluationRun } from '../api/types'
 import PageHeader from '../components/PageHeader.vue'
+import PageExportButton from '../components/PageExportButton.vue'
 import StatePanel from '../components/StatePanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { formatDateTime, formatNumber } from '../utils/format'
@@ -132,7 +133,7 @@ onMounted(async () => {
       title="从一篇文档，到一条可审计的表现链路。"
       description="上传研究材料会进入解析、结构化抽取、标的解析和推荐事实链路；评价任务再把历史行情转成固定窗口指标。所有中间件均使用 Nacos 中的远程配置。"
     >
-      <template #actions><button class="button" type="button" @click="refreshAll"><RefreshCw :size="15" />刷新工作台</button></template>
+      <template #actions><button class="button" type="button" @click="refreshAll"><RefreshCw :size="15" />刷新工作台</button><PageExportButton kind="workbench" :disabled="runsLoading || uploading || creatingRun" label="导出运行记录" /></template>
     </PageHeader>
 
     <div v-if="error" class="error-banner">{{ error }}</div>

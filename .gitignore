@@ -39,3 +39,17 @@ cmd/api/.ocr_work
 scripts/**/__pycache__/
 /guziyuan_pdf_ocr_tool/
 testdata/guziyuanpdf
+
+# Local credentials, trust material, data stores, and generated work files.
+.env
+.env.*
+!.env.example
+**/bootstrap.env
+conf/*.pem
+conf/*.key
+*.db
+*.db-*
+*.sqlite*
+__pycache__/
+.pytest_cache/
+/draft_*/

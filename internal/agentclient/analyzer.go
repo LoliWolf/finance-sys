@@ -100,10 +100,10 @@ func buildResolveDocumentRequest(ctx context.Context, document domain.Document, 
 		TradeDate: tradeDate.Format(time.DateOnly),
 		Chunks:    agentChunks,
 		Limits: AgentLimits{
-			MaxIntents:            20,
+			MaxIntents:            0, // Zero means unlimited; never silently discard long-document recommendations.
 			MaxEvidencePerIntent:  4,
 			MaxRisksPerIntent:     5,
-			MaxUntrackableTargets: 20,
+			MaxUntrackableTargets: 0,
 		},
 	}
 }

@@ -77,6 +77,10 @@ func NewService(db *gorm.DB, runtime *config.Runtime) *Service {
 }
 
 func (s *Service) BloggerRankings(ctx context.Context, filter Filter) (*BloggerRankingResponse, error) {
+	return s.bloggerRankings(ctx, filter, 0)
+}
+
+func (s *Service) bloggerRankings(ctx context.Context, filter Filter, exportLimit int) (*BloggerRankingResponse, error) {
 	filter = s.normalizeFilter(filter)
 	rows, err := s.metricRows(ctx, filter)
 	if err != nil {
@@ -106,6 +110,12 @@ func (s *Service) BloggerRankings(ctx context.Context, filter Filter) (*BloggerR
 		items = append(items, bloggerRankingItem(bloggerID, entry.name, entry.institution, entry.values))
 	}
 	sortBloggerRankings(items, filter.Sort)
+	if exportLimit > 0 {
+		if err := checkPageExportLimit(len(items), exportLimit); err != nil {
+			return nil, err
+		}
+		filter.Limit, filter.Offset = exportLimit, 0
+	}
 	items = applyRankingLimit(items, filter.Offset, filter.Limit)
 	for index := range items {
 		items[index].Rank = filter.Offset + index + 1
@@ -207,6 +217,10 @@ func (s *Service) BloggerTimeseries(ctx context.Context, bloggerID int64, filter
 }
 
 func (s *Service) RecommendationPerformanceList(ctx context.Context, filter Filter) (*RecommendationPerformanceList, error) {
+	return s.recommendationPerformanceList(ctx, filter, 0)
+}
+
+func (s *Service) recommendationPerformanceList(ctx context.Context, filter Filter, exportLimit int) (*RecommendationPerformanceList, error) {
 	filter = s.normalizeFilter(filter)
 	tx := s.db.WithContext(ctx).
 		Table("recommendation_event_window_metrics AS m").
@@ -216,6 +230,12 @@ func (s *Service) RecommendationPerformanceList(ctx context.Context, filter Filt
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, err
+	}
+	if exportLimit > 0 {
+		if err := checkPageExportLimit(int(total), exportLimit); err != nil {
+			return nil, err
+		}
+		filter.Limit, filter.Offset = exportLimit, 0
 	}
 	var items []RecommendationPerformanceItem
 	selectSQL := `
@@ -239,8 +259,11 @@ func (s *Service) RecommendationPerformanceList(ctx context.Context, filter Filt
 // pagination source so a missing or not-yet-created metric never removes the
 // underlying recommendation from the ledger.
 func (s *Service) RecommendationLedger(ctx context.Context, filter Filter) (*RecommendationLedgerList, error) {
+	return s.recommendationLedger(ctx, normalizePagination(filter), 0)
+}
+
+func (s *Service) recommendationLedger(ctx context.Context, filter Filter, exportLimit int) (*RecommendationLedgerList, error) {
 	filter.AssetType = normalizeAssetTypeFilter(filter.AssetType)
-	filter = normalizePagination(filter)
 	quoteSource := configuredQuoteSource(s.runtime)
 	base := s.db.WithContext(ctx).
 		Table("recommendation_events AS re").
@@ -251,6 +274,12 @@ func (s *Service) RecommendationLedger(ctx context.Context, filter Filter) (*Rec
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
 		return nil, err
+	}
+	if exportLimit > 0 {
+		if total > int64(exportLimit) {
+			return nil, &RecommendationExportLimitError{Total: total, Limit: exportLimit}
+		}
+		filter.Limit, filter.Offset = exportLimit, 0
 	}
 
 	items := make([]RecommendationLedgerItem, 0, filter.Limit)
@@ -429,6 +458,10 @@ func (s *Service) PriceSeries(ctx context.Context, eventID int64, daysBefore int
 }
 
 func (s *Service) SecurityRankings(ctx context.Context, filter Filter) (*SecurityRankingResponse, error) {
+	return s.securityRankings(ctx, filter, 0, "")
+}
+
+func (s *Service) securityRankings(ctx context.Context, filter Filter, exportLimit int, search string) (*SecurityRankingResponse, error) {
 	filter = s.normalizeFilter(filter)
 	rows, err := s.metricRows(ctx, filter)
 	if err != nil {
@@ -473,6 +506,9 @@ func (s *Service) SecurityRankings(ctx context.Context, filter Filter) (*Securit
 		if entry.values.evaluatedCount < filter.MinSampleCount {
 			continue
 		}
+		if search != "" && !strings.Contains(strings.ToLower(strings.Join([]string{entry.name, tsCode, entry.industry, entry.sectorType}, " ")), strings.ToLower(strings.TrimSpace(search))) {
+			continue
+		}
 		items = append(items, SecurityRankingItem{
 			SecurityMasterID:    entry.securityMasterID,
 			TSCode:              tsCode,
@@ -509,8 +545,17 @@ func (s *Service) SecurityRankings(ctx context.Context, filter Filter) (*Securit
 				return items[i].WinRate > items[j].WinRate
 			}
 		}
-		return items[i].EvaluatedCount > items[j].EvaluatedCount
+		if items[i].EvaluatedCount != items[j].EvaluatedCount {
+			return items[i].EvaluatedCount > items[j].EvaluatedCount
+		}
+		return items[i].TSCode < items[j].TSCode
 	})
+	if exportLimit > 0 {
+		if err := checkPageExportLimit(len(items), exportLimit); err != nil {
+			return nil, err
+		}
+		filter.Limit, filter.Offset = exportLimit, 0
+	}
 	items = applySecurityRankingLimit(items, filter.Offset, filter.Limit)
 	for index := range items {
 		items[index].Rank = filter.Offset + index + 1

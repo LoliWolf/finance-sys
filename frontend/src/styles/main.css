@@ -252,6 +252,24 @@ button { color: inherit; }
 .recommendation-link:hover { text-decoration: underline; }
 
 .print-only { display: none; }
+.page-export-action { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.detail-export-toolbar { margin-bottom: 22px; }
+.page-export-error { color: var(--negative, #b45d52); max-width: 420px; }
+.page-report-prose p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.report-vector-chart { margin: 0 0 18px; break-inside: avoid; }
+.report-vector-chart figcaption { color: var(--ink-soft); font-size: 10px; margin-bottom: 8px; }
+.report-vector-chart svg { display: block; width: 100%; height: auto; }
+.report-vector-chart svg text { fill: #756d63; font: 11px sans-serif; }
+.recommendation-filters { min-inline-size: 0; margin-inline: 0; }
+.recommendation-export-hint { margin: -10px 0 18px; font-size: 11px; }
+.report-export-filters { margin-bottom: 22px; }
+.report-export-filters h2 { font-size: 16px; }
+.report-export-filters dl { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+.report-export-filters dl > div { display: flex; gap: 8px; }
+.report-export-filters dt, .report-export-filters p { color: var(--ink-soft); font-size: 10px; }
+.report-export-filters dd { margin: 0; font-size: 11px; }
+.report-export-bloggers { margin-bottom: 22px; }
+.report-export-thesis { white-space: pre-wrap; overflow-wrap: anywhere; }
 .bulk-action-bar { margin-bottom: 20px; padding: 15px 17px; display: flex; align-items: center; gap: 18px; border: 1px solid rgba(207,107,77,.24); border-radius: 14px; background: rgba(232,148,114,.08); }
 .bulk-action-bar > div { min-width: 220px; margin-right: auto; }
 .bulk-action-bar strong { display: block; font-size: 13px; }
@@ -370,7 +388,14 @@ button { color: inherit; }
 }
 
 @media print {
+  body.page-report-printing #app { display: none !important; }
+  body.page-report-printing .page-export-report { margin: 0; }
+  body.page-report-printing .page-report-section { margin-bottom: 18px; }
+  body.page-report-printing .page-report-prose p { font-size: 10px; line-height: 1.7; }
   @page document-report { size: A4 portrait; margin: 0; }
+  /* Keep the root and body on the same named page. Leaving html on "auto"
+     can create an empty trailing page after window.print() in Chrome. */
+  html:has(body.document-report-printing) { page: document-report; }
   html:has(body.document-report-printing),
   body.document-report-printing { min-width: 0; min-height: 0; background: #f5f1e9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body.document-report-printing { page: document-report; color: var(--ink); }
@@ -460,4 +485,12 @@ button { color: inherit; }
   body.document-report-printing .report-evidence-grid summary,
   body.document-report-printing .evidence-item small { page-break-after: avoid; break-after: avoid; }
   body.document-report-printing thead { display: table-header-group; }
+  body.document-report-printing .report-export-table { width: 100%; table-layout: fixed; }
+  body.document-report-printing .report-export-table th,
+  body.document-report-printing .report-export-table td { padding: 8px 4px; font-size: 8px; overflow-wrap: anywhere; }
+  body.document-report-printing .recommendation-export-report small { color: var(--ink-soft); font-size: 7px; }
+  body.document-report-printing .report-export-filters { break-inside: avoid; }
+  body.page-report-printing .page-report-table { width: 100%; table-layout: fixed; }
+  body.page-report-printing .page-report-table th,
+  body.page-report-printing .page-report-table td { white-space: pre-wrap; overflow-wrap: anywhere; padding: 7px 4px; font-size: 8px; }
 }

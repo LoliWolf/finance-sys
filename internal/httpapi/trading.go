@@ -294,7 +294,12 @@ func (s *Server) handleTradingToolBloggerPerformance(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	result, err := s.trading.BloggerPerformance(r.Context(), id, parseQueryInt(r, "window_days", 30))
+	asOf, err := parseQueryTime(r.URL.Query().Get("as_of_time"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.trading.BloggerPerformance(r.Context(), id, parseQueryInt(r, "window_days", 30), asOf)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

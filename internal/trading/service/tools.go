@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"finance-sys/internal/config"
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain/db_model"
 	tradingdomain "finance-sys/internal/trading/domain"
@@ -22,19 +23,25 @@ func (s *Service) RecommendationCandidates(ctx context.Context, asOf time.Time, 
 		return nil, fmt.Errorf("runtime config unavailable")
 	}
 	if asOf.IsZero() {
-		asOf = time.Now()
+		asOf = s.now()
+	}
+	from, through, err := tradingRecommendationDateWindow(asOf, cfg.Trading.Decision, cfg.Trading.Calendar)
+	if err != nil {
+		return nil, err
 	}
 	limit = boundedLimit(limit)
 	if limit > cfg.Trading.Decision.MaxCandidatesPerRun {
 		limit = cfg.Trading.Decision.MaxCandidatesPerRun
 	}
-	events, err := dal.RecommendationEvents.QueryForTrading(ctx, s.db, asOf, cfg.Trading.Decision.MinRecommendationConfidence, afterID, limit)
+	events, err := dal.RecommendationEvents.QueryForTrading(ctx, s.db, asOf, from, through, cfg.Trading.Decision.MinRecommendationConfidence, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
 	items := make([]tradingdomain.RecommendationCandidate, 0, len(events))
 	nextCursor := ""
 	for _, event := range events {
+		// Advance over raw rows even if symbol validation rejects this entire page.
+		nextCursor = strconv.FormatInt(event.ID, 10)
 		security, securityErr := instrument.Parse(event.Symbol, event.Market, event.AssetType)
 		if securityErr != nil {
 			continue
@@ -63,9 +70,9 @@ func (s *Service) RecommendationCandidates(ctx context.Context, asOf time.Time, 
 			continue
 		}
 		if event.PlanID != nil {
-			if plan, planErr := dal.TradeCandidatePlans.QueryByID(ctx, s.db, *event.PlanID); planErr == nil {
+			if plan, planErr := dal.TradeCandidatePlans.QueryByID(ctx, s.db, *event.PlanID); planErr == nil && plan.Status == "READY" {
 				item.EntryPrice = strconv.FormatFloat(plan.EntryPrice, 'f', 6, 64)
-				item.PositionRatio = strconv.FormatFloat(plan.PositionPct, 'f', 8, 64)
+				// Source-plan sizing is not the trading strategy's risk budget.
 				item.RuleVersion = plan.RuleVersion
 				item.EvidenceRefs = append(item.EvidenceRefs, fmt.Sprintf("candidate_plan:%d", plan.ID))
 			}
@@ -76,7 +83,53 @@ func (s *Service) RecommendationCandidates(ctx context.Context, asOf time.Time, 
 	return &tradingdomain.CandidateList{SchemaVersion: cfg.Trading.Decision.ToolContractVersion, AsOfTime: asOf, NextCursor: nextCursor, Items: items}, nil
 }
 
-func (s *Service) BloggerPerformance(ctx context.Context, bloggerID int64, windowDays int) (*BloggerPerformance, error) {
+// Default to seven natural dates including today. Execution still requires an
+// open trading session; source availability is bounded separately in SQL.
+func tradingRecommendationDateWindow(asOf time.Time, decision config.TradingDecisionConfig, calendar config.TradingCalendarConfig) (string, string, error) {
+	if asOf.IsZero() {
+		return "", "", fmt.Errorf("invalid trading recommendation reference time")
+	}
+	switch decision.RecommendationDateMode {
+	case "", "WEEK_NATURAL_DAYS":
+		return recommendationDateWindow(asOf, 7)
+	case "PREVIOUS_TRADING_DAY_TO_NOW":
+		open, err := calendar.IsOpen(asOf)
+		if err != nil {
+			return "", "", fmt.Errorf("recommendation calendar: %w", err)
+		}
+		if !open {
+			return "", "", fmt.Errorf("recommendation selection requires an open trading date")
+		}
+		previous, err := calendar.Previous(asOf, 1)
+		if err != nil {
+			return "", "", fmt.Errorf("previous recommendation trading date: %w", err)
+		}
+		return config.ChinaDate(previous), config.ChinaDate(asOf), nil
+	case "ROLLING_NATURAL_DAYS":
+		return recommendationDateWindow(asOf, decision.RecommendationLookbackDays)
+	default:
+		return "", "", fmt.Errorf("invalid trading recommendation date mode %q", decision.RecommendationDateMode)
+	}
+}
+
+// Recommendation dates are SQL DATE values. Bound them by Chinese calendar date,
+// not rolling 120 hours, UTC midnight, or the document's later ingestion time.
+func recommendationDateWindow(asOf time.Time, days int) (string, string, error) {
+	if days == 0 {
+		days = 5 // Backward-compatible, bounded default for older Nacos documents.
+	}
+	if asOf.IsZero() || days < 1 || days > 365 {
+		return "", "", fmt.Errorf("invalid trading recommendation lookback window")
+	}
+	today := asOf.In(config.ChinaLocation)
+	return today.AddDate(0, 0, 1-days).Format(time.DateOnly), today.Format(time.DateOnly), nil
+}
+
+func (s *Service) BloggerPerformance(ctx context.Context, bloggerID int64, windowDays int, at ...time.Time) (*BloggerPerformance, error) {
+	asOf := s.now()
+	if len(at) > 0 && !at[0].IsZero() {
+		asOf = at[0]
+	}
 	if windowDays <= 0 {
 		windowDays = 30
 	}
@@ -90,6 +143,7 @@ func (s *Service) BloggerPerformance(ctx context.Context, bloggerID int64, windo
 	err := s.db.WithContext(ctx).Model(&db_model.RecommendationEventWindowMetric{}).
 		Select("SUM(CASE WHEN status = 'READY' THEN 1 ELSE 0 END) AS evaluable_count, SUM(CASE WHEN status = 'READY' AND win_flag = 1 THEN 1 ELSE 0 END) AS win_count, COALESCE(AVG(CASE WHEN status = 'READY' THEN direction_return_ratio END), 0) AS average_return, SUM(CASE WHEN status <> 'READY' THEN 1 ELSE 0 END) AS unevaluable_count").
 		Where("blogger_id = ? AND window_days = ?", bloggerID, windowDays).
+		Where("quote_source = ? AND calculated_at <= ? AND updated_at <= ? AND exit_date < ?", "TUSHARE", asOf, asOf, config.ChinaDate(asOf)).
 		Scan(&value).Error
 	if err != nil {
 		return nil, err
@@ -103,7 +157,7 @@ func (s *Service) BloggerPerformance(ctx context.Context, bloggerID int64, windo
 
 func (s *Service) MarketSnapshots(ctx context.Context, symbols []string, asOf time.Time) ([]MarketSnapshot, error) {
 	if asOf.IsZero() {
-		asOf = time.Now()
+		asOf = s.now()
 	}
 	securities := make([]instrument.Canonical, 0, len(symbols))
 	for _, symbol := range symbols {
@@ -113,18 +167,24 @@ func (s *Service) MarketSnapshots(ctx context.Context, symbols []string, asOf ti
 		}
 	}
 	realtimeBySymbol := make(map[string]tradingdomain.QuoteSnapshot)
-	now := time.Now()
+	now := s.now()
 	cfg := s.runtime.Config()
-	if cfg != nil && sessionWindowOpen(asOf, cfg.Trading.Scheduler) && !asOf.Before(now.Add(-5*time.Minute)) && !asOf.After(now.Add(time.Minute)) {
+	realtimeRequired := cfg != nil && sessionWindowOpen(asOf, cfg.Trading.Scheduler) && !asOf.Before(now.Add(-5*time.Minute)) && !asOf.After(now.Add(time.Minute))
+	if realtimeRequired {
 		bridgeSymbols := make([]string, 0, len(securities))
 		for _, security := range securities {
 			bridgeSymbols = append(bridgeSymbols, security.EastmoneySymbol)
 		}
-		if quotes, err := s.refreshBridgeQuotes(ctx, bridgeSymbols, asOf); err == nil {
-			for _, quote := range quotes {
-				if security, parseErr := instrument.Parse(quote.EastmoneySymbol, "", ""); parseErr == nil {
-					realtimeBySymbol[security.Symbol] = quote
-				}
+		// The decision time may be truncated to a minute. Quote freshness must
+		// instead be measured at retrieval time. Partial results remain useful
+		// for selection; execution/exit callers still require err == nil.
+		quotes, _ := s.refreshBridgeQuotes(ctx, bridgeSymbols, now)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		for _, quote := range quotes {
+			if security, parseErr := instrument.Parse(quote.EastmoneySymbol, "", ""); parseErr == nil {
+				realtimeBySymbol[security.Symbol] = quote
 			}
 		}
 	}
@@ -136,10 +196,15 @@ func (s *Service) MarketSnapshots(ctx context.Context, symbols []string, asOf ti
 			continue
 		}
 		if quote, ok := realtimeBySymbol[security.Symbol]; ok && quote.Price != "" {
-			items = append(items, MarketSnapshot{Symbol: security.Symbol, TSCode: security.TSCode, BoardType: security.BoardType, Price: quote.Price, TradeDate: quote.ObservedAt.Format(time.DateOnly), ObservedAt: quote.ObservedAt, Source: quote.Source})
+			items = append(items, MarketSnapshot{Symbol: security.Symbol, TSCode: security.TSCode, BoardType: security.BoardType, Price: quote.Price, TradeDate: config.ChinaDate(quote.ObservedAt), ObservedAt: quote.ObservedAt, Source: quote.Source})
 			continue
 		}
-		quote, err := dal.StockDailyQuotes.QueryLatestBySymbolAt(ctx, s.db, security.Symbol, asOf)
+		if realtimeRequired {
+			// Never silently price an intraday candidate with yesterday's close.
+			items = append(items, MarketSnapshot{Symbol: security.Symbol, TSCode: security.TSCode, BoardType: security.BoardType, ObservedAt: now, Source: "BRIDGE", MissingReason: "REALTIME_QUOTE_UNAVAILABLE"})
+			continue
+		}
+		quote, err := dal.StockDailyQuotes.QueryLatestBySymbolAt(ctx, s.db, security.Symbol, asOf.In(config.ChinaLocation).AddDate(0, 0, -1))
 		if errors.Is(err, dal.ErrNotFound) {
 			items = append(items, MarketSnapshot{Symbol: security.Symbol, TSCode: security.TSCode, BoardType: security.BoardType, ObservedAt: asOf, Source: "TUSHARE", MissingReason: "QUOTE_UNAVAILABLE"})
 			continue
@@ -171,26 +236,45 @@ func (s *Service) DailyHistory(ctx context.Context, symbols []string, asOf time.
 		limit = 120
 	}
 	items := make([]DailyHistoryItem, 0, len(symbols)*limit)
+	cfg := s.runtime.Config()
+	if cfg == nil {
+		return nil, fmt.Errorf("runtime config unavailable")
+	}
+	previous, err := cfg.Trading.Calendar.Previous(asOf, 1)
+	if err != nil {
+		return nil, fmt.Errorf("daily history calendar: %w", err)
+	}
 	for _, raw := range symbols {
 		security, err := instrument.Parse(raw, "", "")
 		if err != nil {
 			continue
 		}
-		quotes, err := dal.StockDailyQuotes.QueryByTSCodeRange(ctx, s.db, security.TSCode, "TUSHARE", asOf.AddDate(0, 0, -240), asOf)
+		// Daily bars from the decision day are not complete and must never leak.
+		previousDate := asOf.In(config.ChinaLocation).AddDate(0, 0, -1)
+		quotes, err := dal.StockDailyQuotes.QueryByTSCodeRange(ctx, s.db, security.TSCode, "TUSHARE", asOf.AddDate(0, 0, -240), previousDate)
 		if err != nil {
 			return nil, err
 		}
 		if len(quotes) > limit {
 			quotes = quotes[len(quotes)-limit:]
 		}
+		if len(quotes) == 0 || quotes[len(quotes)-1].TradeDate.Format(time.DateOnly) != config.ChinaDate(previous) {
+			continue // stale history is unavailable, never a fresh signal
+		}
 		for _, quote := range quotes {
-			items = append(items, DailyHistoryItem{Symbol: security.Symbol, TSCode: security.TSCode, TradeDate: quote.TradeDate.Format(time.DateOnly), OpenPrice: quote.OpenPrice, HighPrice: quote.HighPrice, LowPrice: quote.LowPrice, ClosePrice: quote.ClosePrice, PctChg: quote.PctChg, Volume: quote.Volume, Source: quote.Source})
+			items = append(items, DailyHistoryItem{Symbol: security.Symbol, TSCode: security.TSCode, TradeDate: quote.TradeDate.Format(time.DateOnly), OpenPrice: quote.OpenPrice, HighPrice: quote.HighPrice, LowPrice: quote.LowPrice, ClosePrice: quote.ClosePrice, PreClosePrice: quote.PreClosePrice, PctChg: quote.PctChg, Volume: quote.Volume, Source: quote.Source})
 		}
 	}
 	return items, nil
 }
 
+// refreshBridgeQuotes returns only currently fresh, requested quotes. A bounded
+// timeout may return a useful subset AND an error; execution/exit/UAT callers
+// must not ignore that error. Only the selection tool consumes partial results.
 func (s *Service) refreshBridgeQuotes(ctx context.Context, symbols []string, requestedAt time.Time) ([]tradingdomain.QuoteSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.bridge == nil {
 		return nil, fmt.Errorf("trading Bridge unavailable")
 	}
@@ -220,16 +304,57 @@ func (s *Service) refreshBridgeQuotes(ctx context.Context, symbols []string, req
 	defer deadline.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	latest := make(map[string]tradingdomain.QuoteSnapshot)
+	requested := make(map[string]bool, len(normalized))
+	for _, symbol := range normalized {
+		requested[symbol] = true
+	}
+	fresh := func() []tradingdomain.QuoteSnapshot {
+		now := s.now()
+		at := now
+		if requestedAt.After(at) {
+			at = requestedAt
+		}
+		minimum := at.Add(-maxQuoteAge)
+		items := make([]tradingdomain.QuoteSnapshot, 0, len(normalized))
+		for _, symbol := range normalized {
+			// Match the existing TradingPrice future-clock guard as well.
+			if quote, ok := latest[symbol]; ok && !quote.ObservedAt.Before(minimum) && !quote.ObservedAt.After(now.Add(time.Second)) {
+				items = append(items, quote)
+			}
+		}
+		return items
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		quotes, err := s.bridge.Quotes(ctx, normalized)
-		if err == nil && quotesFreshFor(quotes, normalized, requestedAt.Add(-maxQuoteAge)) {
-			return quotes, nil
+		if err == nil {
+			for _, quote := range quotes {
+				security, parseErr := instrument.Parse(quote.EastmoneySymbol, "", "")
+				if parseErr != nil || !requested[security.EastmoneySymbol] || decimalRat(quote.Price).Sign() <= 0 || quote.ObservedAt.IsZero() || quote.ObservedAt.After(s.now().Add(time.Second)) {
+					continue
+				}
+				// Bridge caches may rotate between batches. Keep the newest fact
+				// per requested symbol, but re-check its age at every return.
+				previous, exists := latest[security.EastmoneySymbol]
+				if !exists || quote.ObservedAt.After(previous.ObservedAt) {
+					latest[security.EastmoneySymbol] = quote
+				}
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if items := fresh(); quotesFreshFor(items, normalized, s.now().Add(-maxQuoteAge)) {
+			return items, nil
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-deadline.C:
-			return nil, fmt.Errorf("timed out waiting for fresh Bridge quotes")
+			return fresh(), fmt.Errorf("timed out waiting for fresh Bridge quotes")
 		case <-ticker.C:
 		}
 	}

@@ -41,8 +41,10 @@ def extract_raw_intents(chunks: Iterable[Tuple[int, str]], max_intents: int) -> 
                     confidence=0.78,
                 )
             )
-            if len(intents) >= max_intents:
-                return intents
+    if max_intents < 0:
+        raise ValueError("max_intents must be non-negative")
+    if max_intents and len(intents) > max_intents:
+        raise ValueError(f"intent limit exceeded: extracted {len(intents)}, caller limit {max_intents}")
     return intents
 
 

@@ -207,9 +207,9 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 	requestBody := chatCompletionRequest{
 		Model:       cfg.Model,
 		Stream:      cfg.Stream,
-		Temperature: 0,
+		Temperature: cfg.Temperature,
 		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
+			{Role: "system", Content: configuredSystemPrompt(cfg)},
 			{Role: "user", Content: buildUserPrompt(document, chunk)},
 		},
 		ResponseFormat: map[string]string{"type": "json_object"},
@@ -281,6 +281,16 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 		return nil, err
 	}
 	return parseAndValidatePlans(content)
+}
+
+// Nacos owns extraction semantics; the caller-specific JSON contract and rule
+// boundaries stay in code so the legacy plans and Agent raw_intents shapes do
+// not accidentally overwrite each other.
+func configuredSystemPrompt(cfg config.LLMConfig) string {
+	if prompt := strings.TrimSpace(cfg.ExtractionPrompt); prompt != "" {
+		return prompt + "\n\nRequired output contract:\n" + systemPrompt
+	}
+	return systemPrompt
 }
 
 func buildUserPrompt(document domain.Document, chunk domain.Chunk) string {

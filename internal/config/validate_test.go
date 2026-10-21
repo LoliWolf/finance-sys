@@ -19,6 +19,64 @@ func TestValidateExampleConfig(t *testing.T) {
 	require.NoError(t, config.Validate(&cfg))
 }
 
+func TestValidateRecommendationDateMode(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	for _, mode := range []string{"", "PREVIOUS_TRADING_DAY_TO_NOW", "ROLLING_NATURAL_DAYS", "PREVIOUS_CALENDAR_DAY", "typo"} {
+		var cfg config.Config
+		require.NoError(t, json.Unmarshal(raw, &cfg))
+		cfg.Trading.Decision.RecommendationDateMode = mode
+		if mode == "PREVIOUS_CALENDAR_DAY" || mode == "typo" {
+			require.ErrorContains(t, config.Validate(&cfg), "recommendation_date_mode")
+		} else {
+			require.NoError(t, config.Validate(&cfg))
+		}
+	}
+}
+
+func TestValidateRecommendationLookbackDays(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	for _, days := range []int{-1, 0, 1, 5, 365, 366} {
+		var cfg config.Config
+		require.NoError(t, json.Unmarshal(raw, &cfg))
+		cfg.Trading.Decision.RecommendationLookbackDays = days
+		if days < 0 || days > 365 {
+			require.ErrorContains(t, config.Validate(&cfg), "trading.decision.recommendation_lookback_days")
+		} else {
+			require.NoError(t, config.Validate(&cfg))
+		}
+	}
+}
+
+func TestValidateReconciliationConfirmationBounds(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		value   config.TradingReconciliationConfig
+		invalid bool
+	}{
+		{"legacy-defaults", config.TradingReconciliationConfig{}, false},
+		{"bounded", config.TradingReconciliationConfig{ValuationMaxAttempts: 5, ValuationRetryIntervalMS: 5000, RefreshTimeoutSeconds: 40}, false},
+		{"attempts", config.TradingReconciliationConfig{ValuationMaxAttempts: 6}, true},
+		{"negative", config.TradingReconciliationConfig{ValuationMaxAttempts: -1}, true},
+		{"interval", config.TradingReconciliationConfig{ValuationRetryIntervalMS: 99}, true},
+		{"lease-overrun", config.TradingReconciliationConfig{RefreshTimeoutSeconds: 41}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg config.Config
+			require.NoError(t, json.Unmarshal(raw, &cfg))
+			cfg.Trading.Reconciliation = tc.value
+			if tc.invalid {
+				require.Error(t, config.Validate(&cfg))
+			} else {
+				require.NoError(t, config.Validate(&cfg))
+			}
+		})
+	}
+}
+
 func TestValidateRequiresCompleteTestDatabaseConfig(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)

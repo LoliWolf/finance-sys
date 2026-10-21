@@ -1,10 +1,12 @@
 import asyncio
+import hashlib
 import time
+import anyio.to_thread
 from contextlib import suppress
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from app.config import get_settings
+from app.config import get_settings, settings_snapshot_stale
 from app.graph import resolve_document
 from app.schemas import AgentResolveDocumentRequest, AgentResolveDocumentResponse
 from app.skills import load_instrument_resolution_skill
@@ -25,12 +27,20 @@ def require_agent_token(request: Request, x_agent_token: str = Header(default=""
 @app.get("/healthz")
 def healthz():
     skill = load_instrument_resolution_skill()
+    settings = get_settings()
     return {
         "status": "ok",
-        "agent_version": get_settings().agent_version,
+        "agent_version": settings.agent_version,
+        "settings_stale": settings_snapshot_stale(),
         "skill_name": skill.name,
         "skill_version": skill.version,
         "skill_hash": skill.skill_hash,
+        "extraction_config": {
+            "processing_max_concurrency": settings.processing_max_concurrency,
+            "temperature": settings.llm.temperature,
+            "prompt_sha256": hashlib.sha256(settings.llm.extraction_prompt.encode("utf-8")).hexdigest(),
+            "unlimited_default": True,
+        },
     }
 
 
@@ -40,7 +50,11 @@ async def resolve_document_endpoint(
     http_request: Request,
     _: None = Depends(require_agent_token),
 ):
-    seconds = get_settings().request_timeout_ms / 1000
+    settings = get_settings()
+    # Starlette otherwise stops at 40 worker tokens, even when the Go pool and
+    # measured upstream capacity allow more concurrent document extractions.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = settings.processing_max_concurrency
+    seconds = settings.request_timeout_ms / 1000
     raw_deadline = http_request.headers.get("X-Finance-Deadline-Unix-Ms")
     if raw_deadline:
         try:

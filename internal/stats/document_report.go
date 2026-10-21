@@ -68,6 +68,10 @@ type documentReportGroupBuilder struct {
 }
 
 func (s *Service) DocumentReports(ctx context.Context, filter DocumentReportListFilter) (*DocumentReportList, error) {
+	return s.documentReports(ctx, filter, 0)
+}
+
+func (s *Service) documentReports(ctx context.Context, filter DocumentReportListFilter, exportLimit int) (*DocumentReportList, error) {
 	filter = normalizeDocumentReportListFilter(filter)
 	base := func() *gorm.DB {
 		tx := s.db.WithContext(ctx).Table("documents AS d")
@@ -90,6 +94,12 @@ func (s *Service) DocumentReports(ctx context.Context, filter DocumentReportList
 	var total int64
 	if err := base().Count(&total).Error; err != nil {
 		return nil, err
+	}
+	if exportLimit > 0 {
+		if err := checkPageExportLimit(int(total), exportLimit); err != nil {
+			return nil, err
+		}
+		filter.Limit, filter.Offset = exportLimit, 0
 	}
 	items := make([]DocumentReportListItem, 0, filter.Limit)
 	if err := base().

@@ -1,7 +1,9 @@
 from dataclasses import dataclass
-from functools import lru_cache
 import json
+import logging
 import os
+import threading
+import time
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -17,7 +19,7 @@ DEFAULT_NACOS_NAMESPACE = "public"
 DEFAULT_NACOS_GROUP = "DEFAULT_GROUP"
 DEFAULT_NACOS_DATA_ID = "expert_trade"
 DEFAULT_NACOS_TIMEOUT_MS = 5000
-DEFAULT_AGENT_VERSION = "m4-agent-0.1.1"
+DEFAULT_AGENT_VERSION = "m4-agent-0.1.2"
 FINANCE_SYS_ENV = "FINANCE_SYS_ENV"
 PRODUCTION_ENVIRONMENT = "PROD"
 
@@ -28,6 +30,8 @@ class LLMSettings(BaseModel):
     endpoint: str = Field(default="")
     api_key: str = Field(default="")
     model: str = Field(default="")
+    temperature: float = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
+    extraction_prompt: str = Field(default="", max_length=16000)
     stream: bool = Field(default=False)
     timeout_ms: int = Field(default=15000, gt=0)
     max_retries: int = Field(default=1, ge=0)
@@ -58,6 +62,7 @@ class AgentSettings(BaseModel):
     tushare: TushareSettings = Field(default_factory=TushareSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     request_timeout_ms: int = Field(default=1000000, gt=0)
+    processing_max_concurrency: int = Field(default=20, ge=1, le=1024)
 
 
 @dataclass(frozen=True)
@@ -215,8 +220,57 @@ class NacosConfigLoader:
             raise RuntimeError(f"nacos request failed: {exc.reason}") from exc
 
 
-@lru_cache
+SETTINGS_REFRESH_SECONDS = 5.0
+_settings_lock = threading.RLock()
+_settings_cache: Optional[AgentSettings] = None
+_settings_expires_at = 0.0
+_settings_stale = False
+
+
 def get_settings() -> AgentSettings:
+    # Refresh entire immutable-in-practice snapshots, never update the existing
+    # object used by an in-flight LLMClient. Initial load fails closed; a later
+    # failed refresh keeps the last verified snapshot, like the Go runtime.
+    global _settings_cache, _settings_expires_at, _settings_stale
+    with _settings_lock:
+        if _settings_cache is None or time.monotonic() >= _settings_expires_at:
+            try:
+                settings = _load_settings()
+            except Exception as exc:
+                if _settings_cache is None:
+                    raise
+                _settings_stale = True
+                _settings_expires_at = time.monotonic() + SETTINGS_REFRESH_SECONDS
+                # Do not log exception text: loader/validation errors may contain secrets.
+                logging.getLogger(__name__).warning(
+                    "settings refresh failed; retaining last verified snapshot (%s)",
+                    type(exc).__name__,
+                )
+                return _settings_cache
+            _settings_cache = settings
+            _settings_stale = False
+            _settings_expires_at = time.monotonic() + SETTINGS_REFRESH_SECONDS
+        return _settings_cache
+
+
+def _clear_settings_cache() -> None:
+    global _settings_cache, _settings_expires_at, _settings_stale
+    with _settings_lock:
+        _settings_cache = None
+        _settings_expires_at = 0.0
+        _settings_stale = False
+
+
+def settings_snapshot_stale() -> bool:
+    with _settings_lock:
+        return _settings_stale
+
+
+# Preserve the existing explicit invalidation API used by tests and operators.
+get_settings.cache_clear = _clear_settings_cache
+
+
+def _load_settings() -> AgentSettings:
     if _nacos_bootstrap_available():
         config = NacosConfigLoader(_nacos_bootstrap_from_env()).load()
         return _settings_from_nacos_config(config)
@@ -244,6 +298,7 @@ def _settings_from_nacos_config(config: Dict[str, Any]) -> AgentSettings:
         tushare=TushareSettings(**(agent.get("tushare") or {})),
         llm=LLMSettings(**llm_config),
         request_timeout_ms=int(agent.get("timeout_ms") or 1000000),
+        processing_max_concurrency=int((config.get("processing") or {}).get("llm_max_concurrency", 20)),
     )
 
 
@@ -296,6 +351,8 @@ def _settings_from_env() -> AgentSettings:
             endpoint=os.getenv("AGENT_LLM_ENDPOINT", ""),
             api_key=os.getenv("AGENT_LLM_API_KEY", ""),
             model=os.getenv("AGENT_LLM_MODEL", ""),
+            temperature=float(os.getenv("AGENT_LLM_TEMPERATURE", "0")),
+            extraction_prompt=os.getenv("AGENT_LLM_EXTRACTION_PROMPT", ""),
             timeout_ms=_env_int("AGENT_LLM_TIMEOUT_MS", 15000),
             max_retries=_env_int("AGENT_LLM_MAX_RETRIES", 1),
             extra_headers=_env_json_object("AGENT_LLM_EXTRA_HEADERS"),

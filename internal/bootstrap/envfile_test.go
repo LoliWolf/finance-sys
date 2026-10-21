@@ -12,17 +12,17 @@ func TestLoadNacosServerAddressFromFilesLoadsOnlyAddress(t *testing.T) {
 	t.Setenv("NACOS_SERVER_ADDR", "")
 	t.Setenv("NACOS_DATA_ID", "")
 	path := filepath.Join(t.TempDir(), "bootstrap.env")
-	require.NoError(t, os.WriteFile(path, []byte("# bootstrap\r\nNACOS_SERVER_ADDR='192.168.31.234:8848'\r\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("# bootstrap\r\nNACOS_SERVER_ADDR='127.0.0.1:8848'\r\n"), 0o600))
 
 	require.NoError(t, LoadNacosServerAddressFromFiles(path))
-	require.Equal(t, "192.168.31.234:8848", os.Getenv("NACOS_SERVER_ADDR"))
+	require.Equal(t, "127.0.0.1:8848", os.Getenv("NACOS_SERVER_ADDR"))
 	require.Empty(t, os.Getenv("NACOS_DATA_ID"))
 }
 
 func TestLoadNacosServerAddressFromFilesRejectsOtherKeys(t *testing.T) {
 	t.Setenv("NACOS_SERVER_ADDR", "")
 	path := filepath.Join(t.TempDir(), "bootstrap.env")
-	require.NoError(t, os.WriteFile(path, []byte("NACOS_SERVER_ADDR=192.168.31.234:8848\nNACOS_DATA_ID=must-not-load\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("NACOS_SERVER_ADDR=127.0.0.1:8848\nNACOS_DATA_ID=must-not-load\n"), 0o600))
 
 	err := LoadNacosServerAddressFromFiles(path)
 	require.ErrorContains(t, err, "only NACOS_SERVER_ADDR is allowed")

@@ -7,6 +7,8 @@ import type { RecommendationPerformanceList, SecurityRankingItem, SecurityRankin
 import ChartPanel from '../components/ChartPanel.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
+import PageExportButton from '../components/PageExportButton.vue'
+import { useReportScope } from '../reports/useReportScope'
 import StatePanel from '../components/StatePanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { formatDate, formatNumber, formatPercent, returnTone, sectorTypeLabel, truncate } from '../utils/format'
@@ -24,44 +26,55 @@ const assetType = ref('')
 const minSampleCount = ref(3)
 const sort = ref('sample_count')
 const search = ref('')
+const reportQuery = computed(() => ({ window_days: windowDays.value, market: market.value, asset_type: assetType.value, min_sample_count: minSampleCount.value, sort: sort.value }))
+const { applied: reportFilters, dirty: reportDirty, accept: acceptReportFilters } = useReportScope(reportQuery)
+const exportQuery = computed(() => ({ ...reportFilters.value, search: search.value.trim(), selected_ts_code: selected.value?.ts_code || '' }))
+let loadVersion = 0
+let selectionVersion = 0
 
 async function load() {
+  const version = ++loadVersion
+  const query = { ...reportQuery.value }
   loading.value = true
   error.value = ''
   try {
-    data.value = await api.securityRankings({
-      window_days: windowDays.value,
-      market: market.value,
-      asset_type: assetType.value,
-      min_sample_count: minSampleCount.value,
-      sort: sort.value,
-      limit: 100,
-    })
+    const response = await api.securityRankings({ ...query, limit: 100 })
+    if (version !== loadVersion) return
+    data.value = response
+    acceptReportFilters(query)
     const first = filteredItems.value[0] || data.value.items[0]
-    if (first && (!selected.value || !data.value.items.some((item) => item.ts_code === selected.value?.ts_code))) await selectSecurity(first)
+    const current = data.value.items.find(item => item.ts_code === selected.value?.ts_code) || first
+    if (current) await selectSecurity(current)
+    else { ++selectionVersion; selected.value = null; selectedRecommendations.value = null; detailLoading.value = false }
   } catch (cause) {
+    if (version !== loadVersion) return
     error.value = cause instanceof Error ? cause.message : '标的表现加载失败'
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
 async function selectSecurity(item: SecurityRankingItem) {
+  const version = ++selectionVersion
   selected.value = item
+  selectedRecommendations.value = null
   detailLoading.value = true
   try {
-    selectedRecommendations.value = await api.securityRecommendations(item.ts_code, { window_days: windowDays.value, limit: 30 })
+    const response = await api.securityRecommendations(item.ts_code, { window_days: reportFilters.value?.window_days || windowDays.value, market: reportFilters.value?.market, asset_type: reportFilters.value?.asset_type, limit: 30 })
+    if (version !== selectionVersion) return
+    selectedRecommendations.value = response
   } catch (cause) {
+    if (version !== selectionVersion) return
     error.value = cause instanceof Error ? cause.message : '标的推荐明细加载失败'
   } finally {
-    detailLoading.value = false
+    if (version === selectionVersion) detailLoading.value = false
   }
 }
 
 const filteredItems = computed(() => {
   const keyword = search.value.trim().toLowerCase()
   if (!keyword) return data.value?.items || []
-	return (data.value?.items || []).filter((item) => `${item.security_name}${item.ts_code}${item.industry}${item.sector_type}`.toLowerCase().includes(keyword))
+	return (data.value?.items || []).filter((item) => [item.security_name,item.ts_code,item.industry,item.sector_type].join(' ').toLowerCase().includes(keyword))
 })
 
 const topItems = computed(() => filteredItems.value.slice(0, 12))
@@ -92,7 +105,7 @@ onMounted(load)
       title="辨认能力，也辨认行情。"
       description="同一标的可能被多位博主在相近阶段推荐。标的视角把推荐热度、参与博主与后续收益并列，帮助区分判断能力和市场贝塔。"
     >
-      <template #actions><button class="button" type="button" @click="load"><RefreshCw :size="15" />刷新</button></template>
+      <template #actions><button class="button" type="button" @click="load"><RefreshCw :size="15" />刷新</button><PageExportButton kind="securities" :query="exportQuery" :dirty="reportDirty" :disabled="loading || detailLoading || !data || !!error" label="导出筛选榜单" /></template>
     </PageHeader>
 
     <section class="filter-bar">
@@ -106,6 +119,7 @@ onMounted(load)
     </section>
 
     <div v-if="error" class="error-banner">{{ error }}</div>
+    <p class="muted recommendation-export-hint">导出会按已应用筛选与搜索关键词匹配全量榜单（最多 2000 条），并附上选中标的的匹配推荐。</p>
     <template v-if="data?.items.length">
       <section class="metric-grid">
         <MetricCard label="标的样本" :value="formatNumber(data.items.length, 0)" note="达到最少样本门槛" :icon="Layers3" tone="accent" />

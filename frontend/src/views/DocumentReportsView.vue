@@ -6,6 +6,8 @@ import { api } from '../api/client'
 import type { DocumentReportList, DocumentReportListItem, EvaluationRun } from '../api/types'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
+import PageExportButton from '../components/PageExportButton.vue'
+import { useReportScope } from '../reports/useReportScope'
 import StatePanel from '../components/StatePanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { formatDate, formatDateTime, formatNumber } from '../utils/format'
@@ -22,6 +24,9 @@ const query = ref('')
 const status = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
+const reportQuery = computed(() => ({ query: query.value.trim(), status: status.value, date_from: dateFrom.value, date_to: dateTo.value }))
+const { applied: reportFilters, dirty: reportDirty, accept: acceptReportFilters } = useReportScope(reportQuery)
+let loadVersion = 0
 const page = ref(1)
 const pageSize = ref(50)
 const selectedIDs = ref<Set<number>>(new Set())
@@ -31,30 +36,32 @@ let runPollTimer: number | undefined
 let disposed = false
 
 async function load(reset = false) {
+  const version = ++loadVersion
+  const filters = { ...reportQuery.value }
   if (reset) page.value = 1
   loading.value = true
   error.value = ''
   try {
     const result = await api.documentReports({
-      query: query.value.trim(),
-      status: status.value,
-      date_from: dateFrom.value,
-      date_to: dateTo.value,
+      ...filters,
       offset: (page.value - 1) * pageSize.value,
       limit: pageSize.value,
     })
+    if (disposed || version !== loadVersion) return
     if (result.total_pages > 0 && page.value > result.total_pages) {
       page.value = result.total_pages
       await load()
       return
     }
     data.value = result
+    acceptReportFilters(filters)
     page.value = result.page
     selectedIDs.value = new Set()
   } catch (cause) {
+    if (disposed || version !== loadVersion) return
     error.value = cause instanceof Error ? cause.message : '文档报告列表加载失败'
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
@@ -168,7 +175,7 @@ onBeforeUnmount(() => {
       title="从一篇研报，回到每一条可检验的推荐。"
       description="浏览历史上传文档，查看文档内全部推荐与固定交易日窗口表现；老研报可按文档补算，不受每日近期任务范围限制。"
     >
-      <template #actions><button class="button" type="button" :disabled="loading" @click="load()"><RefreshCw :size="15" />刷新</button></template>
+      <template #actions><button class="button" type="button" :disabled="loading" @click="load()"><RefreshCw :size="15" />刷新</button><PageExportButton kind="documents" :query="reportFilters || {}" :dirty="reportDirty" :disabled="loading || evaluating || !data || !!error" label="导出筛选清单" /></template>
     </PageHeader>
 
     <section class="filter-bar">

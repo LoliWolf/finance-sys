@@ -7,6 +7,8 @@ import type { BloggerRankingResponse } from '../api/types'
 import ChartPanel from '../components/ChartPanel.vue'
 import MetricCard from '../components/MetricCard.vue'
 import PageHeader from '../components/PageHeader.vue'
+import PageExportButton from '../components/PageExportButton.vue'
+import { useReportScope } from '../reports/useReportScope'
 import StatePanel from '../components/StatePanel.vue'
 import { formatNumber, formatPercent, returnTone } from '../utils/format'
 
@@ -22,26 +24,25 @@ const assetType = ref('')
 const direction = ref('LONG')
 const minSampleCount = ref(5)
 const sort = ref('win_rate')
+const reportQuery = computed(() => ({ window_days: windowDays.value, date_from: dateFrom.value, date_to: dateTo.value, market: market.value, asset_type: assetType.value, direction: direction.value, min_sample_count: minSampleCount.value, sort: sort.value }))
+const { applied: reportFilters, dirty: reportDirty, accept: acceptReportFilters } = useReportScope(reportQuery)
+let loadVersion = 0
 
 async function load() {
+  const version = ++loadVersion
+  const query = { ...reportQuery.value }
   loading.value = true
   error.value = ''
   try {
-    data.value = await api.bloggerRankings({
-      window_days: windowDays.value,
-      date_from: dateFrom.value,
-      date_to: dateTo.value,
-      market: market.value,
-      asset_type: assetType.value,
-      direction: direction.value,
-      min_sample_count: minSampleCount.value,
-      sort: sort.value,
-      limit: 100,
-    })
+    const response = await api.bloggerRankings({ ...query, limit: 100 })
+    if (version !== loadVersion) return
+    data.value = response
+    acceptReportFilters(query)
   } catch (cause) {
+    if (version !== loadVersion) return
     error.value = cause instanceof Error ? cause.message : '排行榜加载失败'
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
@@ -99,6 +100,7 @@ onMounted(load)
       description="以真实推荐事件为起点，用 T+1 开盘入场和固定交易日窗口回看表现。未到期、缺行情与未识别标的不进入胜率分母。"
     >
       <template #actions>
+        <PageExportButton kind="dashboard" :query="reportFilters || {}" :dirty="reportDirty" :disabled="loading || !data || !!error" label="导出筛选榜单" />
         <button class="button" type="button" :disabled="loading" @click="load">
           <RefreshCw :size="16" :class="{ spin: loading }" />刷新数据
         </button>

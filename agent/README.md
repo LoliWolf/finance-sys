@@ -95,6 +95,37 @@ appear as `context canceled` in relay logs; distinguish that from upstream error
 
 ## API
 
+### Extraction prompt, temperature and result limits
+
+`llm.extraction_prompt` and `llm.temperature` belong to the same Nacos `llm`
+object as `model`. The prompt controls shared recommendation semantics; Agent
+`raw_intents` and Go fallback `plans` keep their own immutable output contracts.
+Temperature is always sent, including `0`, and must be finite and in `[0,1]`.
+An omitted/empty extraction prompt retains the legacy instructions for old
+configurations; the example configuration contains the new semantics.
+
+Agent 0.1.2 refreshes the Nacos settings snapshot every 5 seconds on access.
+In-flight LLM clients keep their captured settings. Initial load fails closed;
+a later failed refresh retains the last verified snapshot, logs only the error
+type, and sets `/healthz` `settings_stale=true` (no example-config fallback).
+`/healthz` reports temperature,
+the semantic prompt SHA256 and `unlimited_default`, never prompt text or keys.
+
+For Agent 0.1.2, an omitted/zero `limits.max_intents` or
+`limits.max_untrackable_targets` means unlimited **count**, not unlimited request
+time. Go now omits these limits. Positive limits still enforce their caller's
+budget, but overflow fails explicitly without a partial result or retry loop.
+All returned items, including those after item 20, undergo schema validation.
+Provider `length`/`content_filter` termination also fails rather than accepting a
+partial JSON result. No entry/stop/target prices or positions are generated here.
+
+Roll out the matching Go and Agent versions together under explicit deployment
+authorization. An old Agent receiving omitted limits still uses its old default
+of 20, so rebuilding Go or saving Nacos alone does **not** fix the running Agent.
+The production launcher may reuse a healthy Agent; check `agent_version` and
+`extraction_config` instead of assuming that an API deployment restarted it.
+The existing empty-output/FAILED convention is unchanged by this patch.
+
 ### Internal streaming and shared deadline
 
 Set `llm.stream=true` in Nacos to consume model SSE incrementally. Reasoning is
