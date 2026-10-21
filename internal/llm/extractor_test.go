@@ -317,6 +317,54 @@ func TestModelAnalyzerInfersBJMarket(t *testing.T) {
 	require.Equal(t, domain.MarketBJ, intents[0].Market)
 }
 
+func TestModelAnalyzerPrefersExplicitAuthorOverModelAuthor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": `{"plans":[{"analyst":"模型作者、联合作者","institution":"Research","symbol":"300502","direction":"LONG","reference_price":0,"thesis":"supported by source text","evidence":[{"chunk_index":0,"text":"source evidence"}],"risks":[],"confidence":0.8}]}`,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 0), telemetry.NewLogger(string(config.LogLevelError)))
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{
+		Author: "手工作者",
+	}, domain.ParseRun{
+		CleanedText: "模型作者（分析师） 联合作者（分析师） 推荐新易盛",
+		Chunks:      []domain.Chunk{{Index: 0, Text: "模型作者（分析师） 联合作者（分析师） 推荐新易盛"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "手工作者", intents[0].Analyst)
+}
+
+func TestModelAnalyzerUsesFirstModelAuthorWhenExplicitAuthorIsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": `{"plans":[{"analyst":"张豪杰、韩笑","institution":"开源证券","symbol":"002353","direction":"LONG","reference_price":0,"thesis":"supported by source text","evidence":[{"chunk_index":0,"text":"source evidence"}],"risks":[],"confidence":0.8}]}`,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := llm.NewModelAnalyzer(testRuntime(server.URL, 0), telemetry.NewLogger(string(config.LogLevelError)))
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{}, domain.ParseRun{
+		CleanedText: "张豪杰（分析师） 韩笑（分析师） 推荐杰瑞股份",
+		Chunks:      []domain.Chunk{{Index: 0, Text: "张豪杰（分析师） 韩笑（分析师） 推荐杰瑞股份"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "张豪杰", intents[0].Analyst)
+}
+
 func TestValidateIntentAcceptsMVPTradeIntent(t *testing.T) {
 	err := llm.ValidateIntent(domain.PlanIntent{
 		Analyst:        "blogger-a",

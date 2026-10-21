@@ -53,10 +53,11 @@ class AgentDocumentChunk(StrictBaseModel):
 
 
 class AgentLimits(StrictBaseModel):
-    max_intents: int = Field(default=20, ge=1, le=100)
+    # 0 is explicitly unlimited; positive limits fail on overflow, never slice.
+    max_intents: int = Field(default=0, ge=0, le=100)
     max_evidence_per_intent: int = Field(default=4, ge=1, le=20)
     max_risks_per_intent: int = Field(default=5, ge=0, le=20)
-    max_untrackable_targets: int = Field(default=20, ge=0, le=100)
+    max_untrackable_targets: int = Field(default=0, ge=0, le=100)
 
 
 class AgentResolveDocumentRequest(StrictBaseModel):
@@ -121,6 +122,7 @@ class AgentResolveDocumentResponse(StrictBaseModel):
     schema_version: Literal["agent.resolve_document.response.v1"] = RESPONSE_SCHEMA_VERSION
     agent_version: str = Field(min_length=1)
     status: AgentStatus
+    extracted_author: str = Field(default="", max_length=128)
     raw_intents: List[AgentRawIntent] = Field(default_factory=list)
     candidate_plan_inputs: List[AgentCandidatePlanInput] = Field(default_factory=list)
     untrackable_targets: List[AgentUntrackableTarget] = Field(default_factory=list)

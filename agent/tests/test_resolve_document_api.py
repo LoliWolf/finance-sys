@@ -19,6 +19,7 @@ def test_resolve_document_api_returns_stable_response():
     payload = response.json()
     assert payload["schema_version"] == RESPONSE_SCHEMA_VERSION
     assert payload["status"] == "RESOLVED"
+    assert payload["extracted_author"] == ""
     assert [item["raw_symbol"] for item in payload["raw_intents"]] == ["新易盛", "CPO板块"]
     assert payload["untrackable_targets"][0]["raw_symbol"] == "CPO板块"
 
@@ -28,6 +29,24 @@ def test_resolve_document_api_rejects_invalid_request_schema():
     payload["schema_version"] = "agent.resolve_document.request.v0"
     response = client.post("/v1/resolve-document", json=payload)
     assert response.status_code == 422
+
+
+def test_omitted_limits_preserve_more_than_twenty_targets():
+    payload=_request_payload(' '.join(f'{600000+i}.SH' for i in range(25)))
+    payload.pop('limits')
+    response=client.post('/v1/resolve-document',json=payload)
+    assert response.status_code==200
+    assert len(response.json()['raw_intents'])==25
+
+
+def test_expired_or_invalid_shared_deadline_does_not_run_model(monkeypatch):
+    def unexpected(*args):
+        raise AssertionError("model must not run after caller deadline")
+    monkeypatch.setattr("app.main.resolve_document", unexpected)
+    expired = client.post("/v1/resolve-document", json=_request_payload("test"), headers={"X-Finance-Deadline-Unix-Ms": "1"})
+    assert expired.status_code == 504
+    invalid = client.post("/v1/resolve-document", json=_request_payload("test"), headers={"X-Finance-Deadline-Unix-Ms": "invalid"})
+    assert invalid.status_code == 400
 
 
 def _request_payload(text: str):

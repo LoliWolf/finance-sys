@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"finance-sys/internal/config"
@@ -18,6 +19,7 @@ import (
 	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/service"
 	"finance-sys/internal/stats"
+	tradingservice "finance-sys/internal/trading/service"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -29,21 +31,29 @@ type ConfigReloader interface {
 }
 
 type Server struct {
-	db         *gorm.DB
-	runtime    *config.Runtime
-	documents  *service.DocumentService
-	security   *service.SecurityService
-	marketData marketDataService
-	evaluation recommendationEvaluationService
-	stats      performanceStatsService
-	reloader   ConfigReloader
-	logger     *slog.Logger
+	db            *gorm.DB
+	runtime       *config.Runtime
+	documents     *service.DocumentService
+	documentRetry failedDocumentRetrier
+	security      *service.SecurityService
+	marketData    marketDataService
+	evaluation    recommendationEvaluationService
+	stats         performanceStatsService
+	trading       *tradingservice.Service
+	reloader      ConfigReloader
+	logger        *slog.Logger
+	bridgeNonceMu sync.Mutex
+	bridgeNonces  map[string]time.Time
 }
 
 type marketDataService interface {
 	CreateStockDailySyncRun(context.Context, service.StockDailySyncRequest) (*service.StockDailySyncResponse, error)
 	RefreshSecurityMaster(context.Context, service.SecurityMasterRefreshRequest) (*service.SecurityMasterRefreshResponse, error)
 	ListSyncRuns(context.Context, service.MarketDataSyncRunQuery) ([]db_model.MarketDataSyncRun, error)
+}
+
+type failedDocumentRetrier interface {
+	RetryFailedDocument(context.Context, int64, *time.Time) (*service.DocumentRetryResult, error)
 }
 
 type recommendationEvaluationService interface {
@@ -58,10 +68,14 @@ type performanceStatsService interface {
 	BloggerTimeseries(context.Context, int64, stats.Filter) (*stats.BloggerTimeseriesResponse, error)
 	RecommendationPerformanceList(context.Context, stats.Filter) (*stats.RecommendationPerformanceList, error)
 	RecommendationLedger(context.Context, stats.Filter) (*stats.RecommendationLedgerList, error)
+	RecommendationExport(context.Context, stats.Filter) (*stats.RecommendationExportReport, error)
+	PageExport(context.Context, stats.PageExportRequest) (*stats.PageExportReport, error)
 	RecommendationDetail(context.Context, int64) (*stats.RecommendationDetail, error)
 	PriceSeries(context.Context, int64, int, int) (*stats.PriceSeriesResponse, error)
 	SecurityRankings(context.Context, stats.Filter) (*stats.SecurityRankingResponse, error)
 	SecuritySummary(context.Context, string, stats.Filter) (*stats.SecurityRankingItem, error)
+	DocumentReports(context.Context, stats.DocumentReportListFilter) (*stats.DocumentReportList, error)
+	DocumentReport(context.Context, int64) (*stats.DocumentReport, error)
 }
 
 func NewServer(
@@ -72,25 +86,34 @@ func NewServer(
 	marketData marketDataService,
 	evaluation recommendationEvaluationService,
 	performanceStats performanceStatsService,
+	trading *tradingservice.Service,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
+	var retry failedDocumentRetrier
+	if documents != nil {
+		retry = documents
+	}
 	return &Server{
-		db:         db,
-		runtime:    runtime,
-		documents:  documents,
-		security:   security,
-		marketData: marketData,
-		evaluation: evaluation,
-		stats:      performanceStats,
-		reloader:   reloader,
-		logger:     logger,
+		db:            db,
+		runtime:       runtime,
+		documents:     documents,
+		documentRetry: retry,
+		security:      security,
+		marketData:    marketData,
+		evaluation:    evaluation,
+		stats:         performanceStats,
+		trading:       trading,
+		reloader:      reloader,
+		logger:        logger,
+		bridgeNonces:  make(map[string]time.Time),
 	}
 }
 
 func (s *Server) Router() http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
+	router.Use(s.requestDeadlineMiddleware)
 	router.Use(middleware.Recoverer)
 	router.Use(s.requestLogMiddleware)
 	router.Use(s.authMiddleware)
@@ -103,10 +126,15 @@ func (s *Server) Router() http.Handler {
 	}
 
 	router.Get("/healthz", s.handleHealth)
+	router.Post("/internal/v1/trading/bridge-events", s.handleTradingBridgeEvent)
 	router.Route(apiPrefix, func(r chi.Router) {
 		r.Get("/documents", s.handleListDocuments)
 		r.Post("/documents/upload", s.handleUploadDocument)
+		r.Post("/documents/evaluation-runs", s.handleCreateDocumentEvaluationRun)
 		r.Post("/documents/{id}/analyze", s.handleAnalyzeDocument)
+		r.Post("/documents/{id}/retry-analysis", s.handleRetryDocumentAnalysis)
+		r.Post("/admin/documents/{id}/untrackable-targets/{targetID}/recover", s.handleRecoverUntrackableTarget)
+		r.Get("/documents/{id}/report", s.handleGetDocumentReport)
 		r.Get("/documents/{id}/plans", s.handleListDocumentPlans)
 		r.Get("/documents/{id}/recommendations", s.handleListDocumentRecommendations)
 		r.Get("/documents/{id}/resolution-runs", s.handleListDocumentResolutionRuns)
@@ -118,6 +146,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/recommendations/{id}/performance", s.handleGetRecommendationPerformance)
 		r.Get("/recommendations/{id}/price-series", s.handleGetRecommendationPriceSeries)
 		r.Get("/recommendation-performance", s.handleListRecommendationPerformance)
+		r.Get("/recommendation-performance/report", s.handleRecommendationExport)
+		r.Get("/page-reports/{kind}", s.handlePageExport)
+		r.Get("/document-reports", s.handleListDocumentReports)
 		r.Get("/bloggers/rankings", s.handleBloggerRankings)
 		r.Get("/bloggers/{id}/performance/summary", s.handleBloggerPerformanceSummary)
 		r.Get("/bloggers/{id}/performance/timeseries", s.handleBloggerPerformanceTimeseries)
@@ -135,6 +166,29 @@ func (s *Server) Router() http.Handler {
 		r.Post("/internal/security/resolve", s.handleResolveSecurity)
 		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
+		r.Post("/trading/agent-runs", s.handleCreateTradingAgentRun)
+		r.Get("/trading/agent-runs/{id}", s.handleGetTradingAgentRun)
+		r.Get("/trading/agent-runs/{id}/skill-decisions", s.handleListTradingSkillDecisions)
+		r.Get("/trading/intents", s.handleListTradingIntents)
+		r.Get("/trading/orders", s.handleListTradingOrders)
+		r.Get("/trading/position-cycles", s.handleListTradingPositionCycles)
+		r.Get("/trading/daily-sessions", s.handleListTradingDailySessions)
+		r.Post("/trading/preflight", s.handleTradingPreflight)
+		r.Post("/trading/orders/{clientOrderID}/cancel", s.handleCancelTradingOrder)
+		r.Get("/trading/account", s.handleGetTradingAccount)
+		r.Get("/trading/positions", s.handleGetTradingPositions)
+		r.Get("/trading/dashboard", s.handleGetTradingDashboard)
+		r.Get("/trading/dashboard/report", s.handleTradingReport)
+		r.Post("/trading/dashboard/refresh", s.handleRefreshTradingDashboard)
+		r.Post("/trading/reconciliation-runs", s.handleCreateTradingReconciliationRun)
+		r.Get("/trading/reconciliation-runs/{id}", s.handleGetTradingReconciliation)
+		r.Post("/trading/kill-switch", s.handleSetTradingKillSwitch)
+		r.Get("/internal/trading-tools/recommendation-candidates", s.handleTradingToolRecommendationCandidates)
+		r.Get("/internal/trading-tools/blogger-performance/{bloggerID}", s.handleTradingToolBloggerPerformance)
+		r.Get("/internal/trading-tools/market-snapshot", s.handleTradingToolMarketSnapshot)
+		r.Get("/internal/trading-tools/daily-history", s.handleTradingToolDailyHistory)
+		r.Get("/internal/trading-tools/portfolio", s.handleTradingToolPortfolio)
+		r.Get("/internal/trading-tools/risk-budget", s.handleTradingToolRiskBudget)
 	})
 	frontend := newFrontendHandler()
 	router.Get("/", frontend.ServeHTTP)
@@ -295,7 +349,13 @@ func (s *Server) handleAnalyzeDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logRequest(r, slog.LevelInfo, "handle analyze document start", logAttrs...)
 	var plans []domain.CandidatePlan
-	if hasTradeDate {
+	if r.URL.Query().Get("reuse_parsed_text") == "true" {
+		if !hasTradeDate {
+			writeError(w, http.StatusBadRequest, service.ErrDocumentRetryDateRequired)
+			return
+		}
+		plans, err = s.documents.ReanalyzeParsedDocumentForTradeDate(r.Context(), id, tradeDate)
+	} else if hasTradeDate {
 		plans, err = s.documents.AnalyzeDocumentForTradeDate(r.Context(), id, tradeDate)
 	} else {
 		plans, err = s.documents.AnalyzeDocument(r.Context(), id)
@@ -453,6 +513,14 @@ func (s *Server) handleLookupSecurity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := s.runtime.Config()
+		apiPrefix := "/api/v1"
+		if cfg != nil && cfg.Service.HTTP.APIPrefix != "" {
+			apiPrefix = cfg.Service.HTTP.APIPrefix
+		}
+		if r.URL.Path == "/internal/v1/trading/bridge-events" || strings.HasPrefix(r.URL.Path, strings.TrimRight(apiPrefix, "/")+"/internal/trading-tools") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if cfg == nil || !cfg.Security.Auth.Enabled {
 			next.ServeHTTP(w, r)
 			return

@@ -1,12 +1,14 @@
 import json
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
 from app.config import AgentSettings, get_settings
 from app.http_client import HTTPTransportError, StdlibHTTPClient, redact_secrets
+from app.request_budget import RequestCancelled, current_budget, remaining_timeout
 from app.schemas import AgentRawIntent
 from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill_prompt_block
 
@@ -14,6 +16,12 @@ from app.skills import SkillSpec, load_instrument_resolution_skill, render_skill
 JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 TS_CODE_RE = re.compile(r"(?:\b\d{6}\.(?:SH|SZ|BJ)\b|\bBK\d{4}\.DC\b)")
 PROTECTED_EXTRA_HEADER_NAMES = {"authorization", "content-type"}
+
+
+@dataclass(frozen=True)
+class DocumentExtraction:
+    author: str
+    raw_intents: List[AgentRawIntent]
 
 
 class LLMClient:
@@ -47,6 +55,14 @@ class LLMClient:
         max_intents: int,
         skill: Optional[SkillSpec] = None,
     ) -> List[AgentRawIntent]:
+        return self.extract_document(text, max_intents, skill).raw_intents
+
+    def extract_document(
+        self,
+        text: str,
+        max_intents: int,
+        skill: Optional[SkillSpec] = None,
+    ) -> DocumentExtraction:
         if not self.llm.enabled:
             raise RuntimeError("LLM extraction is disabled")
         if self.llm.provider != "openai_compatible":
@@ -57,19 +73,22 @@ class LLMClient:
             raise RuntimeError("llm.model is required when LLM extraction is enabled")
 
         skill = skill or load_instrument_resolution_skill()
+        if max_intents < 0:
+            raise ValueError("max_intents must be non-negative; 0 means unlimited")
         payload = {
             "model": self.llm.model,
+            "temperature": self.llm.temperature,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
-                    "content": build_system_prompt(skill),
+                    "content": build_system_prompt(skill, self.llm.extraction_prompt),
                 },
                 {
                     "role": "user",
                     "content": (
                         "Return this shape: "
-                        '{"raw_intents":[{"intent_id":"intent-1","raw_symbol":"新易盛",'
+                        '{"author":"张豪杰","raw_intents":[{"intent_id":"intent-1","raw_symbol":"新易盛",'
                         '"direction":"LONG","reference_price":0,'
                         '"reference_price_note":"price_missing_in_text","thesis":"...",'
                         '"evidence":[{"chunk_index":0,"text":"..."}],"risks":[],"confidence":0.8}]}\n\n'
@@ -78,18 +97,27 @@ class LLMClient:
                 },
             ],
         }
+        if self.llm.stream:
+            payload["stream"] = True
 
         headers = _request_headers(self.llm.extra_headers, self.llm.api_key)
 
         attempts = self.llm.max_retries + 1
+        deadline = time.monotonic() + remaining_timeout(self.llm.timeout_ms / 1000)
+        used_attempts = 0
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
+            remaining = remaining_timeout(deadline - time.monotonic())
+            if remaining <= 0:
+                last_error = RuntimeError("llm total deadline exceeded")
+                break
+            used_attempts = attempt
             try:
                 response = self.http_client.post(
                     self.llm.endpoint,
                     json=payload,
                     headers=headers,
-                    timeout=self.llm.timeout_ms / 1000,
+                    timeout=remaining,
                 )
                 response_text = response.text.strip()
                 if response.status_code < 200 or response.status_code >= 300:
@@ -105,6 +133,8 @@ class LLMClient:
                     raise _NonRetryableLLMError(message)
                 try:
                     return _parse_chat_completion(response.json(), max_intents)
+                except _NonRetryableLLMError:
+                    raise
                 except Exception as exc:
                     raise _RetryableLLMError(f"invalid llm response: {exc}") from exc
             except _NonRetryableLLMError as exc:
@@ -118,9 +148,17 @@ class LLMClient:
                 last_error = exc
                 if attempt == attempts:
                     break
-                self._sleep(_retry_delay_seconds(attempt))
+                delay = _retry_delay_seconds(attempt)
+                if deadline - time.monotonic() <= delay:
+                    break
+                budget = current_budget.get()
+                if budget:
+                    if budget.cancelled.wait(min(delay, budget.remaining())):
+                        raise RequestCancelled("request cancelled during retry backoff")
+                else:
+                    self._sleep(delay)
 
-        raise RuntimeError(f"llm extraction failed after {attempts} attempts: {last_error}")
+        raise RuntimeError(f"llm extraction failed after {used_attempts} attempts: {last_error}")
 
 
 class _RetryableLLMError(Exception):
@@ -155,20 +193,31 @@ def _is_provider_moderation_block(response_text: str) -> bool:
     )
 
 
-def build_system_prompt(skill: SkillSpec) -> str:
-    return (
+def build_system_prompt(skill: SkillSpec, extraction_prompt: str = "") -> str:
+    contract = (
         "Extract Chinese equity trading intents from research text. "
+        "Also extract the document author into the top-level author field. "
+        "Use the first human analyst or author appearing in source order near the "
+        "document title or report header. When authors are joint, return only the "
+        "first person. Ignore names from related-report lists, citations, company "
+        "management, and body text. Return an empty author when no reliable document "
+        "author is present. "
         "Return JSON only. Do not invent ts_code. Do not output entry_price, "
         "stop_loss, take_profit, or position size.\n\n"
         "The following project-local rules are trusted system instructions:\n"
         f"{render_skill_prompt_block(skill)}"
     )
+    if extraction_prompt.strip():
+        return extraction_prompt.strip() + "\n\nRequired output contract:\n" + contract
+    return contract
 
 
-def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> List[AgentRawIntent]:
+def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> DocumentExtraction:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("llm response missing choices")
+    if choices[0].get("finish_reason") in {"length", "content_filter"}:
+        raise _NonRetryableLLMError("llm completion was truncated or filtered; no partial result returned")
     message = choices[0].get("message", {})
     if not isinstance(message, dict):
         raise RuntimeError("llm response missing message")
@@ -177,7 +226,32 @@ def _parse_chat_completion(payload: Dict[str, Any], max_intents: int) -> List[Ag
     raw_items = data.get("raw_intents")
     if not isinstance(raw_items, list):
         raise RuntimeError("llm response missing raw_intents")
-    return [AgentRawIntent(**_normalize_raw_intent_item(item)) for item in raw_items[:max_intents]]
+    if max_intents < 0:
+        raise ValueError("max_intents must be non-negative; 0 means unlimited")
+    if max_intents and len(raw_items) > max_intents:
+        raise _NonRetryableLLMError(
+            f"intent limit exceeded: extracted {len(raw_items)}, caller limit {max_intents}; "
+            "no partial result returned; use max_intents=0 for unlimited extraction"
+        )
+    author = data.get("author", "")
+    if not isinstance(author, str):
+        raise RuntimeError("llm response author must be a string")
+    return DocumentExtraction(
+        author=_normalize_first_author(author),
+        raw_intents=[
+            AgentRawIntent(**_normalize_raw_intent_item(item))
+            for item in raw_items
+        ],
+    )
+
+
+def _normalize_first_author(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    first = re.split(r"\s*(?:、|,|，|;|；|/|&|\band\b)\s*", value, maxsplit=1)[0]
+    first = re.sub(r"\s*[（(](?:分析师|研究员|作者|首席分析师)[）)]\s*$", "", first)
+    return first.strip()[:128]
 
 
 def _normalize_raw_intent_item(item: Any) -> Any:

@@ -16,14 +16,16 @@ var RecommendationEvents = &RecommendationEventDML{}
 type RecommendationEventDML struct{}
 
 type RecommendationEventEvaluationFilter struct {
-	DateFrom   *time.Time
-	DateTo     *time.Time
-	BloggerIDs []int64
-	Symbols    []string
-	EventIDs   []int64
-	OnlyActive bool
-	AfterID    int64
-	Limit      int
+	DateFrom          *time.Time
+	DateTo            *time.Time
+	DocumentIDs       []int64
+	BloggerIDs        []int64
+	Symbols           []string
+	EventIDs          []int64
+	OnlyActive        bool
+	ExcludeSuperseded bool
+	AfterID           int64
+	Limit             int
 }
 
 func (*RecommendationEventDML) Create(ctx context.Context, db *gorm.DB, model *db_model.RecommendationEvent) error {
@@ -115,6 +117,9 @@ func (*RecommendationEventDML) QueryForEvaluation(ctx context.Context, db *gorm.
 	if filter.DateTo != nil {
 		tx = tx.Where("recommend_date <= ?", *filter.DateTo)
 	}
+	if len(filter.DocumentIDs) > 0 {
+		tx = tx.Where("source_document_id IN ?", filter.DocumentIDs)
+	}
 	if len(filter.BloggerIDs) > 0 {
 		tx = tx.Where("blogger_id IN ?", filter.BloggerIDs)
 	}
@@ -126,12 +131,45 @@ func (*RecommendationEventDML) QueryForEvaluation(ctx context.Context, db *gorm.
 	}
 	if filter.OnlyActive {
 		tx = tx.Where("status = ?", "ACTIVE")
+	} else if filter.ExcludeSuperseded {
+		tx = tx.Where("status <> ?", "SUPERSEDED")
 	}
 	if filter.AfterID > 0 {
 		tx = tx.Where("id > ?", filter.AfterID)
 	}
 	if filter.Limit > 0 {
 		tx = tx.Limit(filter.Limit)
+	}
+	if err := tx.Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
+func (*RecommendationEventDML) QueryForTrading(ctx context.Context, db *gorm.DB, asOf time.Time, recommendFrom, recommendThrough string, minConfidence float64, afterID int64, limit int) ([]db_model.RecommendationEvent, error) {
+	var models []db_model.RecommendationEvent
+	tx := db.WithContext(ctx).
+		Where("asset_type IN ?", []string{"A_SHARE", "STOCK", "ETF"}).
+		Where("market IN ?", []string{"SH", "SZ"}).
+		Where("direction IN ?", []string{"LONG", "BUY"}).
+		// Missing source prices do not invalidate a recommendation fact. Only
+		// admit this specific review reason; all other review states fail closed.
+		Where(`(status = ? OR (status = ? AND reference_price = 0 AND EXISTS (
+			SELECT 1 FROM trade_candidate_plans p
+			WHERE p.id = recommendation_events.plan_id AND p.status = ?
+			AND p.reference_price = 0 AND p.pricing_note = ?
+		)))`, "ACTIVE", "NEEDS_REVIEW", "NEEDS_REVIEW", "missing explicit price in source text").
+		Where("confidence >= ?", minConfidence).
+		Where("recommend_date >= ? AND recommend_date <= ?", recommendFrom, recommendThrough).
+		Where("created_at <= ?", asOf).
+		Where("updated_at <= ?", asOf).
+		// ID keyset order matches after_id, including late-ingested older dates.
+		Order("id DESC")
+	if afterID > 0 {
+		tx = tx.Where("id < ?", afterID)
+	}
+	if limit > 0 {
+		tx = tx.Limit(limit)
 	}
 	if err := tx.Find(&models).Error; err != nil {
 		return nil, err

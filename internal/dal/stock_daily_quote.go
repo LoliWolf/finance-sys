@@ -19,8 +19,11 @@ func (*StockDailyQuoteDML) UpsertBatch(ctx context.Context, db *gorm.DB, models 
 	if len(models) == 0 {
 		return nil
 	}
+	// GORM backfills IDs even if a later batch rolls back. Never reuse those IDs
+	// for an upsert: MySQL also matches conflicts on the primary key.
+	models = append([]db_model.StockDailyQuote(nil), models...)
 	const batchSize = 300
-	return db.WithContext(ctx).Clauses(clause.OnConflict{
+	return db.WithContext(ctx).Omit("id").Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "ts_code"}, {Name: "trade_date"}, {Name: "source"}},
 		DoUpdates: clause.Assignments(stockDailyQuoteUpsertAssignments()),
 	}).CreateInBatches(models, batchSize).Error
@@ -86,16 +89,59 @@ func (*StockDailyQuoteDML) QueryTradingDates(ctx context.Context, db *gorm.DB, s
 }
 
 func (*StockDailyQuoteDML) QueryLatestTradeDate(ctx context.Context, db *gorm.DB, source string) (time.Time, error) {
-	var model db_model.StockDailyQuote
+	var result struct {
+		TradeDate *time.Time
+	}
 	err := db.WithContext(ctx).
+		Model(&db_model.StockDailyQuote{}).
+		Select("trade_date").
 		Where("source = ?", source).
 		Order("trade_date DESC").
-		First(&model).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return time.Time{}, ErrNotFound
-	}
+		Limit(1).
+		Scan(&result).Error
 	if err != nil {
 		return time.Time{}, err
 	}
-	return model.TradeDate, nil
+	if result.TradeDate == nil {
+		return time.Time{}, ErrNotFound
+	}
+	return *result.TradeDate, nil
+}
+
+func (*StockDailyQuoteDML) QueryLatestBySymbolAt(ctx context.Context, db *gorm.DB, symbol string, asOf time.Time) (*db_model.StockDailyQuote, error) {
+	var model db_model.StockDailyQuote
+	err := db.WithContext(ctx).
+		Where("symbol = ?", symbol).
+		Where("trade_date <= ?", asOf).
+		Order("trade_date DESC, id DESC").
+		First(&model).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &model, nil
+}
+
+func (*StockDailyQuoteDML) QueryLatestByTSCodesAt(ctx context.Context, db *gorm.DB, tsCodes []string, source string, asOf time.Time) ([]db_model.StockDailyQuote, error) {
+	if len(tsCodes) == 0 {
+		return []db_model.StockDailyQuote{}, nil
+	}
+	latestDates := db.WithContext(ctx).
+		Model(&db_model.StockDailyQuote{}).
+		Select("ts_code, MAX(trade_date) AS trade_date").
+		Where("ts_code IN ?", tsCodes).
+		Where("source = ?", source).
+		Where("trade_date <= ?", asOf).
+		Group("ts_code")
+	var models []db_model.StockDailyQuote
+	err := db.WithContext(ctx).
+		Table("stock_daily_quotes AS q").
+		Select("q.*").
+		Joins("JOIN (?) AS latest ON latest.ts_code = q.ts_code AND latest.trade_date = q.trade_date", latestDates).
+		Where("q.source = ?", source).
+		Order("q.ts_code ASC").
+		Scan(&models).Error
+	return models, err
 }

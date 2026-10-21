@@ -13,11 +13,13 @@ import (
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
 	app, err := bootstrap.Build(ctx)
 	if err != nil {
 		panic(err)
 	}
+	defer app.Close()
 
 	cfg := app.Runtime.Config()
 	server := newHTTPServer(app, fmt.Sprintf("%s:%d", cfg.Service.HTTP.Host, cfg.Service.HTTP.Port))
@@ -34,6 +36,9 @@ func main() {
 	if app.Scheduler != nil {
 		go app.Scheduler.Run(ctx)
 	}
+	if app.TradingWorker != nil {
+		go app.TradingWorker.Run(ctx)
+	}
 
 	go func() {
 		app.Logger.Info("api server started", "addr", server.Addr)
@@ -43,6 +48,7 @@ func main() {
 	}()
 
 	waitForShutdown()
+	stopWorkers()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Service.HTTP.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)

@@ -20,8 +20,12 @@ def classify_untrackable_targets(
                 evidence=intent.evidence,
             )
         )
-        if len(targets) >= max_untrackable_targets:
-            break
+    if max_untrackable_targets < 0:
+        raise ValueError("max_untrackable_targets must be non-negative")
+    if max_untrackable_targets and len(targets) > max_untrackable_targets:
+        raise ValueError(
+            f"untrackable target limit exceeded: extracted {len(targets)}, caller limit {max_untrackable_targets}"
+        )
     return targets
 
 

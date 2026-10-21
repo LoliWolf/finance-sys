@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"finance-sys/internal/agentclient"
@@ -35,15 +36,29 @@ type ruleEngine interface {
 }
 
 type DocumentService struct {
-	db         *gorm.DB
-	runtime    *config.Runtime
-	parser     documentParser
-	analyzer   planAnalyzer
-	assembler  *CandidateAssembler
-	rules      ruleEngine
-	observer   *ResolutionObserver
-	processing *ProcessingPools
-	logger     *slog.Logger
+	db             *gorm.DB
+	runtime        *config.Runtime
+	parser         documentParser
+	analyzer       planAnalyzer
+	assembler      *CandidateAssembler
+	rules          ruleEngine
+	observer       *ResolutionObserver
+	processing     *ProcessingPools
+	logger         *slog.Logger
+	analysisMu     sync.Mutex
+	activeAnalyses map[int64]struct{}
+}
+
+type reuseParsedTextContextKey struct{}
+
+// ReanalyzeParsedDocumentForTradeDate rebuilds inference/rules from immutable
+// extracted text. Historical replay must supply its original date explicitly.
+func (s *DocumentService) ReanalyzeParsedDocumentForTradeDate(ctx context.Context, documentID int64, tradeDate time.Time) ([]domain.CandidatePlan, error) {
+	if tradeDate.IsZero() {
+		return nil, ErrDocumentRetryDateRequired
+	}
+	ctx = context.WithValue(ctx, reuseParsedTextContextKey{}, true)
+	return s.AnalyzeDocumentForTradeDate(ctx, documentID, tradeDate)
 }
 
 func NewDocumentService(
@@ -117,62 +132,105 @@ func (s *DocumentService) AnalyzeDocumentForTradeDate(ctx context.Context, docum
 }
 
 func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
+	release, err := s.acquireDocumentAnalysis(documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	plans, analyzeErr := s.analyzeDocumentUnlocked(ctx, documentID)
+	if analyzeErr != nil {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := dal.Documents.RestoreFailedAnalysis(cleanup, s.db, documentID); err != nil && s.logger != nil {
+			s.logger.Error("restore failed analysis state", "document_id", documentID, "error", err.Error())
+		}
+	}
+	return plans, analyzeErr
+}
+
+func (s *DocumentService) analyzeDocumentUnlocked(ctx context.Context, documentID int64) ([]domain.CandidatePlan, error) {
 	cfg := s.currentConfig()
+	// Include OCR/queue waiting in the same document budget passed to the Agent.
+	budgetMS := cfg.LLM.TimeoutMS
+	if cfg.Agent.Enabled {
+		budgetMS = cfg.Agent.TimeoutMS
+	}
+	if budgetMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(budgetMS)*time.Millisecond)
+		defer cancel()
+	}
 	tradeDate := s.tradeDate(cfg)
 	if override, ok := domain.TradeDateFromContext(ctx); ok {
 		tradeDate = override
 	}
+	ctx = domain.ContextWithTradeDate(ctx, tradeDate)
 	s.logger.InfoContext(ctx, "document service analyze start", "document_id", documentID)
-	documentModel, err := dal.Documents.QueryByID(ctx, s.db, documentID)
+	documentModel, err := dal.Documents.QueryMetadataByID(ctx, s.db, documentID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze load document failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
 	document := mapDocument(documentModel)
 
-	content, err := dal.Documents.QueryContentByID(ctx, s.db, documentID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "document service analyze load content failed", "document_id", documentID, "error", err.Error())
-		return nil, err
-	}
-	s.logger.InfoContext(ctx, "document service analyze content loaded", "document_id", documentID, "file_name", document.FileName, "size_bytes", len(content))
-
-	documentCfg := cfg.Document
-	documentCfg.PDFUseOCR = document.PDFOCREnabled
-	var parsed domain.ParseRun
+	var parseRun *domain.ParseRun
 	var parseErr error
-	if documentCfg.PDFUseOCR && strings.EqualFold(filepath.Ext(document.FileName), ".pdf") {
-		releaseOCR, acquireErr := s.processing.AcquireOCR(ctx)
-		if acquireErr != nil {
-			parseErr = acquireErr
-			parsed = domain.ParseRun{
-				Status:        domain.ParseRunStatusFailed,
-				ParserName:    domain.ParserNamePDFOCR,
-				ParserVersion: "global-ocr-pool",
-				ErrorMessage:  acquireErr.Error(),
-				RawMetadata:   map[string]any{"pdf_ocr_used": true, "pool_acquire_failed": true},
+	if reuse, _ := ctx.Value(reuseParsedTextContextKey{}).(bool); reuse {
+		cached, cachedErr := dal.ParseRuns.QueryLatestParsedByDocumentID(ctx, s.db, documentID)
+		if cachedErr != nil && !errors.Is(cachedErr, dal.ErrNotFound) {
+			return nil, cachedErr
+		}
+		if cachedErr == nil {
+			parseRun, err = reusableParsedRun(cached, documentID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if parseRun == nil {
+		content, err := dal.Documents.QueryContentByID(ctx, s.db, documentID)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "document service analyze load content failed", "document_id", documentID, "error", err.Error())
+			return nil, err
+		}
+		s.logger.InfoContext(ctx, "document service analyze content loaded", "document_id", documentID, "file_name", document.FileName, "size_bytes", len(content))
+
+		documentCfg := cfg.Document
+		documentCfg.PDFUseOCR = document.PDFOCREnabled
+		var parsed domain.ParseRun
+		if documentCfg.PDFUseOCR && strings.EqualFold(filepath.Ext(document.FileName), ".pdf") {
+			releaseOCR, acquireErr := s.processing.AcquireOCR(ctx)
+			if acquireErr != nil {
+				parseErr = acquireErr
+				parsed = domain.ParseRun{
+					Status:        domain.ParseRunStatusFailed,
+					ParserName:    domain.ParserNamePDFOCR,
+					ParserVersion: "global-ocr-pool",
+					ErrorMessage:  acquireErr.Error(),
+					RawMetadata:   map[string]any{"pdf_ocr_used": true, "pool_acquire_failed": true},
+				}
+			} else {
+				parsed, parseErr = s.parser.Parse(ctx, document.FileName, content, documentCfg)
+				releaseOCR()
 			}
 		} else {
 			parsed, parseErr = s.parser.Parse(ctx, document.FileName, content, documentCfg)
-			releaseOCR()
 		}
-	} else {
-		parsed, parseErr = s.parser.Parse(ctx, document.FileName, content, documentCfg)
-	}
-	parsed.DocumentID = document.ID
-	parseRunModel, err := parseRunToModel(parsed)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "document service analyze convert parse run failed", "document_id", documentID, "error", err.Error())
-		return nil, err
-	}
-	if err := dal.ParseRuns.Create(ctx, s.db, parseRunModel); err != nil {
-		s.logger.ErrorContext(ctx, "document service analyze create parse run failed", "document_id", documentID, "error", err.Error())
-		return nil, err
-	}
-	parseRun, err := mapParseRun(parseRunModel)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "document service analyze map parse run failed", "document_id", documentID, "error", err.Error())
-		return nil, err
+		parsed.DocumentID = document.ID
+		parseRunModel, err := parseRunToModel(parsed)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "document service analyze convert parse run failed", "document_id", documentID, "error", err.Error())
+			return nil, err
+		}
+		if err := dal.ParseRuns.Create(ctx, s.db, parseRunModel); err != nil {
+			s.logger.ErrorContext(ctx, "document service analyze create parse run failed", "document_id", documentID, "error", err.Error())
+			return nil, err
+		}
+		parseRun, err = mapParseRun(parseRunModel)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "document service analyze map parse run failed", "document_id", documentID, "error", err.Error())
+			return nil, err
+		}
 	}
 	resolutionRun, err := s.observer.Start(ctx, s.db, document, parseRun)
 	if err != nil {
@@ -188,7 +246,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after parse failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterParseFailure(parseErr)))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(documentStatusAfterParseFailure(parseErr)))
 		return nil, parseErr
 	}
 	if !parseRunHasAnalyzableText(*parseRun) {
@@ -198,10 +256,10 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after empty parse result", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusInvalid))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusInvalid))
 		return nil, err
 	}
-	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusParsed)); err != nil {
+	if err := s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusParsed)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status parsed failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
@@ -223,7 +281,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after analyzer failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterAnalyzerFailure(analysis, err)))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(documentStatusAfterAnalyzerFailure(analysis, err)))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze llm success", "document_id", documentID, "parse_run_id", parseRun.ID, "intent_count", len(intents))
@@ -235,7 +293,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 				s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after invalid intent", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 				return nil, obsErr
 			}
-			_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+			_ = s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusFailed))
 			return nil, fmt.Errorf("invalid plan intent: %w", err)
 		}
 	}
@@ -249,7 +307,7 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after candidate assembly failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(documentStatusAfterAnalysisFailure(resolutions, err)))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(documentStatusAfterAnalysisFailure(resolutions, err)))
 		return nil, err
 	}
 	s.logger.InfoContext(ctx, "document service analyze candidate assembly success", "document_id", documentID, "parse_run_id", parseRun.ID, "trackable_intent_count", len(trackableIntents), "raw_intent_count", len(intents))
@@ -275,10 +333,10 @@ func (s *DocumentService) analyzeDocument(ctx context.Context, documentID int64)
 			s.logger.ErrorContext(ctx, "document service analyze finish resolution failed after persist failure", "document_id", documentID, "parse_run_id", parseRun.ID, "error", obsErr.Error())
 			return nil, obsErr
 		}
-		_ = dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusFailed))
+		_ = s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusFailed))
 		return nil, err
 	}
-	if err := dal.Documents.UpdateStatusByID(ctx, s.db, document.ID, string(domain.DocumentStatusPlanned)); err != nil {
+	if err := s.updateAnalysisStatus(ctx, document.ID, string(domain.DocumentStatusPlanned)); err != nil {
 		s.logger.ErrorContext(ctx, "document service analyze update status planned failed", "document_id", documentID, "error", err.Error())
 		return nil, err
 	}
@@ -363,6 +421,20 @@ func parseRunHasAnalyzableText(run domain.ParseRun) bool {
 		}
 	}
 	return false
+}
+
+func reusableParsedRun(model *db_model.ParseRun, documentID int64) (*domain.ParseRun, error) {
+	if model == nil || model.DocumentID != documentID || model.Status != string(domain.ParseRunStatusParsed) {
+		return nil, nil
+	}
+	run, err := mapParseRun(model)
+	if err != nil {
+		return nil, err
+	}
+	if !parseRunHasAnalyzableText(*run) {
+		return nil, nil
+	}
+	return run, nil
 }
 
 func documentStatusAfterParseFailure(err error) domain.DocumentStatus {

@@ -50,12 +50,19 @@ func (*ScheduledTaskRunDML) QueryByTypeAndKey(ctx context.Context, db *gorm.DB, 
 	return &model, nil
 }
 
-func (*ScheduledTaskRunDML) ClaimNextDue(ctx context.Context, db *gorm.DB, workerID string, now time.Time, claimTimeout time.Duration) (*db_model.ScheduledTaskRun, error) {
+func (*ScheduledTaskRunDML) ClaimNextDue(ctx context.Context, db *gorm.DB, workerID string, now time.Time, claimTimeout time.Duration, types ...domain.ScheduledTaskType) (*db_model.ScheduledTaskRun, error) {
 	var model db_model.ScheduledTaskRun
 	staleBefore := now.Add(-claimTimeout)
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := tx.Where("scheduled_at <= ?", now).
 			Where("status = ? OR (status = ? AND started_at < ?)", "QUEUED", "RUNNING", staleBefore)
+		if len(types) > 0 {
+			values := make([]uint16, len(types))
+			for i, v := range types {
+				values[i] = uint16(v)
+			}
+			query = query.Where("task_type IN ?", values)
+		}
 		result := query.Order("scheduled_at ASC, id ASC").Limit(1).Find(&model)
 		if result.Error != nil {
 			return result.Error

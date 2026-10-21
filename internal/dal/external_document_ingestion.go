@@ -16,6 +16,25 @@ var ExternalDocumentIngestions = &ExternalDocumentIngestionDML{}
 
 type ExternalDocumentIngestionDML struct{}
 
+func (*ExternalDocumentIngestionDML) QueryByDocumentID(ctx context.Context, db *gorm.DB, id int64) ([]db_model.ExternalDocumentIngestion, error) {
+	var rows []db_model.ExternalDocumentIngestion
+	err := db.WithContext(ctx).Where("document_id = ?", id).Order("id ASC").Find(&rows).Error
+	return rows, err
+}
+
+func (*ExternalDocumentIngestionDML) FinishDocumentRetry(ctx context.Context, db *gorm.DB, id int64, succeeded bool, message string) error {
+	values := map[string]any{"status": 6, "last_error": message, "updated_at": gorm.Expr("CURRENT_TIMESTAMP")}
+	if succeeded {
+		values["status"], values["last_error"], values["analyzed_at"] = 5, "", time.Now().UTC()
+	}
+	return db.WithContext(ctx).Model(&db_model.ExternalDocumentIngestion{}).Where("document_id = ? AND status <> 5", id).Updates(values).Error
+}
+
+func (*ExternalDocumentIngestionDML) BeginDocumentRetry(ctx context.Context, db *gorm.DB, id int64) error {
+	return db.WithContext(ctx).Model(&db_model.ExternalDocumentIngestion{}).Where("document_id = ? AND status <> 5", id).
+		Updates(map[string]any{"status": 4, "attempt_count": gorm.Expr("attempt_count + 1"), "last_error": "", "updated_at": gorm.Expr("CURRENT_TIMESTAMP")}).Error
+}
+
 func (*ExternalDocumentIngestionDML) Ensure(ctx context.Context, db *gorm.DB, model *db_model.ExternalDocumentIngestion) (*db_model.ExternalDocumentIngestion, bool, error) {
 	result := db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{

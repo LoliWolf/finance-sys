@@ -7,6 +7,8 @@ import type { BloggerSummaryResponse, BloggerTimeseriesResponse, RecommendationP
 import ChartPanel from '../components/ChartPanel.vue'
 import MetricCard from '../components/MetricCard.vue'
 import StatePanel from '../components/StatePanel.vue'
+import PageExportButton from '../components/PageExportButton.vue'
+import { useReportScope } from '../reports/useReportScope'
 import StatusBadge from '../components/StatusBadge.vue'
 import { formatDate, formatNumber, formatPercent, returnTone, truncate } from '../utils/format'
 
@@ -21,24 +23,32 @@ const recommendations = ref<RecommendationPerformanceList | null>(null)
 const windowDays = ref(30)
 const dateFrom = ref('')
 const dateTo = ref('')
+const reportQuery = computed(() => ({ blogger_id: bloggerID.value, date_from: dateFrom.value, date_to: dateTo.value, window_days: windowDays.value }))
+const { applied: reportFilters, dirty: reportDirty, accept: acceptReportFilters } = useReportScope(reportQuery)
+let loadVersion = 0
 
 async function load() {
+  const version = ++loadVersion
+  const reportFilter = { ...reportQuery.value }
   loading.value = true
   error.value = ''
-  const query = { date_from: dateFrom.value, date_to: dateTo.value }
+  const query = { date_from: reportFilter.date_from, date_to: reportFilter.date_to }
   try {
     const [summaryData, timeseriesData, recommendationData] = await Promise.all([
-      api.bloggerSummary(bloggerID.value, query),
-      api.bloggerTimeseries(bloggerID.value, { ...query, window_days: windowDays.value }),
-      api.bloggerRecommendations(bloggerID.value, { ...query, window_days: windowDays.value, limit: 100 }),
+      api.bloggerSummary(reportFilter.blogger_id, query),
+      api.bloggerTimeseries(reportFilter.blogger_id, { ...query, window_days: reportFilter.window_days }),
+      api.bloggerRecommendations(reportFilter.blogger_id, { ...query, window_days: reportFilter.window_days, limit: 100 }),
     ])
+    if (version !== loadVersion) return
     summary.value = summaryData
     timeseries.value = timeseriesData
     recommendations.value = recommendationData
+    acceptReportFilters(reportFilter)
   } catch (cause) {
+    if (version !== loadVersion) return
     error.value = cause instanceof Error ? cause.message : '博主详情加载失败'
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
@@ -73,13 +83,14 @@ const trendOption = computed(() => ({
   ],
 }))
 
-watch(windowDays, load)
+watch([windowDays, bloggerID], load)
 onMounted(load)
 </script>
 
 <template>
   <div>
     <button class="button" type="button" style="margin-bottom: 22px" @click="router.push('/')"><ArrowLeft :size="15" />返回榜单</button>
+    <PageExportButton class="detail-export-toolbar" kind="blogger" :query="reportFilters || {}" :dirty="reportDirty" :disabled="loading || !summary || !!error" label="导出博主档案" />
     <section v-if="summary" class="detail-hero">
       <span class="kicker">Blogger performance dossier</span>
       <h1>{{ summary.blogger_name }}</h1>

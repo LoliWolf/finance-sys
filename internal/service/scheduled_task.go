@@ -86,8 +86,8 @@ func (s *ScheduledTaskService) Enqueue(ctx context.Context, taskType domain.Sche
 	return false, existing, err
 }
 
-func (s *ScheduledTaskService) ClaimAndExecuteNext(ctx context.Context, workerID string, claimTimeout time.Duration) (bool, error) {
-	run, err := dal.ScheduledTaskRuns.ClaimNextDue(ctx, s.db, workerID, time.Now().UTC(), claimTimeout)
+func (s *ScheduledTaskService) ClaimAndExecuteNext(ctx context.Context, workerID string, claimTimeout time.Duration, types ...domain.ScheduledTaskType) (bool, error) {
+	run, err := dal.ScheduledTaskRuns.ClaimNextDue(ctx, s.db, workerID, time.Now().UTC(), claimTimeout, types...)
 	if errors.Is(err, dal.ErrNotFound) {
 		return false, nil
 	}

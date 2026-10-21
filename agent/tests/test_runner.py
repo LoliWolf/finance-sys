@@ -11,11 +11,11 @@ def test_load_nacos_server_address_reads_address_only_file(
     monkeypatch.delenv("NACOS_SERVER_ADDR", raising=False)
     path = tmp_path / "bootstrap.env"
     path.write_text(
-        "# bootstrap\r\nNACOS_SERVER_ADDR='192.168.31.234:8848'\r\n",
+        "# bootstrap\r\nNACOS_SERVER_ADDR='127.0.0.1:8848'\r\n",
         encoding="utf-8",
     )
 
-    assert load_nacos_server_address([path]) == "192.168.31.234:8848"
+    assert load_nacos_server_address([path]) == "127.0.0.1:8848"
 
 
 def test_load_nacos_server_address_rejects_other_keys(
@@ -24,7 +24,7 @@ def test_load_nacos_server_address_rejects_other_keys(
     monkeypatch.delenv("NACOS_SERVER_ADDR", raising=False)
     path = tmp_path / "bootstrap.env"
     path.write_text(
-        "NACOS_SERVER_ADDR=192.168.31.234:8848\nAPP_PORT=8108\n",
+        "NACOS_SERVER_ADDR=127.0.0.1:8848\nAPP_PORT=8108\n",
         encoding="utf-8",
     )
 

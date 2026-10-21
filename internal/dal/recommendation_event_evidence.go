@@ -35,3 +35,17 @@ func (*RecommendationEventEvidenceDML) QueryByEventID(ctx context.Context, db *g
 	}
 	return models, nil
 }
+
+func (*RecommendationEventEvidenceDML) QueryByEventIDs(ctx context.Context, db *gorm.DB, eventIDs []int64) ([]db_model.RecommendationEventEvidence, error) {
+	if len(eventIDs) == 0 {
+		return []db_model.RecommendationEventEvidence{}, nil
+	}
+	var models []db_model.RecommendationEventEvidence
+	if err := db.WithContext(ctx).
+		Where("recommendation_event_id IN ?", eventIDs).
+		Order("recommendation_event_id ASC, id ASC").
+		Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}

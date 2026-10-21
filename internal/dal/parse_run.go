@@ -13,6 +13,15 @@ var ParseRuns = &ParseRunDML{}
 
 type ParseRunDML struct{}
 
+func (*ParseRunDML) QueryByID(ctx context.Context, db *gorm.DB, id int64) (*db_model.ParseRun, error) {
+	var model db_model.ParseRun
+	err := db.WithContext(ctx).First(&model, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &model, err
+}
+
 func (*ParseRunDML) Create(ctx context.Context, db *gorm.DB, model *db_model.ParseRun) error {
 	return db.WithContext(ctx).Create(model).Error
 }

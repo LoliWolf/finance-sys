@@ -1,0 +1,2 @@
+"""FinanceSys deterministic trading agent."""
+

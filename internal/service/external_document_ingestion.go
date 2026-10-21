@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -226,6 +227,11 @@ func (s *ExternalDocumentIngestionService) processOpenListArticle(ctx context.Co
 	}
 	recommendationDate := domain.RecommendationDateForArticle(article.ArticleDate)
 	_, analyzeErr := s.documents.AnalyzeDocumentForTradeDate(ctx, document.ID, recommendationDate)
+	if errors.Is(analyzeErr, ErrDocumentAnalysisBusy) {
+		// A manual retry/upload owns this document. Do not overwrite its source
+		// outcome with a spurious failure or start another model request.
+		return openListArticleResult{skipped: true}
+	}
 	if analyzeErr != nil {
 		current, loadErr := s.documents.GetDocumentByID(context.WithoutCancel(ctx), document.ID)
 		if loadErr == nil && current.Status == domain.DocumentStatusInvalid {

@@ -4,11 +4,13 @@ import { Archive, FileUp, LoaderCircle, Play, RefreshCw, Settings2 } from 'lucid
 import { api } from '../api/client'
 import type { DocumentRecord, EvaluationRun } from '../api/types'
 import PageHeader from '../components/PageHeader.vue'
+import PageExportButton from '../components/PageExportButton.vue'
 import StatePanel from '../components/StatePanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { formatDateTime, formatNumber } from '../utils/format'
 
 const selectedFile = ref<File | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
 const title = ref('')
 const author = ref('')
 const institution = ref('')
@@ -33,6 +35,16 @@ function chooseFile(event: Event) {
   if (selectedFile.value && !title.value) title.value = selectedFile.value.name.replace(/\.[^.]+$/, '')
 }
 
+function resetUploadForm() {
+  selectedFile.value = null
+  title.value = ''
+  author.value = ''
+  institution.value = ''
+  pdfUseOCR.value = false
+  forceAnalyze.value = false
+  if (fileInput.value) fileInput.value.value = ''
+}
+
 async function upload() {
   if (!selectedFile.value) {
     error.value = '请先选择一份可提取文本的研报或研究文档。'
@@ -52,6 +64,7 @@ async function upload() {
     form.append('force_analyze', String(forceAnalyze.value))
     const result = await api.uploadDocument(form)
     uploadResult.value = JSON.stringify(result, null, 2)
+    resetUploadForm()
     await loadDocuments()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '文档上传分析失败'
@@ -120,7 +133,7 @@ onMounted(async () => {
       title="从一篇文档，到一条可审计的表现链路。"
       description="上传研究材料会进入解析、结构化抽取、标的解析和推荐事实链路；评价任务再把历史行情转成固定窗口指标。所有中间件均使用 Nacos 中的远程配置。"
     >
-      <template #actions><button class="button" type="button" @click="refreshAll"><RefreshCw :size="15" />刷新工作台</button></template>
+      <template #actions><button class="button" type="button" @click="refreshAll"><RefreshCw :size="15" />刷新工作台</button><PageExportButton kind="workbench" :disabled="runsLoading || uploading || creatingRun" label="导出运行记录" /></template>
     </PageHeader>
 
     <div v-if="error" class="error-banner">{{ error }}</div>
@@ -133,12 +146,12 @@ onMounted(async () => {
             <FileUp :size="32" stroke-width="1.4" />
             <strong>{{ selectedFile?.name || '选择一份测试研报' }}</strong>
             <span>{{ selectedFile ? `${formatNumber(selectedFile.size / 1024, 1)} KB` : '点击选择文件；图片型或水印型 PDF 可直接使用专用 OCR' }}</span>
-            <input type="file" accept=".pdf,.doc,.docx,.txt,.md,.csv" @change="chooseFile" />
+            <input ref="fileInput" data-testid="upload-file" type="file" accept=".pdf,.doc,.docx,.txt,.md,.csv" @change="chooseFile" />
           </label>
           <div class="form-grid" style="margin-top:16px">
-            <div class="field full"><label>显示标题</label><input v-model="title" placeholder="默认使用文件名" /></div>
-            <div class="field"><label>作者（可选）</label><input v-model="author" placeholder="分析层会从正文抽取" /></div>
-            <div class="field"><label>机构（可选）</label><input v-model="institution" placeholder="分析层会从正文抽取" /></div>
+            <div class="field full"><label>显示标题</label><input v-model="title" data-testid="upload-title" placeholder="默认使用文件名" /></div>
+            <div class="field"><label>作者（可选）</label><input v-model="author" data-testid="upload-author" placeholder="手动填写优先；留空则提取正文首位作者" /></div>
+            <div class="field"><label>机构（可选）</label><input v-model="institution" data-testid="upload-institution" placeholder="分析层会从正文抽取" /></div>
             <div class="field full"><label>报告 / 推荐日期</label><input v-model="reportDate" type="date" /><small class="muted">用于确定推荐事实日期和后续 T+1 评价起点。</small></div>
             <label class="toggle-row full"><input v-model="pdfUseOCR" type="checkbox" />PDF 使用专用 OCR（跳过内置与 PDFKit 文本提取）</label>
             <label class="toggle-row full"><input v-model="forceAnalyze" type="checkbox" />重复文件也重新分析（调整日期或解析逻辑后使用）</label>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 import http.client
 import json as jsonlib
 import socket
@@ -9,6 +10,9 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+from app.chat_stream import read_chat_stream
+from app.request_budget import current_budget, remaining_timeout
 
 
 class HTTPClientError(RuntimeError):
@@ -87,11 +91,16 @@ class StdlibHTTPClient:
             body = b""
 
         request = Request(url, data=body, headers=request_headers, method="POST")
-        timeout_seconds = self.timeout if timeout is None else timeout
+        timeout_seconds = remaining_timeout(self.timeout if timeout is None else timeout)
         deadline = time.monotonic() + timeout_seconds
         try:
             with open_url(request, timeout=timeout_seconds) as response:
-                return _response_from_urlopen(response, deadline)
+                budget = current_budget.get()
+                with budget.watch_response(response) if budget else nullcontext():
+                    if isinstance(json, dict) and json.get("stream") and "text/event-stream" in (response.headers.get("Content-Type") or "").lower():
+                        payload = read_chat_stream(response, deadline, _set_response_timeout)
+                        return StdlibHTTPResponse(status_code=response.status, text=jsonlib.dumps(payload, ensure_ascii=False))
+                    return _response_from_urlopen(response, deadline)
         except HTTPError as exc:
             return StdlibHTTPResponse(
                 status_code=exc.code,
@@ -138,6 +147,9 @@ def _read_body_until(response: Any, deadline: float) -> bytes:
     chunks = []
     reader = getattr(response, "read1", None) or response.read
     while True:
+        budget = current_budget.get()
+        if budget:
+            budget.remaining()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise HTTPTimeoutError("HTTP request timed out")

@@ -36,25 +36,29 @@ type RecommendationEvaluationService struct {
 }
 
 type RecommendationEvaluationRequest struct {
-	DateFrom     string   `json:"date_from"`
-	DateTo       string   `json:"date_to"`
-	BloggerIDs   []int64  `json:"blogger_ids"`
-	Symbols      []string `json:"symbols"`
-	EventIDs     []int64  `json:"event_ids"`
-	Windows      []int    `json:"windows"`
-	ForceRebuild bool     `json:"force_rebuild"`
-	OnlyActive   *bool    `json:"only_active,omitempty"`
+	DateFrom          string   `json:"date_from"`
+	DateTo            string   `json:"date_to"`
+	DocumentIDs       []int64  `json:"document_ids"`
+	BloggerIDs        []int64  `json:"blogger_ids"`
+	Symbols           []string `json:"symbols"`
+	EventIDs          []int64  `json:"event_ids"`
+	Windows           []int    `json:"windows"`
+	ForceRebuild      bool     `json:"force_rebuild"`
+	OnlyActive        *bool    `json:"only_active,omitempty"`
+	ExcludeSuperseded bool     `json:"exclude_superseded,omitempty"`
 }
 
 type RecommendationEvaluationRunParams struct {
-	DateFrom     string   `json:"date_from,omitempty"`
-	DateTo       string   `json:"date_to,omitempty"`
-	BloggerIDs   []int64  `json:"blogger_ids,omitempty"`
-	Symbols      []string `json:"symbols,omitempty"`
-	EventIDs     []int64  `json:"event_ids,omitempty"`
-	Windows      []int    `json:"windows"`
-	ForceRebuild bool     `json:"force_rebuild"`
-	OnlyActive   bool     `json:"only_active"`
+	DateFrom          string   `json:"date_from,omitempty"`
+	DateTo            string   `json:"date_to,omitempty"`
+	DocumentIDs       []int64  `json:"document_ids,omitempty"`
+	BloggerIDs        []int64  `json:"blogger_ids,omitempty"`
+	Symbols           []string `json:"symbols,omitempty"`
+	EventIDs          []int64  `json:"event_ids,omitempty"`
+	Windows           []int    `json:"windows"`
+	ForceRebuild      bool     `json:"force_rebuild"`
+	OnlyActive        bool     `json:"only_active"`
+	ExcludeSuperseded bool     `json:"exclude_superseded,omitempty"`
 }
 
 type RecommendationEvaluationRunResponse struct {
@@ -462,14 +466,16 @@ func (s *RecommendationEvaluationService) currentPerformanceConfig() (config.Rec
 
 func normalizeRecommendationEvaluationRequest(request RecommendationEvaluationRequest, cfg config.RecommendationPerformanceConfig) (RecommendationEvaluationRunParams, error) {
 	params := RecommendationEvaluationRunParams{
-		DateFrom:     strings.TrimSpace(request.DateFrom),
-		DateTo:       strings.TrimSpace(request.DateTo),
-		BloggerIDs:   uniquePositiveInt64s(request.BloggerIDs),
-		Symbols:      normalizeEvaluationSymbols(request.Symbols),
-		EventIDs:     uniquePositiveInt64s(request.EventIDs),
-		Windows:      append([]int(nil), request.Windows...),
-		ForceRebuild: request.ForceRebuild,
-		OnlyActive:   true,
+		DateFrom:          strings.TrimSpace(request.DateFrom),
+		DateTo:            strings.TrimSpace(request.DateTo),
+		DocumentIDs:       uniquePositiveInt64s(request.DocumentIDs),
+		BloggerIDs:        uniquePositiveInt64s(request.BloggerIDs),
+		Symbols:           normalizeEvaluationSymbols(request.Symbols),
+		EventIDs:          uniquePositiveInt64s(request.EventIDs),
+		Windows:           append([]int(nil), request.Windows...),
+		ForceRebuild:      request.ForceRebuild,
+		OnlyActive:        true,
+		ExcludeSuperseded: request.ExcludeSuperseded,
 	}
 	if request.OnlyActive != nil {
 		params.OnlyActive = *request.OnlyActive
@@ -513,10 +519,12 @@ func normalizeRecommendationEvaluationRequest(request RecommendationEvaluationRe
 
 func evaluationFilterFromParams(params RecommendationEvaluationRunParams) (dal.RecommendationEventEvaluationFilter, error) {
 	filter := dal.RecommendationEventEvaluationFilter{
-		BloggerIDs: params.BloggerIDs,
-		Symbols:    params.Symbols,
-		EventIDs:   params.EventIDs,
-		OnlyActive: params.OnlyActive,
+		DocumentIDs:       params.DocumentIDs,
+		BloggerIDs:        params.BloggerIDs,
+		Symbols:           params.Symbols,
+		EventIDs:          params.EventIDs,
+		OnlyActive:        params.OnlyActive,
+		ExcludeSuperseded: params.ExcludeSuperseded,
 	}
 	if params.DateFrom != "" {
 		value, err := time.Parse(time.DateOnly, params.DateFrom)

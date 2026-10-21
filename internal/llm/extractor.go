@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,7 @@ Return JSON only.
 Do not generate entry price, stop loss, take profit, or position.
 Only extract facts explicitly supported by the source text.
 For symbol, keep the source instrument text or code. Do not invent a ts_code or exchange suffix.
+For analyst, an explicit non-empty Author value in the user message has highest priority. Otherwise use the first document author or analyst appearing in source order near the report header. For joint authors, use only the first person. Ignore names from related-report lists, citations, company management, and body text.
 The confidence field is your extraction confidence for this structured record, not an investment rating from the source text. It must be a number in (0,1].
 Output shape:
 {"plans":[{"analyst":"","institution":"","symbol":"","asset_type":"","market":"","direction":"LONG or SHORT","reference_price":0,"reference_price_note":"","thesis":"","evidence":[{"chunk_index":0,"text":""}],"risks":[""],"confidence":0.0}]}`
@@ -44,6 +46,7 @@ type ModelAnalyzer struct {
 
 type chatCompletionRequest struct {
 	Model          string            `json:"model"`
+	Stream         bool              `json:"stream,omitempty"`
 	Messages       []chatMessage     `json:"messages"`
 	Temperature    float64           `json:"temperature"`
 	ResponseFormat map[string]string `json:"response_format,omitempty"`
@@ -88,6 +91,8 @@ func (a *ModelAnalyzer) Analyze(ctx context.Context, document domain.Document, p
 	if strings.TrimSpace(parsed.CleanedText) == "" {
 		return nil, fmt.Errorf("empty parsed text")
 	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.LLM.TimeoutMS)*time.Millisecond)
+	defer cancel()
 	if a.logger != nil {
 		a.logger.InfoContext(ctx, "llm analyze start", "document_id", document.ID, "parse_run_id", parsed.ID, "chunk_count", len(parsed.Chunks), "model", cfg.LLM.Model, "provider", cfg.LLM.Provider)
 	}
@@ -122,10 +127,44 @@ func (a *ModelAnalyzer) Analyze(ctx context.Context, document domain.Document, p
 	if len(intents) == 0 {
 		return nil, fmt.Errorf("no structured trade intent extracted")
 	}
+	applyPreferredAnalyst(intents, document.Author)
 	if a.logger != nil {
 		a.logger.InfoContext(ctx, "llm analyze completed", "document_id", document.ID, "raw_intent_count", len(rawIntents), "merged_intent_count", len(intents))
 	}
 	return intents, nil
+}
+
+func applyPreferredAnalyst(intents []domain.PlanIntent, explicitAuthor string) {
+	analyst := strings.TrimSpace(explicitAuthor)
+	if analyst == "" {
+		for i := range intents {
+			if value := strings.TrimSpace(intents[i].Analyst); value != "" {
+				analyst = firstModelAnalyst(value)
+				break
+			}
+		}
+	}
+	if analyst == "" {
+		return
+	}
+	for i := range intents {
+		intents[i].Analyst = analyst
+	}
+}
+
+func firstModelAnalyst(value string) string {
+	parts := strings.FieldsFunc(strings.TrimSpace(value), func(r rune) bool {
+		switch r {
+		case '、', ',', '，', ';', '；', '/', '&':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
 }
 
 func (a *ModelAnalyzer) analyzeChunk(ctx context.Context, cfg config.LLMConfig, document domain.Document, chunk domain.Chunk) ([]domain.PlanIntent, error) {
@@ -135,7 +174,13 @@ func (a *ModelAnalyzer) analyzeChunk(ctx context.Context, cfg config.LLMConfig, 
 	}
 
 	var lastErr error
+	usedAttempts := 0
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if ctx.Err() != nil {
+			lastErr = ctx.Err()
+			break
+		}
+		usedAttempts = attempt
 		if a.logger != nil {
 			a.logger.DebugContext(ctx, "llm analyze chunk attempt", "chunk_index", chunk.Index, "attempt", attempt, "max_attempts", attempts)
 		}
@@ -147,19 +192,24 @@ func (a *ModelAnalyzer) analyzeChunk(ctx context.Context, cfg config.LLMConfig, 
 			return intents, nil
 		}
 		lastErr = err
+		var protocolError *streamError
+		if ctx.Err() != nil || errors.As(err, &protocolError) {
+			break
+		}
 		if a.logger != nil && attempt < attempts {
 			a.logger.Warn("llm analyze chunk failed; retrying", "chunk_index", chunk.Index, "attempt", attempt, "error", err.Error())
 		}
 	}
-	return nil, fmt.Errorf("llm analyze chunk %d failed after %d attempts: %w", chunk.Index, attempts, lastErr)
+	return nil, fmt.Errorf("llm analyze chunk %d failed after %d attempts: %w", chunk.Index, usedAttempts, lastErr)
 }
 
 func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, document domain.Document, chunk domain.Chunk) ([]domain.PlanIntent, error) {
 	requestBody := chatCompletionRequest{
 		Model:       cfg.Model,
-		Temperature: 0,
+		Stream:      cfg.Stream,
+		Temperature: cfg.Temperature,
 		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
+			{Role: "system", Content: configuredSystemPrompt(cfg)},
 			{Role: "user", Content: buildUserPrompt(document, chunk)},
 		},
 		ResponseFormat: map[string]string{"type": "json_object"},
@@ -199,7 +249,12 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	var body []byte
+	if cfg.Stream && resp.StatusCode < http.StatusBadRequest && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		body, err = readChatStream(resp.Body)
+	} else {
+		body, err = io.ReadAll(resp.Body)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +281,16 @@ func (a *ModelAnalyzer) requestPlans(ctx context.Context, cfg config.LLMConfig, 
 		return nil, err
 	}
 	return parseAndValidatePlans(content)
+}
+
+// Nacos owns extraction semantics; the caller-specific JSON contract and rule
+// boundaries stay in code so the legacy plans and Agent raw_intents shapes do
+// not accidentally overwrite each other.
+func configuredSystemPrompt(cfg config.LLMConfig) string {
+	if prompt := strings.TrimSpace(cfg.ExtractionPrompt); prompt != "" {
+		return prompt + "\n\nRequired output contract:\n" + systemPrompt
+	}
+	return systemPrompt
 }
 
 func buildUserPrompt(document domain.Document, chunk domain.Chunk) string {

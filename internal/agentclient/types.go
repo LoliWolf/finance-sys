@@ -30,16 +30,18 @@ type AgentDocumentChunk struct {
 }
 
 type AgentLimits struct {
-	MaxIntents            int `json:"max_intents"`
+	// Zero means no count limit. A positive limit must fail explicitly on overflow.
+	MaxIntents            int `json:"max_intents,omitempty"`
 	MaxEvidencePerIntent  int `json:"max_evidence_per_intent"`
 	MaxRisksPerIntent     int `json:"max_risks_per_intent"`
-	MaxUntrackableTargets int `json:"max_untrackable_targets"`
+	MaxUntrackableTargets int `json:"max_untrackable_targets,omitempty"`
 }
 
 type ResolveDocumentResponse struct {
 	SchemaVersion      string                    `json:"schema_version"`
 	AgentVersion       string                    `json:"agent_version"`
 	Status             AgentStatus               `json:"status"`
+	ExtractedAuthor    string                    `json:"extracted_author"`
 	RawIntents         []AgentRawIntent          `json:"raw_intents"`
 	CandidatePlanInput []AgentCandidatePlanInput `json:"candidate_plan_inputs"`
 	UntrackableTargets []AgentUntrackableTarget  `json:"untrackable_targets"`

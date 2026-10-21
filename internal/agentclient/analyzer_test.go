@@ -19,9 +19,10 @@ func TestAnalyzerConvertsCandidatePlanInputs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "test-token", r.Header.Get("X-Agent-Token"))
 		writeAgentResponse(t, w, agentclient.ResolveDocumentResponse{
-			SchemaVersion: agentclient.ResponseSchemaVersion,
-			AgentVersion:  "test-agent",
-			Status:        agentclient.AgentStatusResolved,
+			SchemaVersion:   agentclient.ResponseSchemaVersion,
+			AgentVersion:    "test-agent",
+			Status:          agentclient.AgentStatusResolved,
+			ExtractedAuthor: "模型作者",
 			CandidatePlanInput: []agentclient.AgentCandidatePlanInput{
 				testCandidatePlanInput("新易盛", "300502.SZ", "300502", "新易盛"),
 			},
@@ -46,6 +47,34 @@ func TestAnalyzerConvertsCandidatePlanInputs(t *testing.T) {
 	require.Equal(t, domain.AssetTypeAShare, intents[0].AssetType)
 	require.Equal(t, domain.MarketSZ, intents[0].Market)
 	require.Equal(t, "M4 Tester", intents[0].Analyst)
+}
+
+func TestAnalyzerUsesExtractedAuthorWhenExplicitAuthorIsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAgentResponse(t, w, agentclient.ResolveDocumentResponse{
+			SchemaVersion:   agentclient.ResponseSchemaVersion,
+			AgentVersion:    "test-agent",
+			Status:          agentclient.AgentStatusResolved,
+			ExtractedAuthor: "张豪杰、韩笑",
+			CandidatePlanInput: []agentclient.AgentCandidatePlanInput{
+				testCandidatePlanInput("杰瑞股份", "002353.SZ", "002353", "杰瑞股份"),
+			},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := agentclient.NewAnalyzer(testRuntimeWithAgent(server.URL), nil)
+	intents, err := analyzer.Analyze(context.Background(), domain.Document{
+		ID:          10,
+		Institution: "开源证券",
+	}, domain.ParseRun{
+		ID:          20,
+		CleanedText: "张豪杰（分析师） 韩笑（分析师） 推荐杰瑞股份",
+		Chunks:      []domain.Chunk{{Index: 0, Text: "张豪杰（分析师） 韩笑（分析师） 推荐杰瑞股份"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, intents, 1)
+	require.Equal(t, "张豪杰", intents[0].Analyst)
 }
 
 func TestAnalyzerConvertsRawIntentsWhenNoCandidateInputs(t *testing.T) {

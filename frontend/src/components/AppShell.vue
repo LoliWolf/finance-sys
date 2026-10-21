@@ -7,10 +7,12 @@ import {
   BriefcaseBusiness,
   ChevronRight,
   FileSearch,
+  Files,
   Menu,
   Orbit,
   PanelLeftClose,
   SearchCode,
+  WalletCards,
   X,
 } from 'lucide-vue-next'
 import { api } from '../api/client'
@@ -28,7 +30,9 @@ const meta = computed(() => ({
 const navigation = [
   { to: '/', label: '表现总览', caption: '榜单与全局指标', icon: BarChart3 },
   { to: '/recommendations', label: '推荐明细', caption: '逐条检验事实', icon: FileSearch },
+  { to: '/document-reports', label: '文档报告', caption: '单篇追踪与导出', icon: Files },
   { to: '/securities', label: '标的视角', caption: '热度与收益分布', icon: Orbit },
+  { to: '/simulation-trading', label: '模拟交易', caption: '账户、持仓与成交', icon: WalletCards },
   { to: '/workbench', label: '分析工作台', caption: '文档与评价任务', icon: BriefcaseBusiness },
 ]
 

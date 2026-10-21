@@ -23,6 +23,8 @@ cmd/api/cache
 testdata/游资大V复盘文章汇总2026
 cmd/api/__debug_*.exe
 agent/.venv/
+trading_agent/.venv/
+trading_agent/logs/
 tools/**/.venv/
 frontend/node_modules/
 frontend/*.tsbuildinfo
@@ -33,5 +35,21 @@ api.exe
 /api
 cmd/api/.ocr_work
 .ocr_work/
+/__pycache__/
+scripts/**/__pycache__/
 /guziyuan_pdf_ocr_tool/
 testdata/guziyuanpdf
+
+# Local credentials, trust material, data stores, and generated work files.
+.env
+.env.*
+!.env.example
+**/bootstrap.env
+conf/*.pem
+conf/*.key
+*.db
+*.db-*
+*.sqlite*
+__pycache__/
+.pytest_cache/
+/draft_*/
