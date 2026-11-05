@@ -226,12 +226,12 @@ func (s *AutomaticScheduler) enqueueDueTasks(ctx context.Context, cfg *config.Co
 
 	openListSchedule := cfg.Scheduler.OpenListDocumentIngestion
 	if openListSchedule.Enabled {
-		scheduledAt := hourlyScheduledAt(now, openListSchedule.Minute)
-		if !now.Before(scheduledAt) {
+		scheduledAt := dailyScheduledAt(now, openListSchedule.Hour, openListSchedule.Minute)
+		if withinScheduledMinute(now, scheduledAt) {
 			if _, _, err := s.tasks.Enqueue(
 				ctx,
 				domain.ScheduledTaskTypeOpenListDocuments,
-				scheduledAt.Format("2006-01-02T15"),
+				scheduledAt.Format(time.DateOnly),
 				scheduledAt,
 				OpenListDocumentIngestionRequest{FullScan: false},
 			); err != nil {
@@ -300,9 +300,9 @@ func dailyScheduledAt(now time.Time, hour int, minute int) time.Time {
 	return time.Date(year, month, day, hour, minute, 0, 0, now.Location())
 }
 
-func hourlyScheduledAt(now time.Time, minute int) time.Time {
-	year, month, day := now.Date()
-	return time.Date(year, month, day, now.Hour(), minute, 0, 0, now.Location())
+// OpenList never catches up outside its daily start minute after a restart.
+func withinScheduledMinute(now, scheduledAt time.Time) bool {
+	return !now.Before(scheduledAt) && now.Before(scheduledAt.Add(time.Minute))
 }
 
 func (s *AutomaticScheduler) handleStockDailyPreviousDay(ctx context.Context, rawInput json.RawMessage) (any, error) {

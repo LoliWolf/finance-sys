@@ -149,7 +149,10 @@ func (c *Client) Discover(ctx context.Context, rootPath string, now time.Time, l
 		}
 	}
 
-	cutoffDate := beginningOfDay(now).AddDate(0, 0, -lookbackDays)
+	// ArticleDate is a date-only UTC value; compare calendar labels rather than
+	// instants so the configured timezone does not move a boundary by one day.
+	today := now.Format(time.DateOnly)
+	cutoffDate := now.AddDate(0, 0, -lookbackDays).Format(time.DateOnly)
 	articles := make([]RemoteArticle, 0)
 	seenDirectories := make(map[string]struct{}, len(dateDirectories))
 	for _, directory := range dateDirectories {
@@ -160,7 +163,8 @@ func (c *Client) Discover(ctx context.Context, rootPath string, now time.Time, l
 		// Date directories are the source of truth for scheduled ingestion. NAS
 		// remounts and bulk syncs can rewrite directory mtimes, so using mtime as
 		// a fallback here could unexpectedly enqueue a full historical archive.
-		if !fullScan && directory.ArticleDate.Before(cutoffDate) {
+		articleDate := directory.ArticleDate.Format(time.DateOnly)
+		if !fullScan && (articleDate < cutoffDate || articleDate >= today) {
 			continue
 		}
 		objects, listErr := c.List(ctx, directory.Path)
@@ -347,11 +351,6 @@ func parseDateDirectory(name string, _ *time.Location) (time.Time, bool) {
 	// persist the previous calendar day.
 	parsed, err := time.ParseInLocation("20060102", name, time.UTC)
 	return parsed, err == nil
-}
-
-func beginningOfDay(value time.Time) time.Time {
-	year, month, day := value.Date()
-	return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
 }
 
 func sourceVersion(object Object) string {

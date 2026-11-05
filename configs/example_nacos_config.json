@@ -105,7 +105,7 @@
       "root_path": "/我的资源/游资大V复盘文章汇总2026",
       "institution": "个人",
       "request_timeout_ms": 120000,
-      "scan_lookback_days": 14
+      "scan_lookback_days": 7
     }
   },
   "llm": {
@@ -279,7 +279,8 @@
     },
     "openlist_document_ingestion": {
       "enabled": false,
-      "minute": 15
+      "hour": 5,
+      "minute": 0
     }
   },
   "trading": {

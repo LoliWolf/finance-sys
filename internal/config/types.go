@@ -279,7 +279,7 @@ type SchedulerConfig struct {
 	SecurityMasterRefresh          DailyTaskScheduleConfig                `json:"security_master_refresh"`
 	StockDailyPreviousDay          DailyTaskScheduleConfig                `json:"stock_daily_previous_day"`
 	RecommendationEvaluationRecent RecommendationEvaluationScheduleConfig `json:"recommendation_evaluation_recent"`
-	OpenListDocumentIngestion      HourlyTaskScheduleConfig               `json:"openlist_document_ingestion"`
+	OpenListDocumentIngestion      DailyTaskScheduleConfig                `json:"openlist_document_ingestion"`
 }
 
 type DailyTaskScheduleConfig struct {
@@ -291,11 +291,6 @@ type DailyTaskScheduleConfig struct {
 type RecommendationEvaluationScheduleConfig struct {
 	DailyTaskScheduleConfig
 	LookbackDays int `json:"lookback_days"`
-}
-
-type HourlyTaskScheduleConfig struct {
-	Enabled bool `json:"enabled"`
-	Minute  int  `json:"minute"`
 }
 
 type TradingConfig struct {

@@ -145,7 +145,7 @@ func Validate(cfg *Config) error {
 			require(cfg.Evaluation.RecommendationPerformance.AsyncWorker.Enabled, "evaluation.recommendation_performance.async_worker must be enabled when scheduler.recommendation_evaluation_recent is enabled")
 		}
 		if cfg.Scheduler.OpenListDocumentIngestion.Enabled {
-			validateHourlySchedule("scheduler.openlist_document_ingestion", cfg.Scheduler.OpenListDocumentIngestion, require)
+			validateDailySchedule("scheduler.openlist_document_ingestion", cfg.Scheduler.OpenListDocumentIngestion, require)
 			require(cfg.ExternalDocuments.OpenList.Enabled, "external_documents.openlist must be enabled when scheduler.openlist_document_ingestion is enabled")
 		}
 	}
@@ -349,10 +349,6 @@ func sameStringSet(actual, expected []string) bool {
 
 func validateDailySchedule(name string, cfg DailyTaskScheduleConfig, require func(bool, string)) {
 	require(cfg.Hour >= 0 && cfg.Hour <= 23, name+".hour must be in [0,23]")
-	require(cfg.Minute >= 0 && cfg.Minute <= 59, name+".minute must be in [0,59]")
-}
-
-func validateHourlySchedule(name string, cfg HourlyTaskScheduleConfig, require func(bool, string)) {
 	require(cfg.Minute >= 0 && cfg.Minute <= 59, name+".minute must be in [0,59]")
 }
 
