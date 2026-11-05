@@ -141,6 +141,61 @@ func TestDownloadDoesNotForwardAuthorizationToExternalRawURL(t *testing.T) {
 	}
 }
 
+func TestDiscoverPreviousSevenCalendarDatesExcludesTodayAndFuture(t *testing.T) {
+	dates := []string{"20261029", "20261030", "20261101", "20261105", "20261106", "20261107"}
+	var listed []string
+	server := newOpenListTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/login" {
+			writeOpenListResponse(t, w, map[string]any{"token": "test-token"})
+			return
+		}
+		var request struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if request.Path == "/articles" {
+			objects := make([]map[string]any, 0, len(dates))
+			for _, date := range dates {
+				objects = append(objects, map[string]any{"name": date, "is_dir": true})
+			}
+			writeOpenListResponse(t, w, map[string]any{"content": objects, "total": len(objects)})
+			return
+		}
+		listed = append(listed, request.Path)
+		writeOpenListResponse(t, w, map[string]any{
+			"content": []map[string]any{{"name": "article.pdf", "is_dir": false}}, "total": 1,
+		})
+	})
+	defer server.Close()
+	client := mustOpenListClient(t, server.URL)
+	// At this Beijing instant the UTC date is still November 5.
+	now := time.Date(2026, time.November, 6, 5, 0, 0, 0, config.ChinaLocation)
+	articles, err := client.Discover(context.Background(), "/articles", now, 7, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"2026-10-30", "2026-11-01", "2026-11-05"}
+	if len(articles) != len(want) || len(listed) != len(want) {
+		t.Fatalf("articles=%v, listed=%v", articles, listed)
+	}
+	for i, article := range articles {
+		if article.ArticleDate.Format(time.DateOnly) != want[i] {
+			t.Fatalf("article date=%s, want %s", article.ArticleDate, want[i])
+		}
+	}
+	listed = nil
+	articles, err = client.Discover(context.Background(), "/articles", now, 7, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(articles) != len(dates) {
+		t.Fatalf("explicit full scan should retain archive behavior: got %d articles", len(articles))
+	}
+}
+
 func mustOpenListClient(t *testing.T, baseURL string) *Client {
 	t.Helper()
 	client, err := New(config.OpenListDocumentSourceConfig{

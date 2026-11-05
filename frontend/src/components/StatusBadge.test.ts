@@ -13,4 +13,10 @@ describe('StatusBadge', () => {
     const wrapper = mount(StatusBadge, { props: { status: 'CUSTOM' } })
     expect(wrapper.text()).toContain('CUSTOM')
   })
+
+  it('renders skipped tasks distinctly from completed tasks', () => {
+    const wrapper = mount(StatusBadge, { props: { status: 'SKIPPED' } })
+    expect(wrapper.text()).toContain('已跳过')
+    expect(wrapper.classes()).toContain('status-skipped')
+  })
 })

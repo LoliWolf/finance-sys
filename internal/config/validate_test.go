@@ -129,6 +129,35 @@ func TestValidateOpenListSchedulerRequiresConfiguredSource(t *testing.T) {
 	require.ErrorContains(t, err, "external_documents.openlist must be enabled")
 }
 
+func TestValidateOpenListDailyScheduleClock(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	for _, test := range []struct {
+		hour, minute int
+		wantError    string
+	}{
+		{5, 0, ""},
+		{-1, 0, "scheduler.openlist_document_ingestion.hour"},
+		{24, 0, "scheduler.openlist_document_ingestion.hour"},
+		{5, -1, "scheduler.openlist_document_ingestion.minute"},
+		{5, 60, "scheduler.openlist_document_ingestion.minute"},
+	} {
+		var cfg config.Config
+		require.NoError(t, json.Unmarshal(raw, &cfg))
+		cfg.Scheduler.Enabled = true
+		cfg.Scheduler.OpenListDocumentIngestion = config.DailyTaskScheduleConfig{Enabled: true, Hour: test.hour, Minute: test.minute}
+		cfg.ExternalDocuments.OpenList.Enabled = true
+		cfg.ExternalDocuments.OpenList.Username = "test-reader"
+		cfg.ExternalDocuments.OpenList.Password = "test-password"
+		err := config.Validate(&cfg)
+		if test.wantError == "" {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, test.wantError)
+		}
+	}
+}
+
 func TestValidateAllowsConfiguredLongAgentTimeout(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
 	require.NoError(t, err)

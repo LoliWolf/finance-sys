@@ -103,8 +103,8 @@
       "root_path": "/我的资源/游资大V复盘文章汇总2026",
       "institution": "个人",
       "request_timeout_ms": 120000,
-      // 按文章日期回看；不使用目录 mtime，避免 NAS 重挂载或迁移触发全年历史回放。
-      "scan_lookback_days": 14
+      // 按文章日期回看前 7 个自然日（不含当天/未来日期），不使用目录 mtime。
+      "scan_lookback_days": 7
     }
   },
   "llm": {
@@ -275,9 +275,10 @@
       "lookback_days": 90
     },
     "openlist_document_ingestion": {
-      // AutoSave 整点转存后延迟 15 分钟扫描 OpenList。
+      // 北京时间每天 05:00 仅启动一次；错过该分钟不在白天补跑，失败文件等次日扫描。
       "enabled": false,
-      "minute": 15
+      "hour": 5,
+      "minute": 0
     }
   },
   "trading": {
