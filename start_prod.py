@@ -449,6 +449,17 @@ def loaded_job(label):
     return job["binary"] if job else None
 
 
+def wait_for_job_exit(label, pid=None, timeout=25):
+    # bootout can return before the supervisor and launchd's service record exit.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = run([tool("launchctl"), "print", launchd_target(label)], capture=True, check=False)
+        if result.returncode and (not pid or process_path(pid, "Darwin") is None):
+            return
+        time.sleep(.1)
+    raise DeploymentError("Previous launchd job did not fully exit; refusing to reload " + label)
+
+
 def stop_api_jobs(root, system, production_process=None):
     if system != "Darwin":
         return
@@ -462,6 +473,7 @@ def stop_api_jobs(root, system, production_process=None):
     for label, job in jobs:
         if job:
             run([tool("launchctl"), "bootout", launchd_target(label)])
+            wait_for_job_exit(label, job.get("pid"))
 
 
 def make_plist(label, command, cwd, environment, logs):
@@ -530,9 +542,11 @@ def service_command(root, service, binary=None):
 
 def stop_launched(label, process, system, expected_binary):
     if system == "Darwin":
-        path = loaded_job(label)
+        job = loaded_job_info(label)
+        path = job["binary"] if job else None
         if path == macos_entry(expected_binary).resolve():
             run([tool("launchctl"), "bootout", launchd_target(label)])
+            wait_for_job_exit(label, job.get("pid"))
         elif path:
             raise DeploymentError("Launchd job identity changed; refusing to stop " + label)
     elif process:
@@ -579,6 +593,7 @@ def stop_verified_agent(cfg, root, system):
                 if latest != owned:
                     raise DeploymentError("Agent supervisor changed before stop")
                 run([tool("launchctl"), "bootout", launchd_target(AGENT_LABEL)])
+                wait_for_job_exit(AGENT_LABEL, owned["pid"])
                 deadline = time.monotonic() + 25
                 while time.monotonic() < deadline:
                     if not process_path(pids[0], system):
@@ -617,6 +632,7 @@ def stop_verified_agent(cfg, root, system):
         raise DeploymentError("Agent identity changed before restart")
     info("Explicitly upgrade verified analysis Agent PID " + before_pid)
     run([tool("launchctl"), "bootout", launchd_target(label)])
+    wait_for_job_exit(label)
     deadline = time.monotonic() + 25
     while time.monotonic() < deadline:
         current = run([tool("lsof"), "-nP", "-t", "-iTCP:" + str(port), "-sTCP:LISTEN"], capture=True, check=False)
@@ -718,7 +734,13 @@ def deploy(root, binary, cfg, address, system, restart_agent=False):
             raise DeploymentError("Health response did not come from the new production executable")
         write_json(root / "tmp/production/active.json", dict(current, port=port, logs=str(logs)))
     except Exception as original:
-        stop_launched(API_LABEL, process, system, binary)
+        try:
+            stop_launched(API_LABEL, process, system, binary)
+        except (DeploymentError, OSError, subprocess.SubprocessError) as cleanup_error:
+            raise DeploymentError(
+                "Deployment failed ({}); safe cleanup/rollback blocked ({}); logs: {}".format(
+                    original, cleanup_error, logs)
+            ) from original
         if previous and Path(previous["binary"]).is_file():
             info("New API failed; attempting rollback to the previous executable")
             restored = None
