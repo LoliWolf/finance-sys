@@ -277,6 +277,8 @@ class ProductionLauncherTests(unittest.TestCase):
                 stopped.append(argv[-1])
                 return subprocess.CompletedProcess(argv, 0, "")
             if argv[:2] == ["launchctl", "print"]:
+                if stopped:
+                    return subprocess.CompletedProcess(argv, 1, "")
                 if argv[-1].endswith(prod.AGENT_LABEL):
                     return subprocess.CompletedProcess(argv, 1, "")
                 count = sum(c[:2] == ["launchctl", "print"] and c[-1].endswith("com.loliwolf.finance-sys.agent") for c in calls)
@@ -389,10 +391,63 @@ class ProductionLauncherTests(unittest.TestCase):
         self.assertNotIn(b"db-secret", raw)
 
     def test_cleanup_will_not_stop_another_launchd_program(self):
-        with patch.object(prod, "loaded_job", return_value=Path("/unrelated/app")), patch.object(prod, "run") as command:
+        with patch.object(prod, "loaded_job_info", return_value={"binary": Path("/unrelated/app"), "pid": 123}), patch.object(prod, "run") as command:
             with self.assertRaises(prod.DeploymentError):
                 prod.stop_launched(prod.API_LABEL, None, "Darwin", self.root / "api")
             command.assert_not_called()
+
+    def test_wait_for_unload_requires_service_record_and_supervisor_exit(self):
+        results = [subprocess.CompletedProcess([], 0, "still loaded"),
+                   subprocess.CompletedProcess([], 1, ""),
+                   subprocess.CompletedProcess([], 1, "")]
+        with patch.object(prod, "tool", side_effect=lambda s: s), patch.object(prod, "run", side_effect=results) as command, \
+                patch.object(prod, "process_path", side_effect=[Path("/python"), None]) as process, \
+                patch.object(prod.time, "sleep"):
+            prod.wait_for_job_exit(prod.API_LABEL, 123)
+        self.assertEqual(command.call_count, 3)
+        self.assertEqual(process.call_count, 2)
+
+    def test_unload_timeout_never_force_kills_or_replaces_a_job(self):
+        with patch.object(prod.time, "monotonic", side_effect=[0, 0, 26]), patch.object(prod.time, "sleep"), \
+                patch.object(prod, "tool", side_effect=lambda s: s), \
+                patch.object(prod, "run", return_value=subprocess.CompletedProcess([], 0, "still loaded")) as command, \
+                patch.object(prod.os, "kill") as kill:
+            with self.assertRaisesRegex(prod.DeploymentError, "fully exit"):
+                prod.wait_for_job_exit(prod.API_LABEL, 123)
+        kill.assert_not_called()
+        self.assertEqual(command.call_count, 1)
+        self.assertEqual(command.call_args.args[0][:2], ["launchctl", "print"])
+
+    def test_verified_api_bootout_waits_before_allowing_next_launch(self):
+        job = {"binary": self.root / "tmp/api_nacos", "pid": 123}
+        with patch.object(prod, "loaded_job_info", side_effect=[job, None]), \
+                patch.object(prod, "tool", side_effect=lambda s: s), patch.object(prod, "run") as command, \
+                patch.object(prod, "wait_for_job_exit") as wait:
+            prod.stop_api_jobs(self.root, "Darwin", {"pid": 123, "binary": str(job["binary"])})
+        wait.assert_called_once_with(prod.API_LABEL, 123)
+        self.assertEqual(command.call_args.args[0][:2], ["launchctl", "bootout"])
+
+    def test_failed_job_cleanup_also_waits_for_supervisor_exit(self):
+        job = {"binary": self.root / "tmp/api_nacos", "pid": 123}
+        with patch.object(prod, "loaded_job_info", return_value=job), \
+                patch.object(prod, "tool", side_effect=lambda s: s), patch.object(prod, "run"), \
+                patch.object(prod, "wait_for_job_exit") as wait:
+            prod.stop_launched(prod.API_LABEL, None, "Darwin", job["binary"])
+        wait.assert_called_once_with(prod.API_LABEL, 123)
+
+    def test_unknown_cleanup_identity_preserves_original_failure_and_blocks_rollback(self):
+        binary = self.root / "tmp/production/releases/new/finance-sys-api"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"new")
+        previous = {"pid": 123, "binary": str(self.root / "tmp/api_nacos")}
+        Path(previous["binary"]).write_bytes(b"old")
+        with patch.object(prod, "listener", side_effect=[previous, None]), patch.object(prod, "ensure_agent"), \
+                patch.object(prod, "stop_api_jobs"), patch.object(prod, "stop_process"), \
+                patch.object(prod, "launch", side_effect=prod.DeploymentError("bootstrap failed")) as launch, \
+                patch.object(prod, "stop_launched", side_effect=prod.DeploymentError("job identity changed")):
+            with self.assertRaisesRegex(prod.DeploymentError, "bootstrap failed.*job identity changed"):
+                prod.deploy(self.root, binary, config(), "nacos:8848", "Darwin")
+        self.assertEqual(launch.call_count, 1)
 
     def test_concurrent_deployment_is_rejected(self):
         with prod.deployment_lock(self.root):
