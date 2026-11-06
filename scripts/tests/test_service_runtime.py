@@ -90,7 +90,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((workspace / "active.pdf").read_bytes(), b"keep")
 
     def test_runtime_mode_requires_production_and_cannot_be_used_as_build(self):
-        with patch.object(prod, "report_runtime_failure") as report, patch.dict(os.environ, {"FINANCE_SYS_ENV": "TEST"}):
+        with patch.object(prod, "ROOT", self.root), patch.object(prod, "report_runtime_failure") as report, \
+                patch.dict(os.environ, {"FINANCE_SYS_ENV": "TEST"}):
             with self.assertRaises(SystemExit) as result:
                 prod.main(["--supervise", "agent"])
         self.assertEqual(result.exception.code, 1)

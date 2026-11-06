@@ -47,6 +47,14 @@ def info(message):
     print("[INFO] " + message, flush=True)
 
 
+def require_production_host(root):
+    if (root / "tmp/production/relocated.json").exists():
+        raise DeploymentError(
+            "Production was relocated to Mac Server. Deploy or check production "
+            "over SSH on macserver; use --build-only on this development checkout."
+        )
+
+
 def run(argv, *, cwd=ROOT, env=None, capture=False, check=True, timeout=None):
     argv = [str(value) for value in argv]
     if os.name == "nt" and argv[0].lower().endswith((".cmd", ".bat")):
@@ -746,6 +754,7 @@ def main(argv=None):
             parser.error("Invalid service supervisor arguments")
         service = args.supervise
         try:
+            require_production_host(ROOT)
             if os.environ.get("FINANCE_SYS_ENV") != "PROD":
                 raise DeploymentError("Service supervisor requires the production environment")
             command, cwd = service_command(ROOT, service, args.binary)
@@ -758,6 +767,8 @@ def main(argv=None):
     system = platform.system()
     if system not in ("Darwin", "Windows"):
         raise DeploymentError("This production launcher supports macOS and Windows")
+    if not args.build_only:
+        require_production_host(ROOT)
     if args.status:
         cfg = load_nacos(nacos_address(ROOT, args.env_file))
         current = listener(cfg["service"]["http"]["port"], ROOT, system)
