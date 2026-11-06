@@ -140,7 +140,11 @@ FinanceSys 希望逐步形成一张中国市场观点网络：连接内容来源
 
 正式环境只使用仓库根目录的 `start_prod.py`，原来的多套编译、启动和调试包装脚本已移除。
 
-macOS（在已登录用户的终端执行）：
+本项目默认工作流为**本地开发验证通过后，直接部署到 SSH 主机 `macserver` 的 `~/Projects/finance-sys`**。常规代码发布已获用户授权；本轮明确要求暂不发布时除外。开发 Mac 不再运行生产实例，以下正式启动和生产状态检查均在 Mac Server 执行，并使用目标机已配置的 Python/Go/Node PATH。
+
+前端嵌入 Go 程序，无需单独启动 Node 开发服务。线上 Go API/前端、分析 Agent 和确定性模拟交易 Agent 作为完整系统维护；启动这些服务不代表解除交易禁单或开启自动下单。
+
+macOS（在 Mac Server 已登录用户的终端执行）：
 
 ```bash
 python3 start_prod.py
@@ -164,9 +168,11 @@ py -3 start_prod.py
 # 只测试、编译、签名；不请求 Nacos、不启动或停止服务
 python3 start_prod.py --build-only
 
-# 只查看生产 API 与分析 Agent 状态
+# 在 Mac Server 上查看生产 API 与分析 Agent 状态
 python3 start_prod.py --status
 ```
+
+已迁出的开发工作区保留 `tmp/production/relocated.json` 标记，统一入口会阻止在这里误启动第二套生产服务，并提示通过 SSH 操作 Mac Server；本地 `--build-only` 不受影响。修改 Agent 代码时，发布需覆盖对应 Agent 进程，不能因为旧进程健康就把它当成新版本；不应附带重启无关的 Windows Bridge/Runner。
 
 macOS 构建会生成 Mach-O UUID，并封装为包含本地网络用途说明的 `FinanceSys.app`，使用固定标识 `cn.financesys.api.production` 做本地 ad-hoc 临时签名，再校验签名和 UUID。启动时注册应用身份，通过 `AssociatedBundleIdentifiers` 关联 launchd 服务，便于系统识别并显示网络授权。没有购买或使用苹果开发者证书；这种签名不等于 Apple Developer ID，也不替代系统的本地网络授权。如果系统提示本地网络权限，需要人工处理，脚本不会关闭系统安全检查。
 

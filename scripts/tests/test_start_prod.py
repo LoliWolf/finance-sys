@@ -115,6 +115,46 @@ class ProductionLauncherTests(unittest.TestCase):
             nacos.assert_not_called()
             deploy.assert_not_called()
 
+    def test_relocated_checkout_cannot_start_or_check_local_production(self):
+        marker = self.root / "tmp/production/relocated.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{"production_host":"macserver"}')
+        for argv in ([], ["--status"]):
+            with self.subTest(argv=argv), patch.object(prod, "ROOT", self.root), \
+                    patch.object(prod.platform, "system", return_value="Darwin"), \
+                    patch.object(prod, "load_nacos") as nacos, \
+                    patch.object(prod, "build_release") as build, patch.object(prod, "deploy") as deploy:
+                with self.assertRaisesRegex(prod.DeploymentError, "relocated"):
+                    prod.main(argv)
+                nacos.assert_not_called()
+                build.assert_not_called()
+                deploy.assert_not_called()
+
+    def test_relocated_checkout_can_still_validate_without_production_access(self):
+        marker = self.root / "tmp/production/relocated.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{"production_host":"macserver"}')
+        with patch.object(prod, "ROOT", self.root), patch.object(prod.platform, "system", return_value="Darwin"), \
+                patch.object(prod, "build_release", return_value=self.root / "api") as build, \
+                patch.object(prod, "load_nacos") as nacos, patch.object(prod, "deploy") as deploy:
+            prod.main(["--build-only"])
+            build.assert_called_once_with(self.root, "Darwin")
+            nacos.assert_not_called()
+            deploy.assert_not_called()
+
+    def test_relocated_checkout_cannot_restore_a_production_supervisor(self):
+        marker = self.root / "tmp/production/relocated.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{"production_host":"macserver"}')
+        with patch.object(prod, "ROOT", self.root), patch.dict(os.environ, {"FINANCE_SYS_ENV": "PROD"}), \
+                patch.object(prod, "supervise") as supervise, \
+                patch.object(prod, "report_runtime_failure") as report:
+            with self.assertRaises(SystemExit) as result:
+                prod.main(["--supervise", "agent"])
+            self.assertEqual(result.exception.code, 1)
+            supervise.assert_not_called()
+            self.assertIn("relocated", str(report.call_args.args[2]))
+
     def test_configuration_target_change_during_build_aborts_before_deployment(self):
         initial = config()
         changed = config()
