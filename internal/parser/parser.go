@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -294,7 +295,16 @@ func hasUsablePDFText(text string) bool {
 	return strings.TrimSpace(cleanText(text)) != ""
 }
 
-func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRConfig) (string, error) {
+func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRConfig) (text string, resultErr error) {
+	workDir, err := os.MkdirTemp("", "finance-sys-ocr-")
+	if err != nil {
+		return "", fmt.Errorf("create isolated OCR workspace: %w", err)
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(workDir); cleanupErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove OCR workspace: %w", cleanupErr))
+		}
+	}()
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -310,12 +320,14 @@ func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRCon
 		args = append(args, arg)
 	}
 
-	command, args, err := buildOCRExec(command, args)
+	command, args, err = buildOCRExec(command, args)
 	if err != nil {
 		return "", err
 	}
 
 	cmd := exec.CommandContext(ocrCtx, command, args...)
+	cmd.Env = append(os.Environ(), "FINANCE_SYS_OCR_WORK_DIR="+workDir)
+	configureOCRProcess(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
@@ -333,7 +345,7 @@ func parsePDFWithOCR(ctx context.Context, inputPath string, cfg config.PDFOCRCon
 			return "", fmt.Errorf("%s", message)
 		}
 	}
-	text := string(output)
+	text = string(output)
 	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("ocr produced empty text")
 	}

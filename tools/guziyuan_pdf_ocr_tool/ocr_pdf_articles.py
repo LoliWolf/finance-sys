@@ -450,43 +450,43 @@ def extract_text_from_pdf(
     render_dir.mkdir(parents=True, exist_ok=True)
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
-    if source in {"auto", "text"}:
-        text_layer = clean_ocr_text(extract_pdf_text_layout(pdf) or extract_pdf_text(pdf))
-        if looks_like_article_text(text_layer):
-            if not keep_work:
-                shutil.rmtree(pdf_work, ignore_errors=True)
-            return text_layer
-        if source == "text":
-            raise RuntimeError(f"No substantial clean text layer found in {pdf}")
+    try:
+        if source in {"auto", "text"}:
+            text_layer = clean_ocr_text(extract_pdf_text_layout(pdf) or extract_pdf_text(pdf))
+            if looks_like_article_text(text_layer):
+                return text_layer
+            if source == "text":
+                raise RuntimeError(f"No substantial clean text layer found in {pdf}")
 
-    raw_parts: List[str] = []
-    page_images: List[Path] = []
-    if source in {"auto", "extract"}:
-        page_images = extract_pdf_images(pdf, image_dir)
-        if source == "extract" and not page_images:
-            raise RuntimeError(f"No embedded article images found in {pdf}")
-    if not page_images:
-        page_images = render_pdf(pdf, render_dir, dpi)
+        raw_parts: List[str] = []
+        page_images: List[Path] = []
+        if source in {"auto", "extract"}:
+            page_images = extract_pdf_images(pdf, image_dir)
+            if source == "extract" and not page_images:
+                raise RuntimeError(f"No embedded article images found in {pdf}")
+        if not page_images:
+            page_images = render_pdf(pdf, render_dir, dpi)
 
-    for page_index, page_image in enumerate(page_images, start=1):
-        with Image.open(page_image) as im:
-            if page_image.parent == image_dir:
-                im = prepare_extracted_image(im, extract_width)
-            cleaned = remove_colored_watermark(im, sat_threshold, light_threshold)
-        for chunk_index, chunk in enumerate(split_image(cleaned, chunk_height, overlap), start=1):
-            chunk_path = chunk_dir / f"p{page_index:03d}_{chunk_index:03d}.png"
-            chunk.save(chunk_path)
-            raw_parts.append(ocr_image(chunk_path, language))
+        for page_index, page_image in enumerate(page_images, start=1):
+            with Image.open(page_image) as im:
+                if page_image.parent == image_dir:
+                    im = prepare_extracted_image(im, extract_width)
+                cleaned = remove_colored_watermark(im, sat_threshold, light_threshold)
+            for chunk_index, chunk in enumerate(split_image(cleaned, chunk_height, overlap), start=1):
+                chunk_path = chunk_dir / f"p{page_index:03d}_{chunk_index:03d}.png"
+                chunk.save(chunk_path)
+                raw_parts.append(ocr_image(chunk_path, language))
 
-    merged = ""
-    for part in raw_parts:
-        cleaned_part = clean_ocr_text(part)
-        if cleaned_part:
-            merged = merge_overlap(merged, cleaned_part)
+        merged = ""
+        for part in raw_parts:
+            cleaned_part = clean_ocr_text(part)
+            if cleaned_part:
+                merged = merge_overlap(merged, cleaned_part)
 
-    if not keep_work:
-        shutil.rmtree(pdf_work, ignore_errors=True)
-    return merged
+        return merged
+    finally:
+        if not keep_work:
+            shutil.rmtree(pdf_work)
 
 
 def process_pdf(
@@ -552,7 +552,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="OCR image-heavy Chinese PDFs into text.")
     parser.add_argument("input", nargs="?", default="-", help="PDF file, directory, or '-' to read PDF bytes from stdin")
     parser.add_argument("--out-dir", default="ocr_output", help="Where text files are written")
-    parser.add_argument("--work-dir", default=".ocr_work", help="Temporary render/chunk directory")
+    parser.add_argument("--work-dir", default=os.environ.get("FINANCE_SYS_OCR_WORK_DIR", ".ocr_work"), help="Temporary render/chunk directory")
     parser.add_argument("--dpi", type=int, default=150, help="PDF render DPI")
     parser.add_argument("--chunk-height", type=int, default=4200, help="Chunk height under Windows OCR max dimension")
     parser.add_argument("--overlap", type=int, default=220, help="Vertical overlap between chunks")

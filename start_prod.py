@@ -26,11 +26,13 @@ import tempfile
 import time
 from urllib.parse import urlencode, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
+from scripts.service_runtime import supervise, report_runtime_failure
 
 
 ROOT = Path(__file__).resolve().parent
 API_LABEL = "cn.financesys.api.production"
 AGENT_LABEL = "cn.financesys.agent.production"
+TRADING_AGENT_LABEL = "cn.financesys.trading-agent.production"
 LEGACY_API_LABEL = "com.loliwolf.finance-sys.api"
 SIGNING_IDENTIFIER = API_LABEL
 LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
@@ -139,7 +141,9 @@ def validate_config(cfg):
 
 def deployment_targets(cfg):
     http = cfg["service"]["http"]
-    return (http.get("host"), http["port"], http["port_test"], cfg["agent"]["endpoint"])
+    trading_agent = cfg.get("trading", {}).get("agent", {})
+    return (http.get("host"), http["port"], http["port_test"], cfg["agent"]["endpoint"],
+            trading_agent.get("enabled"), trading_agent.get("endpoint"), trading_agent.get("health_endpoint"))
 
 
 def load_nacos(address):
@@ -275,7 +279,7 @@ def build_release(root, system):
             raise DeploymentError("The installed Go linker cannot generate Mach-O UUID with -B gobuildid")
     environment = clean_environment()
     info("Run deployment regression tests and frontend/Go gates (TEST environment)")
-    run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "scripts/tests", "-p", "test_start_prod.py"], cwd=root, env=environment)
+    run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "scripts/tests", "-p", "test_*.py"], cwd=root, env=environment)
     run([npm, "ci", "--no-audit", "--no-fund"], cwd=root / "frontend", env=environment)
     run([npm, "run", "typecheck"], cwd=root / "frontend", env=environment)
     run([npm, "test"], cwd=root / "frontend", env=environment)
@@ -409,6 +413,26 @@ def loaded_job_info(label):
     if not match:
         raise DeploymentError("Cannot verify program of launchd job " + label)
     pid = re.search(r"^\s*pid = (\d+)$", result.stdout, re.MULTILINE)
+    args = re.search(r"arguments = \{\n(.*?)\n\s*\}", result.stdout, re.DOTALL)
+    argv = [line.strip() for line in args.group(1).splitlines()] if args else []
+    if len(argv) >= 4 and argv[2] == "--supervise":
+        script = Path(argv[1])
+        root = script.parent
+        service = {"api": API_LABEL, "agent": AGENT_LABEL, "trading-agent": TRADING_AGENT_LABEL}.get(argv[3])
+        if (script.name != "start_prod.py" or service != label or script != ROOT / "start_prod.py"
+                or Path(match.group(1).strip()).resolve() != Path(argv[0]).resolve()
+                or Path(argv[0]).resolve() != Path(sys.executable).resolve()):
+            raise DeploymentError("Unverified service supervisor for " + label)
+        binary = None
+        if argv[3] == "api":
+            if len(argv) != 6 or argv[4] != "--binary" or not managed_binary(argv[5], root):
+                raise DeploymentError("Unverified API supervisor binary")
+            binary = argv[5]
+        elif len(argv) != 4:
+            raise DeploymentError("Unexpected sidecar supervisor arguments")
+        command, _ = service_command(root, argv[3], binary)
+        return {"binary": Path(command[0]).resolve(), "pid": int(pid.group(1)) if pid else None,
+                "supervised": True, "command": [str(value) for value in command], "root": root}
     return {"binary": Path(match.group(1).strip()).resolve(), "pid": int(pid.group(1)) if pid else None}
 
 
@@ -457,18 +481,43 @@ def launch(command, label, cwd, environment, logs, system):
         keys = ("PATH", "NACOS_SERVER_ADDR", "FINANCE_SYS_ENV", "GOTOOLCHAIN", "OPEN_UPLOAD_PAGE", "PYTHONPATH")
         service_env = {key: environment[key] for key in keys if key in environment}
         spec = make_plist(label, command, cwd, service_env, logs)
+        roles = {API_LABEL: "api", AGENT_LABEL: "agent", TRADING_AGENT_LABEL: "trading-agent"}
+        if label not in roles:
+            raise DeploymentError("Unknown production service label")
+        wrapper = [sys.executable, str(ROOT / "start_prod.py"), "--supervise", roles[label]]
+        if label == API_LABEL:
+            wrapper += ["--binary", str(command[0])]
+        spec["ProgramArguments"] = wrapper
+        # Child stdout/stderr go through the shared bounded log sink. Supervisor
+        # failures are written there as well, not to unbounded per-release files.
+        spec["StandardOutPath"] = os.devnull
+        spec["StandardErrorPath"] = os.devnull
         with target.open("wb") as handle:
             plistlib.dump(spec, handle)
         run([tool("plutil"), "-lint", target])
         run([tool("launchctl"), "bootstrap", "gui/" + str(os.getuid()), target])
         return None
-    with (logs / (label + ".stdout.log")).open("ab") as stdout, (logs / (label + ".stderr.log")).open("ab") as stderr:
-        child = subprocess.Popen(
-            [str(value) for value in command], cwd=str(cwd), env=environment,
-            stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-        )
-    return {"pid": child.pid, "binary": str(Path(command[0]).resolve())}
+    role = {API_LABEL: "api", AGENT_LABEL: "agent", TRADING_AGENT_LABEL: "trading-agent"}[label]
+    wrapper = [sys.executable, str(ROOT / "start_prod.py"), "--supervise", role]
+    if role == "api":
+        wrapper += ["--binary", str(command[0])]
+    child = subprocess.Popen(
+        wrapper, cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
+    return {"pid": child.pid, "binary": str(Path(sys.executable).resolve())}
+
+
+def service_command(root, service, binary=None):
+    if service == "api":
+        if not binary or not managed_binary(binary, root):
+            raise DeploymentError("Runtime API binary is outside managed releases")
+        return [macos_entry(binary)], root
+    directory, module = {"agent": ("agent", "app.runner"),
+                         "trading-agent": ("trading_agent", "app.main")}[service]
+    python = root / directory / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return [python, "-m", module], root / directory
 
 
 def stop_launched(label, process, system, expected_binary):
@@ -507,6 +556,28 @@ def stop_verified_agent(cfg, root, system):
     actual_expected = Path(probe.stdout.strip()).resolve()
     if process_path(pids[0], system) != actual_expected:
         raise DeploymentError("Agent listener executable does not match the project interpreter")
+    owned = loaded_job_info(AGENT_LABEL)
+    if owned and owned.get("supervised"):
+        if owned["root"] != root or owned["command"] != [expected, "-m", "app.runner"]:
+            raise DeploymentError("Agent supervisor belongs to another project")
+        ancestor = pids[0]
+        for _ in range(8):
+            parent = run([tool("ps"), "-p", str(ancestor), "-o", "ppid="], capture=True, check=False).stdout.strip()
+            if not parent.isdigit():
+                break
+            ancestor = int(parent)
+            if ancestor == owned["pid"]:
+                latest = loaded_job_info(AGENT_LABEL)
+                if latest != owned:
+                    raise DeploymentError("Agent supervisor changed before stop")
+                run([tool("launchctl"), "bootout", launchd_target(AGENT_LABEL)])
+                deadline = time.monotonic() + 25
+                while time.monotonic() < deadline:
+                    if not process_path(pids[0], system):
+                        return
+                    time.sleep(.2)
+                raise DeploymentError("Supervised Agent did not stop")
+        raise DeploymentError("Agent listener is not a child of its supervisor")
     verified = []
     for label in (AGENT_LABEL, "com.loliwolf.finance-sys.agent"):
         raw = run([tool("launchctl"), "print", launchd_target(label)], capture=True, check=False)
@@ -584,15 +655,46 @@ def ensure_agent(cfg, root, environment, logs, system, restart=False):
     info("Analysis Agent is healthy: " + url)
 
 
+def ensure_trading_agent(cfg, root, environment, logs, system):
+    agent = cfg.get("trading", {}).get("agent", {})
+    if not agent.get("enabled"):
+        return
+    endpoint = urlsplit(agent["health_endpoint"])
+    url = agent["health_endpoint"]
+    if healthy(url):
+        info("Reuse healthy trading Agent: " + url)
+        return
+    if endpoint.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise DeploymentError("Remote trading Agent is unavailable; start it on its own host")
+    try:
+        with socket.create_connection((endpoint.hostname, endpoint.port or 8110), timeout=2):
+            raise DeploymentError("Trading Agent port is occupied by an unhealthy service")
+    except OSError:
+        pass
+    command, cwd = service_command(root, "trading-agent")
+    if not command[0].is_file():
+        raise DeploymentError("Trading Agent virtualenv missing")
+    if system == "Darwin" and loaded_job(TRADING_AGENT_LABEL):
+        raise DeploymentError("Existing trading Agent job is unhealthy; inspect before restarting")
+    process = launch(command, TRADING_AGENT_LABEL, cwd, dict(environment, PYTHONPATH=str(cwd)), logs, system)
+    try:
+        wait_healthy(url)
+    except Exception:
+        stop_launched(TRADING_AGENT_LABEL, process, system, command[0])
+        raise
+    info("Trading Agent is healthy: " + url)
+
+
 def deploy(root, binary, cfg, address, system, restart_agent=False):
     environment = clean_environment(production=True, address=address)
     port = cfg["service"]["http"]["port"]
     previous = listener(port, root, system)
-    logs = root / "tmp/production/logs" / release_directory(binary).name
+    logs = root / "tmp/production/logs/runtime"
     if restart_agent:
         ensure_agent(cfg, root, environment, logs, system, restart=True)
     else:
         ensure_agent(cfg, root, environment, logs, system)
+    ensure_trading_agent(cfg, root, environment, logs, system)
     stop_api_jobs(root, system, previous)
     if previous:
         info("Stop verified production API PID {} (test port is untouched)".format(previous["pid"]))
@@ -632,11 +734,27 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--build-only", action="store_true", help="test/build/sign only; no Nacos request, process start/stop, or launchd changes")
     mode.add_argument("--status", action="store_true", help="read Nacos and show production API/Agent health without changing anything")
+    mode.add_argument("--supervise", choices=("api", "agent", "trading-agent"), help=argparse.SUPPRESS)
+    parser.add_argument("--binary", help=argparse.SUPPRESS)
     parser.add_argument("--env-file", help="bootstrap file containing only NACOS_SERVER_ADDR; overrides the address environment variable")
     parser.add_argument("--restart-agent", action="store_true", help="explicitly upgrade the verified local analysis Agent after build/sign gates; default still reuses a healthy Agent")
     args = parser.parse_args(argv)
     if args.restart_agent and (args.build_only or args.status):
         parser.error("--restart-agent cannot be combined with --build-only or --status")
+    if args.supervise:
+        if args.restart_agent or args.env_file or (args.binary and args.supervise != "api"):
+            parser.error("Invalid service supervisor arguments")
+        service = args.supervise
+        try:
+            if os.environ.get("FINANCE_SYS_ENV") != "PROD":
+                raise DeploymentError("Service supervisor requires the production environment")
+            command, cwd = service_command(ROOT, service, args.binary)
+            raise SystemExit(supervise(command, cwd, ROOT / "tmp/production", service, os.environ))
+        except (OSError, ValueError, RuntimeError, DeploymentError, subprocess.SubprocessError) as error:
+            report_runtime_failure(ROOT / "tmp/production", service, error)
+            raise SystemExit(1)
+    if args.binary:
+        parser.error("--binary is internal to the service supervisor")
     system = platform.system()
     if system not in ("Darwin", "Windows"):
         raise DeploymentError("This production launcher supports macOS and Windows")

@@ -43,6 +43,29 @@ class TextCleanupTest(unittest.TestCase):
         self.assertEqual("标题中段正文", cleaned)
 
 
+class WorkspaceCleanupTest(unittest.TestCase):
+    def test_render_failure_cleans_partial_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def render(_pdf, directory, _dpi):
+                (directory / "partial.png").write_bytes(b"partial")
+                raise RuntimeError("renderer failed")
+            with mock.patch.object(ocr, "render_pdf", side_effect=render):
+                with self.assertRaisesRegex(RuntimeError, "renderer failed"):
+                    ocr.extract_text_from_pdf(Path("input.pdf"), root, 150, 4200, 220,
+                                              "zh-Hans-CN", 35, 75, "render", 2200, False)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_explicit_debug_keep_work_is_not_silently_deleted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.object(ocr, "render_pdf", side_effect=RuntimeError("failed")):
+                with self.assertRaises(RuntimeError):
+                    ocr.extract_text_from_pdf(Path("input.pdf"), root, 150, 4200, 220,
+                                              "zh-Hans-CN", 35, 75, "render", 2200, True)
+            self.assertTrue(list(root.iterdir()))
+
+
 @unittest.skipUnless(platform.system().lower() == "darwin", "macOS native OCR test")
 class MacOSPDFIntegrationTest(unittest.TestCase):
     def test_real_guziyuan_pdf_uses_native_render_and_vision_ocr(self) -> None:
