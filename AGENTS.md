@@ -82,7 +82,9 @@ RecommendationEvent 推荐事实
 - Mac 构建使用 `-ldflags=-B=gobuildid` 生成有效 Mach-O UUID，再以 `cn.financesys.api.production` 做 ad-hoc 签名，必须通过 `codesign --verify --strict`、签名标识及 `LC_UUID` 校验。不要把链接器默认的 `a.out` 签名当作合格发布产物；无需购买 Apple Developer ID，但也不能宣称临时签名等于苹果证书签名或能绕过本地网络权限。
 - Mac 产物封装为 `FinanceSys.app`，Info.plist 包含固定 Bundle ID 和 `NSLocalNetworkUsageDescription`；启动时注册 LaunchServices，并在 launchd plist 用 `AssociatedBundleIdentifiers` 关联应用身份。不能只给裸二进制换签名就假定系统能找到对应授权条目；出现本地网络授权必须人工确认。
 - `scripts/macos/api_launcher.m` 只是同一发布入口使用的原生启动组件：通过 Network.framework 请求本地网络访问，成功后启动 Go API 子进程，并传递停止信号。不要将它扩展为第二套业务服务或用它绕过网络授权；Windows 不构建该组件。
-- Mac 生产 API 由当前图形登录用户的 launchd 托管，标签为 `cn.financesys.api.production`；新建分析 Agent 的标签为 `cn.financesys.agent.production`。Windows 使用独立后台进程，不能声称其已经具备服务管理器的自动重启能力。
+- Mac 生产 API 由当前图形登录用户的 launchd 托管，标签为 `cn.financesys.api.production`；分析 Agent 标签为 `cn.financesys.agent.production`，交易决策 Agent 为 `cn.financesys.trading-agent.production`。均为登录后自启动，不等于 FileVault 解锁前的无人登录启动。Windows 使用独立后台进程，不能声称其已经具备服务管理器的自动重启能力。
+- `start_prod.py --supervise` 是同一入口内部使用的子进程监督模式，不是另一套发布入口。它捕获 API/两个 Agent 的标准输出及错误到共享 `tmp/production/logs/runtime/`，每片 100 MB，累计达到 1 GB 后只保留最新分片；限制按十进制字节执行，跨服务和发布版本共用，不写无限增长的逐版本运行日志。
+- 监督器为每个服务持有独占锁并管理专属临时目录；只有旧子进程已退出时才清理遗留目录。OCR 子任务另有隔离工作区，成功、失败和超时均清理，超时终止整个 OCR 子进程树。不得通过定时删除整个 `tmp/` 或其他服务目录代替安全清理。
 - 构建和签名全部完成之后才能停止旧 API；切换前、停止前均检查实际进程路径，保护无关进程及测试端口。已有健康分析 Agent 必须优先复用，不能因为发布 API 顺带重启 Agent 或 Windows Bridge。
 - 发布产物、日志、成功部署记录分别在 `tmp/production/releases/`、`tmp/production/logs/`、`tmp/production/active.json`；不记录数据库密码、完整 Nacos 配置或 token。新版本启动失败只尝试恢复上一个实际运行的二进制，不进行数据库/Nacos 回滚，不自动删除旧版本。
 - 开发调试直接使用 `go run ./cmd/api`，先设置 Nacos 地址并明确 `FINANCE_SYS_ENV=TEST`；普通 `go build ./...` 是检查命令，不是正式发布入口。
