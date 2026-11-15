@@ -419,6 +419,7 @@ func TestValidateXueqiuDocumentSource(t *testing.T) {
 		"external_documents.xueqiu.page_size":            func(c *config.Config) { c.ExternalDocuments.Xueqiu.PageSize = 201 },
 		"external_documents.xueqiu.max_articles_per_run": func(c *config.Config) { c.ExternalDocuments.Xueqiu.MaxArticlesPerRun = 0 },
 		"external_documents.xueqiu.analysis_interval_ms": func(c *config.Config) { c.ExternalDocuments.Xueqiu.AnalysisIntervalMS = -1 },
+		"external_documents.xueqiu.analysis_concurrency": func(c *config.Config) { c.ExternalDocuments.Xueqiu.AnalysisConcurrency = 0 },
 		"external_documents.xueqiu.ack_by":               func(c *config.Config) { c.ExternalDocuments.Xueqiu.AckBy = " " },
 		"external_documents.xueqiu.institution":          func(c *config.Config) { c.ExternalDocuments.Xueqiu.Institution = "" },
 		"scheduler.xueqiu_document_ingestion.hour":       func(c *config.Config) { c.Scheduler.XueqiuDocumentIngestion.Hour = 24 },

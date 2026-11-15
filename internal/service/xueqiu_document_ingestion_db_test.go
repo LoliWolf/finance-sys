@@ -134,8 +134,10 @@ type xueqiuFixture struct {
 	desk     *fakeXueqiuDesk
 	pipeline *fakePipeline
 	cfg      *config.Config
-	sleeps   []time.Duration
 	db       *gorm.DB
+	clockMu  sync.Mutex
+	clock    time.Time
+	sleeps   []time.Duration
 }
 
 func newXueqiuFixture(t *testing.T) *xueqiuFixture {
@@ -170,15 +172,25 @@ func newXueqiuFixture(t *testing.T) *xueqiuFixture {
 		cfg:      cfg,
 		db:       db,
 	}
-	clock := time.Date(2026, time.November, 16, 4, 0, 0, 0, config.ChinaLocation)
+	f.clock = time.Date(2026, time.November, 16, 4, 0, 0, 0, config.ChinaLocation)
 	f.service = &ExternalDocumentIngestionService{
-		db:            db,
-		runtime:       config.NewRuntime(&config.Snapshot{Config: cfg}),
-		documents:     f.pipeline,
-		now:           func() time.Time { return clock },
+		db:        db,
+		runtime:   config.NewRuntime(&config.Snapshot{Config: cfg}),
+		documents: f.pipeline,
+		now: func() time.Time {
+			f.clockMu.Lock()
+			defer f.clockMu.Unlock()
+			return f.clock
+		},
 		newXueqiuDesk: func(config.XueqiuDocumentSourceConfig) (xueqiuDesk, error) { return f.desk, nil },
+		// Sleeping advances the fake clock, like real time would.
 		sleep: func(ctx context.Context, d time.Duration) error {
+			f.clockMu.Lock()
+			defer f.clockMu.Unlock()
 			f.sleeps = append(f.sleeps, d)
+			if until := f.clock.Add(d); until.After(f.clock) {
+				f.clock = until
+			}
 			return nil
 		},
 	}
@@ -264,6 +276,82 @@ func TestSyncXueqiuStoresAnalyzesAndAcksEveryStoredPost(t *testing.T) {
 	require.Equal(t, 1, resp.FetchedCount)
 	require.Equal(t, 1, resp.SucceededCount)
 	require.True(t, f.desk.acked[5])
+}
+
+// blockingPipeline holds analyses until `want` are in flight together.
+type blockingPipeline struct {
+	*fakePipeline
+	mu       sync.Mutex
+	inFlight int
+	peak     int
+	want     int
+	release  chan struct{}
+}
+
+func (p *blockingPipeline) AnalyzeDocumentForTradeDate(ctx context.Context, documentID int64, tradeDate time.Time) ([]domain.CandidatePlan, error) {
+	p.mu.Lock()
+	p.inFlight++
+	if p.inFlight > p.peak {
+		p.peak = p.inFlight
+	}
+	if p.inFlight == p.want {
+		close(p.release)
+	}
+	p.mu.Unlock()
+	select {
+	case <-p.release:
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("analyses never ran in parallel")
+	}
+	defer func() {
+		p.mu.Lock()
+		p.inFlight--
+		p.mu.Unlock()
+	}()
+	return p.fakePipeline.AnalyzeDocumentForTradeDate(ctx, documentID, tradeDate)
+}
+
+func TestSyncXueqiuAnalyzesUpToConcurrencyInParallel(t *testing.T) {
+	f := newXueqiuFixture(t)
+	f.cfg.ExternalDocuments.Xueqiu.PageSize = 10
+	f.cfg.ExternalDocuments.Xueqiu.AnalysisConcurrency = 3
+	f.cfg.ExternalDocuments.Xueqiu.AnalysisIntervalMS = 0
+	blocking := &blockingPipeline{fakePipeline: f.pipeline, want: 3, release: make(chan struct{})}
+	f.service.documents = blocking
+	at := time.Date(2026, time.November, 15, 2, 0, 0, 0, time.UTC)
+	for i := int64(1); i <= 7; i++ {
+		f.desk.articles = append(f.desk.articles, xueqiuArticle(i, 100+i, "博主", fmt.Sprintf("帖子 %d 看好 $贵州茅台(SH600519)$", i), at))
+	}
+	resp, err := f.service.SyncXueqiu(context.Background(), XueqiuDocumentIngestionRequest{})
+	require.NoError(t, err)
+	require.Equal(t, 7, resp.SucceededCount)
+	require.Equal(t, 7, resp.AckedCount)
+	require.Equal(t, 3, blocking.peak, "never more than analysis_concurrency posts in flight")
+	require.Len(t, f.ingestionRows(t), 7)
+}
+
+func TestAnalysisSpacingSpacesConcurrentStarts(t *testing.T) {
+	var mu sync.Mutex
+	clock := time.Date(2026, time.November, 16, 4, 0, 0, 0, time.UTC)
+	var delays []time.Duration
+	gate := &analysisSpacing{
+		interval: time.Second,
+		now:      func() time.Time { mu.Lock(); defer mu.Unlock(); return clock },
+		sleep: func(ctx context.Context, d time.Duration) error {
+			mu.Lock()
+			delays = append(delays, d)
+			mu.Unlock()
+			return nil
+		},
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); require.NoError(t, gate.wait(context.Background())) }()
+	}
+	wg.Wait()
+	// Four simultaneous callers start at +0s, +1s, +2s, +3s.
+	require.ElementsMatch(t, []time.Duration{time.Second, 2 * time.Second, 3 * time.Second}, delays)
 }
 
 func TestSyncXueqiuSkipsPostsAlreadyIngestedAndHonorsLimitAndSkipAck(t *testing.T) {

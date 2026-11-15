@@ -144,8 +144,11 @@ type XueqiuDocumentSourceConfig struct {
 	PageSize         int    `json:"page_size"`
 	// MaxArticlesPerRun bounds one run; the rest stays pending for the next.
 	MaxArticlesPerRun int `json:"max_articles_per_run"`
+	// AnalysisConcurrency is how many posts are analyzed at once (an agent
+	// analysis takes minutes, so one at a time cannot finish a day's posts).
+	AnalysisConcurrency int `json:"analysis_concurrency"`
 	// AnalysisIntervalMS is the minimum gap between two analysis starts of
-	// this source (it analyzes one post at a time).
+	// this source.
 	AnalysisIntervalMS int    `json:"analysis_interval_ms"`
 	AckBy              string `json:"ack_by"`
 }
