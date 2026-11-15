@@ -61,7 +61,8 @@
   },
   "processing": {
     "ocr_max_concurrency": 2,
-    "llm_max_concurrency": 20
+    "llm_max_concurrency": 20,
+    "llm_max_qps": 4
   },
   "document": {
     "api_upload_enabled": true,
@@ -106,6 +107,17 @@
       "institution": "个人",
       "request_timeout_ms": 120000,
       "scan_lookback_days": 7
+    },
+    "xueqiu": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:30010",
+      "api_token": "",
+      "institution": "雪球",
+      "request_timeout_ms": 30000,
+      "page_size": 50,
+      "max_articles_per_run": 2000,
+      "analysis_interval_ms": 1000,
+      "ack_by": "financesys"
     }
   },
   "llm": {
@@ -280,6 +292,11 @@
     "openlist_document_ingestion": {
       "enabled": false,
       "hour": 5,
+      "minute": 0
+    },
+    "xueqiu_document_ingestion": {
+      "enabled": false,
+      "hour": 4,
       "minute": 0
     }
   },

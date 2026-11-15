@@ -65,7 +65,9 @@
   "processing": {
     // 进程级全局池；所有 HTTP 上传、历史回放和外部来源摄取共享，不按任务单独建池。
     "ocr_max_concurrency": 2,
-    "llm_max_concurrency": 20
+    "llm_max_concurrency": 20,
+    // 每秒最多启动的文档分析（每次一个模型请求，外加 Agent 内部重试）；下游模型网关上限 5 QPS，留余量取 4。
+    "llm_max_qps": 4
   },
   "document": {
     "api_upload_enabled": true,
@@ -105,6 +107,22 @@
       "request_timeout_ms": 120000,
       // 按文章日期回看前 7 个自然日（不含当天/未来日期），不使用目录 mtime。
       "scan_lookback_days": 7
+    },
+    "xueqiu": {
+      // 雪球订阅台（xueqiu-tool）待 ACK 队列：只含原创帖。入库成功即 ACK，分析失败走文档重试，不重复拉取。
+      "enabled": false,
+      // 订阅台与 FinanceSys 同在 Mac Server，走回环地址。
+      "base_url": "http://127.0.0.1:30010",
+      // 订阅台按用户决定不设鉴权；若以后开启，在此填 Bearer token。
+      "api_token": "",
+      "institution": "雪球",
+      "request_timeout_ms": 30000,
+      "page_size": 50,
+      // 单轮上限，剩余留到次日。
+      "max_articles_per_run": 2000,
+      // 逐篇串行分析，两次分析启动至少间隔 1 秒；全局另有 processing.llm_max_qps 兜底。
+      "analysis_interval_ms": 1000,
+      "ack_by": "financesys"
     }
   },
   "llm": {
@@ -278,6 +296,12 @@
       // 北京时间每天 05:00 仅启动一次；错过该分钟不在白天补跑，失败文件等次日扫描。
       "enabled": false,
       "hour": 5,
+      "minute": 0
+    },
+    "xueqiu_document_ingestion": {
+      // 北京时间每天 04:00 读取订阅台全部待 ACK 原创帖；独立调度通道，不阻塞 05:00 的 OpenList。错过该分钟不补跑，帖子留在队列等次日。
+      "enabled": false,
+      "hour": 4,
       "minute": 0
     }
   },

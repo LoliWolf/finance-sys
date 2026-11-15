@@ -8,16 +8,21 @@ type ExternalDocumentSourceType uint16
 
 const (
 	ExternalDocumentSourceTypeOpenList ExternalDocumentSourceType = 1
+	// ExternalDocumentSourceTypeXueqiu is one original post pulled from the
+	// Xueqiu wire desk (xueqiu-tool) ACK queue.
+	ExternalDocumentSourceTypeXueqiu ExternalDocumentSourceType = 2
 )
 
 func (t ExternalDocumentSourceType) Valid() bool {
-	return t == ExternalDocumentSourceTypeOpenList
+	return t == ExternalDocumentSourceTypeOpenList || t == ExternalDocumentSourceTypeXueqiu
 }
 
 func (t ExternalDocumentSourceType) String() string {
 	switch t {
 	case ExternalDocumentSourceTypeOpenList:
 		return "OPENLIST"
+	case ExternalDocumentSourceTypeXueqiu:
+		return "XUEQIU"
 	default:
 		return "UNKNOWN_" + strconv.FormatUint(uint64(t), 10)
 	}

@@ -384,3 +384,48 @@ func TestValidateSchedulerRequiresEnabledWorkersAndValidSchedules(t *testing.T) 
 	cfg.Scheduler.RecommendationEvaluationRecent.Hour = 4
 	require.NoError(t, config.Validate(&cfg))
 }
+
+func TestValidateLLMMaxQPS(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	for _, qps := range []float64{-1, 0, 0.5, 4, 1000, 1001} {
+		var cfg config.Config
+		require.NoError(t, json.Unmarshal(raw, &cfg))
+		cfg.Processing.LLMMaxQPS = qps
+		if qps <= 0 || qps > 1000 {
+			require.ErrorContains(t, config.Validate(&cfg), "processing.llm_max_qps", "qps=%v", qps)
+		} else {
+			require.NoError(t, config.Validate(&cfg), "qps=%v", qps)
+		}
+	}
+}
+
+func TestValidateXueqiuDocumentSource(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	load := func() config.Config {
+		var cfg config.Config
+		require.NoError(t, json.Unmarshal(raw, &cfg))
+		cfg.ExternalDocuments.Xueqiu.Enabled = true
+		cfg.Scheduler.Enabled = true
+		cfg.Scheduler.XueqiuDocumentIngestion.Enabled = true
+		return cfg
+	}
+	cfg := load()
+	require.NoError(t, config.Validate(&cfg))
+
+	for name, mutate := range map[string]func(*config.Config){
+		"external_documents.xueqiu.base_url":             func(c *config.Config) { c.ExternalDocuments.Xueqiu.BaseURL = "127.0.0.1:30010" },
+		"external_documents.xueqiu.page_size":            func(c *config.Config) { c.ExternalDocuments.Xueqiu.PageSize = 201 },
+		"external_documents.xueqiu.max_articles_per_run": func(c *config.Config) { c.ExternalDocuments.Xueqiu.MaxArticlesPerRun = 0 },
+		"external_documents.xueqiu.analysis_interval_ms": func(c *config.Config) { c.ExternalDocuments.Xueqiu.AnalysisIntervalMS = -1 },
+		"external_documents.xueqiu.ack_by":               func(c *config.Config) { c.ExternalDocuments.Xueqiu.AckBy = " " },
+		"external_documents.xueqiu.institution":          func(c *config.Config) { c.ExternalDocuments.Xueqiu.Institution = "" },
+		"scheduler.xueqiu_document_ingestion.hour":       func(c *config.Config) { c.Scheduler.XueqiuDocumentIngestion.Hour = 24 },
+		"external_documents.xueqiu must be enabled":      func(c *config.Config) { c.ExternalDocuments.Xueqiu.Enabled = false },
+	} {
+		cfg := load()
+		mutate(&cfg)
+		require.ErrorContains(t, config.Validate(&cfg), name)
+	}
+}

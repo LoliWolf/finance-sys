@@ -89,6 +89,10 @@ type DatabaseConfig struct {
 type ProcessingConfig struct {
 	OCRMaxConcurrency int `json:"ocr_max_concurrency"`
 	LLMMaxConcurrency int `json:"llm_max_concurrency"`
+	// LLMMaxQPS caps how many document analyses (one model request each, plus
+	// the agent's own retries) may start per second across the process. The
+	// downstream model gateway rejects sustained rates above 5 QPS.
+	LLMMaxQPS float64 `json:"llm_max_qps"`
 }
 
 type DocumentConfig struct {
@@ -124,6 +128,26 @@ type PDFOCRConfig struct {
 
 type ExternalDocumentsConfig struct {
 	OpenList OpenListDocumentSourceConfig `json:"openlist"`
+	Xueqiu   XueqiuDocumentSourceConfig   `json:"xueqiu"`
+}
+
+// XueqiuDocumentSourceConfig reads original posts from the Xueqiu wire desk
+// (xueqiu-tool) pending-ACK queue and ACKs them once they are stored.
+type XueqiuDocumentSourceConfig struct {
+	Enabled bool `json:"enabled"`
+	// BaseURL is the wire desk root, e.g. http://127.0.0.1:30010.
+	BaseURL string `json:"base_url"`
+	// APIToken is sent as a Bearer token when the desk requires one.
+	APIToken         string `json:"api_token"`
+	Institution      string `json:"institution"`
+	RequestTimeoutMS int    `json:"request_timeout_ms"`
+	PageSize         int    `json:"page_size"`
+	// MaxArticlesPerRun bounds one run; the rest stays pending for the next.
+	MaxArticlesPerRun int `json:"max_articles_per_run"`
+	// AnalysisIntervalMS is the minimum gap between two analysis starts of
+	// this source (it analyzes one post at a time).
+	AnalysisIntervalMS int    `json:"analysis_interval_ms"`
+	AckBy              string `json:"ack_by"`
 }
 
 type OpenListDocumentSourceConfig struct {
@@ -280,6 +304,7 @@ type SchedulerConfig struct {
 	StockDailyPreviousDay          DailyTaskScheduleConfig                `json:"stock_daily_previous_day"`
 	RecommendationEvaluationRecent RecommendationEvaluationScheduleConfig `json:"recommendation_evaluation_recent"`
 	OpenListDocumentIngestion      DailyTaskScheduleConfig                `json:"openlist_document_ingestion"`
+	XueqiuDocumentIngestion        DailyTaskScheduleConfig                `json:"xueqiu_document_ingestion"`
 }
 
 type DailyTaskScheduleConfig struct {
