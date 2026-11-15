@@ -36,12 +36,24 @@ type OpenListDocumentIngestionResponse struct {
 	Errors          []string `json:"errors,omitempty"`
 }
 
+// externalDocumentPipeline is the part of DocumentService external sources
+// use: store a document, analyze it, and reload it after a failed analysis.
+type externalDocumentPipeline interface {
+	IngestDocument(ctx context.Context, request domain.DocumentIngestRequest) (*domain.Document, bool, error)
+	AnalyzeDocumentForTradeDate(ctx context.Context, documentID int64, tradeDate time.Time) ([]domain.CandidatePlan, error)
+	GetDocumentByID(ctx context.Context, documentID int64) (*domain.Document, error)
+}
+
 type ExternalDocumentIngestionService struct {
 	db        *gorm.DB
 	runtime   *config.Runtime
-	documents *DocumentService
+	documents externalDocumentPipeline
 	logger    *slog.Logger
 	now       func() time.Time
+	// newXueqiuDesk builds the desk client; tests replace it.
+	newXueqiuDesk func(config.XueqiuDocumentSourceConfig) (xueqiuDesk, error)
+	// sleep waits between analyses; tests replace it.
+	sleep func(context.Context, time.Duration) error
 }
 
 type openListArticleResult struct {
@@ -51,13 +63,19 @@ type openListArticleResult struct {
 }
 
 func NewExternalDocumentIngestionService(db *gorm.DB, runtime *config.Runtime, documents *DocumentService, logger *slog.Logger) *ExternalDocumentIngestionService {
-	return &ExternalDocumentIngestionService{
-		db:        db,
-		runtime:   runtime,
-		documents: documents,
-		logger:    logger,
-		now:       time.Now,
+	service := &ExternalDocumentIngestionService{
+		db:            db,
+		runtime:       runtime,
+		logger:        logger,
+		now:           time.Now,
+		newXueqiuDesk: newXueqiuDeskClient,
+		sleep:         sleepContext,
 	}
+	// Keep a nil *DocumentService out of the interface so availability checks work.
+	if documents != nil {
+		service.documents = documents
+	}
+	return service
 }
 
 func (s *ExternalDocumentIngestionService) SyncOpenList(ctx context.Context, request OpenListDocumentIngestionRequest) (*OpenListDocumentIngestionResponse, error) {

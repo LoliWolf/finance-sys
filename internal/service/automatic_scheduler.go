@@ -11,6 +11,7 @@ import (
 
 	"finance-sys/internal/config"
 	"finance-sys/internal/domain"
+	"finance-sys/internal/domain/db_model"
 	tradingservice "finance-sys/internal/trading/service"
 )
 
@@ -64,6 +65,9 @@ func NewAutomaticScheduler(
 	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeOpenListDocuments, scheduler.handleOpenListDocuments); err != nil {
 		return nil, err
 	}
+	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeXueqiuDocuments, scheduler.handleXueqiuDocuments); err != nil {
+		return nil, err
+	}
 	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeSecurityMasterRefresh, scheduler.handleSecurityMasterRefresh); err != nil {
 		return nil, err
 	}
@@ -93,7 +97,7 @@ func (s *AutomaticScheduler) Run(ctx context.Context) {
 		return
 	}
 	var lanes sync.WaitGroup
-	for _, lane := range []string{"enqueue", "general", "trading"} {
+	for _, lane := range []string{"enqueue", "general", "trading", "xueqiu"} {
 		lanes.Add(1)
 		go func(lane string) { defer lanes.Done(); s.runLane(ctx, lane) }(lane)
 	}
@@ -122,6 +126,11 @@ func (s *AutomaticScheduler) runLane(ctx context.Context, lane string) {
 				types := []domain.ScheduledTaskType{domain.ScheduledTaskTypeStockDailyPreviousDay, domain.ScheduledTaskTypeEvaluationRecent, domain.ScheduledTaskTypeOpenListDocuments, domain.ScheduledTaskTypeSecurityMasterRefresh}
 				if lane == "trading" {
 					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeTradingPreopenDecision, domain.ScheduledTaskTypeTradingExitMonitor, domain.ScheduledTaskTypeTradingReconciliation, domain.ScheduledTaskTypeTradingEODSnapshot, domain.ScheduledTaskTypeTradingPreflight, domain.ScheduledTaskTypeTradingCancelOpen}
+				}
+				// The Xueqiu run analyzes posts one by one for up to an hour or
+				// more; its own lane keeps it from delaying the 05:00 OpenList start.
+				if lane == "xueqiu" {
+					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeXueqiuDocuments}
 				}
 				for n := 0; n < maxScheduledTasksPerTick; n++ {
 					var claimed bool
@@ -240,6 +249,22 @@ func (s *AutomaticScheduler) enqueueDueTasks(ctx context.Context, cfg *config.Co
 		}
 	}
 
+	xueqiuSchedule := cfg.Scheduler.XueqiuDocumentIngestion
+	if xueqiuSchedule.Enabled {
+		scheduledAt := dailyScheduledAt(now, xueqiuSchedule.Hour, xueqiuSchedule.Minute)
+		if withinScheduledMinute(now, scheduledAt) {
+			if _, _, err := s.tasks.Enqueue(
+				ctx,
+				domain.ScheduledTaskTypeXueqiuDocuments,
+				scheduledAt.Format(time.DateOnly),
+				scheduledAt,
+				XueqiuDocumentIngestionRequest{},
+			); err != nil {
+				return fmt.Errorf("enqueue Xueqiu document ingestion task: %w", err)
+			}
+		}
+	}
+
 	tradingOpen, calendarErr := cfg.Trading.Calendar.IsOpen(now)
 	if cfg.Trading.Scheduler.Enabled && calendarErr == nil && tradingOpen {
 		preflight := cfg.Trading.Scheduler.Preflight
@@ -347,6 +372,34 @@ func (s *AutomaticScheduler) handleOpenListDocuments(ctx context.Context, rawInp
 		return nil, fmt.Errorf("decode OpenList document ingestion scheduled task input: %w", err)
 	}
 	return s.externalDocuments.SyncOpenList(ctx, request)
+}
+
+func (s *AutomaticScheduler) handleXueqiuDocuments(ctx context.Context, rawInput json.RawMessage) (any, error) {
+	if s.externalDocuments == nil {
+		return nil, fmt.Errorf("external document ingestion service is unavailable")
+	}
+	var request XueqiuDocumentIngestionRequest
+	if err := json.Unmarshal(rawInput, &request); err != nil {
+		return nil, fmt.Errorf("decode Xueqiu document ingestion scheduled task input: %w", err)
+	}
+	return s.externalDocuments.SyncXueqiu(ctx, request)
+}
+
+// EnqueueManualXueqiuRun queues an out-of-schedule Xueqiu run for the xueqiu
+// lane (admin API). It never runs inline in the HTTP request.
+func (s *AutomaticScheduler) EnqueueManualXueqiuRun(ctx context.Context, request XueqiuDocumentIngestionRequest) (*db_model.ScheduledTaskRun, error) {
+	cfg := s.runtime.Config()
+	if cfg == nil || !cfg.ExternalDocuments.Xueqiu.Enabled {
+		return nil, fmt.Errorf("Xueqiu document ingestion is disabled")
+	}
+	if request.MaxArticles < 0 {
+		return nil, fmt.Errorf("max_articles must not be negative")
+	}
+	request.Manual = true
+	now := s.now()
+	key := "manual-" + now.UTC().Format("20060102T150405.000000000Z")
+	_, run, err := s.tasks.Enqueue(ctx, domain.ScheduledTaskTypeXueqiuDocuments, key, now, request)
+	return run, err
 }
 
 func (s *AutomaticScheduler) handleTradingDecision(ctx context.Context, rawInput json.RawMessage) (any, error) {

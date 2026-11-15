@@ -35,6 +35,7 @@ func Validate(cfg *Config) error {
 	require(cfg.Processing.OCRMaxConcurrency > 0, "processing.ocr_max_concurrency must be positive")
 	require(cfg.Processing.LLMMaxConcurrency > 0, "processing.llm_max_concurrency must be positive")
 	require(cfg.Processing.LLMMaxConcurrency <= 1024, "processing.llm_max_concurrency must not exceed 1024")
+	require(cfg.Processing.LLMMaxQPS > 0 && cfg.Processing.LLMMaxQPS <= 1000, "processing.llm_max_qps must be in (0,1000]")
 	require(cfg.NacosClient.PollIntervalSeconds > 0, "nacos_client.poll_interval_seconds must be positive")
 	require(cfg.Document.MaxFileSizeMB > 0, "document.max_file_size_mb must be positive")
 	require(len(cfg.Document.AllowedExtensions) > 0, "document.allowed_extensions must not be empty")
@@ -101,6 +102,9 @@ func Validate(cfg *Config) error {
 	if cfg.ExternalDocuments.OpenList.Enabled {
 		validateOpenListDocumentSource(cfg.ExternalDocuments.OpenList, require)
 	}
+	if cfg.ExternalDocuments.Xueqiu.Enabled {
+		validateXueqiuDocumentSource(cfg.ExternalDocuments.Xueqiu, require)
+	}
 	if cfg.MarketData.Enabled {
 		require(cfg.MarketData.Provider == "tushare", "market_data.provider must be tushare when market_data.enabled is true")
 		require(cfg.MarketData.Tushare.Enabled, "market_data.tushare.enabled must be true when market_data.enabled is true")
@@ -147,6 +151,10 @@ func Validate(cfg *Config) error {
 		if cfg.Scheduler.OpenListDocumentIngestion.Enabled {
 			validateDailySchedule("scheduler.openlist_document_ingestion", cfg.Scheduler.OpenListDocumentIngestion, require)
 			require(cfg.ExternalDocuments.OpenList.Enabled, "external_documents.openlist must be enabled when scheduler.openlist_document_ingestion is enabled")
+		}
+		if cfg.Scheduler.XueqiuDocumentIngestion.Enabled {
+			validateDailySchedule("scheduler.xueqiu_document_ingestion", cfg.Scheduler.XueqiuDocumentIngestion, require)
+			require(cfg.ExternalDocuments.Xueqiu.Enabled, "external_documents.xueqiu must be enabled when scheduler.xueqiu_document_ingestion is enabled")
 		}
 	}
 	if cfg.Trading.Enabled || strings.TrimSpace(cfg.Trading.Provider) != "" {
@@ -361,6 +369,17 @@ func validateOpenListDocumentSource(cfg OpenListDocumentSourceConfig, require fu
 	require(strings.TrimSpace(cfg.Institution) != "", "external_documents.openlist.institution is required when enabled")
 	require(cfg.RequestTimeoutMS > 0, "external_documents.openlist.request_timeout_ms must be positive when enabled")
 	require(cfg.ScanLookbackDays > 0, "external_documents.openlist.scan_lookback_days must be positive when enabled")
+}
+
+func validateXueqiuDocumentSource(cfg XueqiuDocumentSourceConfig, require func(bool, string)) {
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	require(strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://"), "external_documents.xueqiu.base_url must start with http:// or https:// when enabled")
+	require(strings.TrimSpace(cfg.Institution) != "", "external_documents.xueqiu.institution is required when enabled")
+	require(cfg.RequestTimeoutMS > 0, "external_documents.xueqiu.request_timeout_ms must be positive when enabled")
+	require(cfg.PageSize >= 1 && cfg.PageSize <= 200, "external_documents.xueqiu.page_size must be in [1,200] when enabled")
+	require(cfg.MaxArticlesPerRun > 0, "external_documents.xueqiu.max_articles_per_run must be positive when enabled")
+	require(cfg.AnalysisIntervalMS >= 0, "external_documents.xueqiu.analysis_interval_ms must be zero or positive")
+	require(strings.TrimSpace(cfg.AckBy) != "", "external_documents.xueqiu.ack_by is required when enabled")
 }
 
 func validateDatabase(name string, cfg DatabaseConfig, require func(bool, string)) {

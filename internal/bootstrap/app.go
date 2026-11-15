@@ -112,6 +112,13 @@ func Build(ctx context.Context) (*App, error) {
 		_ = dbConnectionClose(db)
 		return nil, err
 	}
+	// Read on every analysis start so a Nacos change applies without a restart.
+	processingPools.LimitLLMRate(func() float64 {
+		if current := runtime.Config(); current != nil {
+			return current.Processing.LLMMaxQPS
+		}
+		return snapshot.Config.Processing.LLMMaxQPS
+	})
 	documentService := service.NewDocumentService(db, runtime, parserService, analyzer, candidateAssembler, ruleEngine, processingPools, logger)
 	marketDataHTTPClient := &http.Client{}
 	if snapshot.Config.MarketData.Tushare.TimeoutMS > 0 {
@@ -142,7 +149,7 @@ func Build(ctx context.Context) (*App, error) {
 		reloader = nacoscfg.NewReloader(loader, runtime, db, logger)
 	}
 
-	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, evaluationService, statsService, tradingService, reloader, logger)
+	httpServer := httpapi.NewServer(db, runtime, documentService, securityService, marketDataService, evaluationService, statsService, tradingService, automaticScheduler, reloader, logger)
 	logger.Info("bootstrap build completed")
 	return &App{
 		Runtime:           runtime,

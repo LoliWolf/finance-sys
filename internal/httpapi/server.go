@@ -30,7 +30,13 @@ type ConfigReloader interface {
 	Reload(context.Context) error
 }
 
+// xueqiuRunEnqueuer queues manual Xueqiu ingestion runs (AutomaticScheduler).
+type xueqiuRunEnqueuer interface {
+	EnqueueManualXueqiuRun(context.Context, service.XueqiuDocumentIngestionRequest) (*db_model.ScheduledTaskRun, error)
+}
+
 type Server struct {
+	xueqiuRuns    xueqiuRunEnqueuer
 	db            *gorm.DB
 	runtime       *config.Runtime
 	documents     *service.DocumentService
@@ -87,6 +93,7 @@ func NewServer(
 	evaluation recommendationEvaluationService,
 	performanceStats performanceStatsService,
 	trading *tradingservice.Service,
+	xueqiuRuns xueqiuRunEnqueuer,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
@@ -104,6 +111,7 @@ func NewServer(
 		evaluation:    evaluation,
 		stats:         performanceStats,
 		trading:       trading,
+		xueqiuRuns:    xueqiuRuns,
 		reloader:      reloader,
 		logger:        logger,
 		bridgeNonces:  make(map[string]time.Time),
@@ -166,6 +174,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/internal/security/resolve", s.handleResolveSecurity)
 		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
+		r.Post("/admin/external-documents/xueqiu/runs", s.handleEnqueueXueqiuRun)
+		r.Get("/admin/scheduled-task-runs/{id}", s.handleGetScheduledTaskRun)
 		r.Post("/trading/agent-runs", s.handleCreateTradingAgentRun)
 		r.Get("/trading/agent-runs/{id}", s.handleGetTradingAgentRun)
 		r.Get("/trading/agent-runs/{id}/skill-decisions", s.handleListTradingSkillDecisions)

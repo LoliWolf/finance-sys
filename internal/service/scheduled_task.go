@@ -102,11 +102,17 @@ func (s *ScheduledTaskService) ClaimAndExecuteNext(ctx context.Context, workerID
 
 func (s *ScheduledTaskService) execute(ctx context.Context, run *db_model.ScheduledTaskRun) error {
 	taskType := domain.ScheduledTaskType(run.TaskType)
-	if taskType == domain.ScheduledTaskTypeOpenListDocuments {
+	// Model-calling document sources decide right before running whether the
+	// run is still wanted (schedule changed, start window missed, retried).
+	skipCheck := map[domain.ScheduledTaskType]func(*db_model.ScheduledTaskRun, *config.Config, time.Time) (string, error){
+		domain.ScheduledTaskTypeOpenListDocuments: openListScheduledRunSkipReason,
+		domain.ScheduledTaskTypeXueqiuDocuments:   xueqiuScheduledRunSkipReason,
+	}[taskType]
+	if skipCheck != nil {
 		if s.runtime == nil || s.runtime.Config() == nil {
-			return s.fail(ctx, run.ID, fmt.Errorf("OpenList scheduled task config unavailable"))
+			return s.fail(ctx, run.ID, fmt.Errorf("%s scheduled task config unavailable", taskType))
 		}
-		reason, err := openListScheduledRunSkipReason(run, s.runtime.Config(), s.now())
+		reason, err := skipCheck(run, s.runtime.Config(), s.now())
 		if err != nil {
 			return s.fail(ctx, run.ID, err)
 		}

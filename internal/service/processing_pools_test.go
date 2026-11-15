@@ -51,3 +51,62 @@ func TestProcessingPoolsRejectInvalidCapacity(t *testing.T) {
 		t.Fatal("expected invalid LLM capacity error")
 	}
 }
+
+func TestProcessingPoolsLimitLLMStartRate(t *testing.T) {
+	pools, err := NewProcessingPools(1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qps := 20.0 // 50ms apart
+	pools.LimitLLMRate(func() float64 { return qps })
+	started := time.Now()
+	for i := 0; i < 5; i++ {
+		release, err := pools.AcquireLLM(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		release()
+	}
+	// Five starts at 20 QPS need at least four 50ms gaps.
+	if elapsed := time.Since(started); elapsed < 190*time.Millisecond {
+		t.Fatalf("5 starts at 20 QPS took %v; the rate gate did not space them", elapsed)
+	}
+
+	qps = 0 // unlimited after a config change
+	started = time.Now()
+	for i := 0; i < 20; i++ {
+		release, err := pools.AcquireLLM(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		release()
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("unlimited rate still waited %v", elapsed)
+	}
+}
+
+func TestProcessingPoolsRateWaitHonorsCancellationAndFreesSlot(t *testing.T) {
+	pools, err := NewProcessingPools(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pools.LimitLLMRate(func() float64 { return 0.5 }) // 2s apart
+	release, err := pools.AcquireLLM(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := pools.AcquireLLM(ctx); err == nil {
+		t.Fatal("expected the rate wait to stop on context cancellation")
+	}
+	// The canceled caller must have returned its concurrency slot.
+	select {
+	case pools.llm.slots <- struct{}{}:
+		<-pools.llm.slots
+	default:
+		t.Fatal("canceled rate wait leaked the LLM slot")
+	}
+}
