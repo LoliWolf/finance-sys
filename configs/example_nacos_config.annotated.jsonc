@@ -117,10 +117,13 @@
       "api_token": "",
       "institution": "雪球",
       "request_timeout_ms": 30000,
-      "page_size": 50,
+      // 每页处理完即 ACK 该页已入库的帖子；页小一些，中途重启时少重放。
+      "page_size": 20,
       // 单轮上限，剩余留到次日。
       "max_articles_per_run": 2000,
-      // 逐篇串行分析，两次分析启动至少间隔 1 秒；全局另有 processing.llm_max_qps 兜底。
+      // Agent 单篇分析约 5–10 分钟，串行跑不完一天的帖子；6 篇并行时请求速率仍远低于 1 QPS。
+      "analysis_concurrency": 6,
+      // 两次分析启动至少间隔 1 秒；全局另有 processing.llm_max_qps 兜底。
       "analysis_interval_ms": 1000,
       "ack_by": "financesys"
     }

@@ -378,6 +378,7 @@ func validateXueqiuDocumentSource(cfg XueqiuDocumentSourceConfig, require func(b
 	require(cfg.RequestTimeoutMS > 0, "external_documents.xueqiu.request_timeout_ms must be positive when enabled")
 	require(cfg.PageSize >= 1 && cfg.PageSize <= 200, "external_documents.xueqiu.page_size must be in [1,200] when enabled")
 	require(cfg.MaxArticlesPerRun > 0, "external_documents.xueqiu.max_articles_per_run must be positive when enabled")
+	require(cfg.AnalysisConcurrency >= 1 && cfg.AnalysisConcurrency <= 32, "external_documents.xueqiu.analysis_concurrency must be in [1,32] when enabled")
 	require(cfg.AnalysisIntervalMS >= 0, "external_documents.xueqiu.analysis_interval_ms must be zero or positive")
 	require(strings.TrimSpace(cfg.AckBy) != "", "external_documents.xueqiu.ack_by is required when enabled")
 }

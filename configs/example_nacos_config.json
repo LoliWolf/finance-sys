@@ -114,8 +114,9 @@
       "api_token": "",
       "institution": "雪球",
       "request_timeout_ms": 30000,
-      "page_size": 50,
+      "page_size": 20,
       "max_articles_per_run": 2000,
+      "analysis_concurrency": 6,
       "analysis_interval_ms": 1000,
       "ack_by": "financesys"
     }

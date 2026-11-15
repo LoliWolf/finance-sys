@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -56,6 +57,7 @@ func newXueqiuDeskClient(cfg config.XueqiuDocumentSourceConfig) (xueqiuDesk, err
 }
 
 type xueqiuArticleOutcome struct {
+	processed  bool
 	documentID int64
 	skipped    bool
 	// stored is false only when the post could not be persisted; such posts
@@ -112,12 +114,13 @@ func (s *ExternalDocumentIngestionService) SyncXueqiu(ctx context.Context, reque
 			break
 		}
 		var ackIDs []int64
-		for _, article := range page.Items {
-			if ctx.Err() != nil {
-				break
+		outcomes := s.processXueqiuPage(ctx, page.Items, cfg, location, gate, source.AnalysisConcurrency)
+		for i, article := range page.Items {
+			outcome := outcomes[i]
+			if !outcome.processed {
+				continue // run canceled before this post started
 			}
 			response.FetchedCount++
-			outcome := s.processXueqiuArticle(ctx, article, cfg, location, gate)
 			if outcome.documentID > 0 {
 				documentIDs[outcome.documentID] = struct{}{}
 			}
@@ -165,6 +168,44 @@ func (s *ExternalDocumentIngestionService) SyncXueqiu(ctx context.Context, reque
 			response.NotStoredCount, strings.Join(response.Errors, "; "))
 	}
 	return response, nil
+}
+
+// processXueqiuPage handles one page with up to `workers` posts in flight.
+// Agent analyses take minutes each, so strictly serial runs would not finish
+// a day's posts; request starts stay spaced by the gate and the global
+// processing.llm_max_qps limit.
+func (s *ExternalDocumentIngestionService) processXueqiuPage(ctx context.Context, items []xueqiudesk.Article, cfg *config.Config, location *time.Location, gate *analysisSpacing, workers int) []xueqiuArticleOutcome {
+	outcomes := make([]xueqiuArticleOutcome, len(items))
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(items) {
+		workers = len(items)
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				outcome := s.processXueqiuArticle(ctx, items[i], cfg, location, gate)
+				outcome.processed = true
+				outcomes[i] = outcome
+			}
+		}()
+	}
+feed:
+	for i := range items {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	return outcomes
 }
 
 func (r *XueqiuDocumentIngestionResponse) addError(message string) {
@@ -332,23 +373,31 @@ func xueqiuDocumentText(article xueqiudesk.Article, published time.Time) string 
 }
 
 // analysisSpacing keeps at least interval between two analysis starts of one
-// run. The global processing.llm_max_qps gate still applies on top.
+// run, across its workers. The global processing.llm_max_qps gate still
+// applies on top.
 type analysisSpacing struct {
 	interval time.Duration
-	last     time.Time
 	now      func() time.Time
 	sleep    func(context.Context, time.Duration) error
+	mu       sync.Mutex
+	next     time.Time
 }
 
 func (g *analysisSpacing) wait(ctx context.Context) error {
-	if g.interval > 0 && !g.last.IsZero() {
-		if remaining := g.interval - g.now().Sub(g.last); remaining > 0 {
-			if err := g.sleep(ctx, remaining); err != nil {
-				return err
-			}
-		}
+	if g.interval <= 0 {
+		return nil
 	}
-	g.last = g.now()
+	g.mu.Lock()
+	now := g.now()
+	start := g.next
+	if start.Before(now) {
+		start = now
+	}
+	g.next = start.Add(g.interval)
+	g.mu.Unlock()
+	if delay := start.Sub(now); delay > 0 {
+		return g.sleep(ctx, delay)
+	}
 	return nil
 }
 
