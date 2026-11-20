@@ -3,11 +3,11 @@ import { buildPageReport, beijingTime } from './buildPageReport'
 import type { PageExportSnapshot } from './types'
 
 const base = { generated_at:'2026-09-12T02:00:00Z',max_items:2000,data_as_of:'2026-09-11',quote_source:'TUSHARE',filters:{window_days:'30'} }
-const ranking = {rank:1,blogger_id:1,blogger_name:'研究员甲',institution:'机构',sample_count:3,evaluated_count:0,pending_count:3,incomplete_count:0,win_count:0,win_rate:0,avg_return_ratio:0,median_return_ratio:0,best_return_ratio:0,worst_return_ratio:0,avg_max_drawdown_ratio:0,performance_score:0}
+const ranking = {rank:1,blogger_id:1,blogger_name:'研究员甲',institution:'机构',sample_count:3,evaluated_count:0,pending_count:3,incomplete_count:0,win_count:0,win_rate:0,article_count:1,evaluated_article_count:0,article_win_count:0,article_win_rate:0,avg_return_ratio:0,median_return_ratio:0,best_return_ratio:0,worst_return_ratio:0,avg_max_drawdown_ratio:0,performance_score:0}
 const summary = {window_days:30,...ranking}
 export function snapshot(kind:PageExportSnapshot['kind']):PageExportSnapshot {
   return {...base,kind,
-    dashboard:{window_days:30,overview:{total_bloggers:1,evaluated_recommendations:0,pending_recommendations:3,incomplete_recommendations:0,average_win_rate:0,average_return_ratio:0},items:[ranking]},
+    dashboard:{window_days:30,overview:{total_bloggers:1,evaluated_recommendations:0,pending_recommendations:3,incomplete_recommendations:0,average_win_rate:0,article_count:1,evaluated_article_count:0,article_win_count:0,article_win_rate:0,average_return_ratio:0},items:[ranking]},
     blogger:{blogger_id:1,blogger_name:'研究员甲',institution:'机构',windows:[summary]},
     timeseries:{blogger_id:1,window_days:30,items:[{...summary,period:'2026-09'}]},
     recommendations:{total:1,window_days:30,items:[{recommendation_event_id:1,blogger_id:1,blogger_name:'研究员甲',security_name:'测试证券',symbol:'600000.SH',ts_code:'600000.SH',direction:'SHORT',status:'READY',recommend_date:'2026-09-01',entry_date:'2026-09-02',exit_date:'2026-09-10',entry_price:10,exit_close_price:9,thesis:'完整观点'.repeat(100),direction_return_ratio:0.1,max_favorable_return_ratio:0.2,max_adverse_return_ratio:-0.05,max_drawdown_ratio:-0.1}]},
@@ -29,9 +29,33 @@ describe('portable page report builders',()=>{
   })
   it('does not invent a zero return for unevaluable summaries',()=>{
     const report=buildPageReport(snapshot('dashboard'))
-    expect(report.metrics.find(m=>m.label==='总体胜率')?.value).toBe('—')
+    expect(report.metrics.find(m=>m.label==='推荐胜率')?.value).toBe('—')
+    expect(report.metrics.find(m=>m.label==='文章胜率')?.value).toBe('—')
     expect(report.sections[0].chart?.points[0].value).toBeNull()
     expect(report.sections[1].rows?.[0][4]).toBe('—')
+    expect(report.sections[1].rows?.[0][5]).toContain('—')
+  })
+  it('reports article win rate alongside recommendation win rate',()=>{
+    const source=snapshot('dashboard'),article={article_count:6,evaluated_article_count:5,article_win_count:2,article_win_rate:0.4}
+    source.filters={window_days:'30',sort:'article_win_rate'}
+    Object.assign(source.dashboard!.overview,article,{evaluated_recommendations:9,average_win_rate:0.5})
+    Object.assign(source.dashboard!.items[0],article,{evaluated_count:9,win_rate:0.5})
+    const report=buildPageReport(source)
+    expect(report.metrics.find(m=>m.label==='推荐胜率')?.value).toBe('50.0%')
+    expect(report.metrics.find(m=>m.label==='文章胜率')).toEqual({label:'文章胜率',value:'40.0%',note:'2 胜 / 5 可评估 / 6 篇'})
+    expect(report.filters.find(f=>f.label==='排序')?.value).toBe('文章胜率')
+    expect(report.sections[0].chart?.title).toContain('文章胜率')
+    expect(report.sections[0].chart?.points[0].value).toBe(0.4)
+    expect(report.sections[1].columns?.[5]).toBe('文章胜率 / 篇数')
+    expect(report.sections[1].rows?.[0][5]).toBe('40.0%\n2 胜 / 5 可评估 / 6 篇')
+    expect(report.statements.join('')).toContain('盈亏持平不算胜但计入分母')
+
+    const blogger=snapshot('blogger')
+    Object.assign(blogger.blogger!.windows[0],article)
+    const dossier=buildPageReport(blogger)
+    expect(dossier.sections[0].columns?.[3]).toBe('文章胜率 / 篇数')
+    expect(dossier.sections[0].rows?.[0][3]).toBe('40.0%\n2 胜 / 5 可评估 / 6 篇')
+    expect(dossier.sections[2].columns?.[5]).toBe('文章胜率 / 篇数')
   })
   it('keeps full thesis and direction-return semantics',()=>{
     const source=snapshot('blogger'),report=buildPageReport(source)

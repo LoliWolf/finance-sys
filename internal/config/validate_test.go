@@ -313,6 +313,12 @@ func TestValidateRecommendationPerformanceAcceptsConfiguredWindows(t *testing.T)
 	}
 
 	require.NoError(t, config.Validate(&cfg))
+
+	cfg.Evaluation.RecommendationPerformance.Ranking.DefaultSort = "article_win_rate"
+	require.NoError(t, config.Validate(&cfg))
+
+	cfg.Evaluation.RecommendationPerformance.Ranking.DefaultSort = "article_rate"
+	require.ErrorContains(t, config.Validate(&cfg), "ranking.default_sort is unsupported")
 }
 
 func TestValidateRecommendationPerformanceRejectsDuplicateAndUnknownDefaultWindow(t *testing.T) {

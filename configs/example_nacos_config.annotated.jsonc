@@ -266,6 +266,7 @@
       "ranking": {
         "default_window_days": 30,
         "default_min_sample_count": 5,
+        // 可选 win_rate（推荐胜率）、article_win_rate（文章胜率）、avg_return、sample_count、performance_score。
         "default_sort": "win_rate"
       }
     }

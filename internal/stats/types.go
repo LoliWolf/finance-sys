@@ -201,20 +201,31 @@ type Overview struct {
 	PendingRecommendations    int     `json:"pending_recommendations"`
 	IncompleteRecommendations int     `json:"incomplete_recommendations"`
 	AverageWinRate            float64 `json:"average_win_rate"`
-	AverageReturnRatio        float64 `json:"average_return_ratio"`
+	ArticleWinStats
+	AverageReturnRatio float64 `json:"average_return_ratio"`
+}
+
+// ArticleWinStats is the article-level win rate. Each article is one blogger's
+// recommendations inside one source document; see articleWinStats.
+type ArticleWinStats struct {
+	ArticleCount          int     `json:"article_count"`
+	EvaluatedArticleCount int     `json:"evaluated_article_count"`
+	ArticleWinCount       int     `json:"article_win_count"`
+	ArticleWinRate        float64 `json:"article_win_rate"`
 }
 
 type BloggerRankingItem struct {
-	Rank                       int     `json:"rank"`
-	BloggerID                  int64   `json:"blogger_id"`
-	BloggerName                string  `json:"blogger_name"`
-	Institution                string  `json:"institution"`
-	SampleCount                int     `json:"sample_count"`
-	EvaluatedCount             int     `json:"evaluated_count"`
-	PendingCount               int     `json:"pending_count"`
-	IncompleteCount            int     `json:"incomplete_count"`
-	WinCount                   int     `json:"win_count"`
-	WinRate                    float64 `json:"win_rate"`
+	Rank            int     `json:"rank"`
+	BloggerID       int64   `json:"blogger_id"`
+	BloggerName     string  `json:"blogger_name"`
+	Institution     string  `json:"institution"`
+	SampleCount     int     `json:"sample_count"`
+	EvaluatedCount  int     `json:"evaluated_count"`
+	PendingCount    int     `json:"pending_count"`
+	IncompleteCount int     `json:"incomplete_count"`
+	WinCount        int     `json:"win_count"`
+	WinRate         float64 `json:"win_rate"`
+	ArticleWinStats
 	AvgReturnRatio             float64 `json:"avg_return_ratio"`
 	MedianReturnRatio          float64 `json:"median_return_ratio"`
 	BestReturnRatio            float64 `json:"best_return_ratio"`
@@ -250,11 +261,19 @@ type WindowSummary struct {
 	AvgMaxDrawdownRatio        float64 `json:"avg_max_drawdown_ratio"`
 }
 
+// BloggerWindowSummary adds article-level statistics to a blogger's window
+// summary. Document reports keep using WindowSummary because one document is a
+// single article for each blogger there.
+type BloggerWindowSummary struct {
+	WindowSummary
+	ArticleWinStats
+}
+
 type BloggerSummaryResponse struct {
-	BloggerID   int64           `json:"blogger_id"`
-	BloggerName string          `json:"blogger_name"`
-	Institution string          `json:"institution"`
-	Windows     []WindowSummary `json:"windows"`
+	BloggerID   int64                  `json:"blogger_id"`
+	BloggerName string                 `json:"blogger_name"`
+	Institution string                 `json:"institution"`
+	Windows     []BloggerWindowSummary `json:"windows"`
 }
 
 type TimeseriesPoint struct {
@@ -265,6 +284,7 @@ type TimeseriesPoint struct {
 	PendingCount   int     `json:"pending_count"`
 	WinCount       int     `json:"win_count"`
 	WinRate        float64 `json:"win_rate"`
+	ArticleWinStats
 	AvgReturnRatio float64 `json:"avg_return_ratio"`
 }
 

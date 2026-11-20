@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Activity, ArrowRight, CircleGauge, Clock3, RefreshCw, UsersRound } from 'lucide-vue-next'
+import { Activity, ArrowRight, CircleGauge, Clock3, FileText, RefreshCw, UsersRound } from 'lucide-vue-next'
 import { api } from '../api/client'
 import type { BloggerRankingResponse } from '../api/types'
 import ChartPanel from '../components/ChartPanel.vue'
@@ -52,10 +52,14 @@ const tooltip = { trigger: 'axis', backgroundColor: '#2e2b26', borderWidth: 0, t
 
 const winRateOption = computed(() => ({
   tooltip,
-  grid: { left: 92, right: 30, top: 18, bottom: 28 },
+  legend: { bottom: 2, textStyle: { color: '#766e64', fontSize: 10 } },
+  grid: { left: 92, right: 30, top: 18, bottom: 50 },
   xAxis: { type: 'value', max: 1, axisLabel: { formatter: (value: number) => `${Math.round(value * 100)}%`, color: '#756d63' }, splitLine: axisStyle.splitLine },
   yAxis: { type: 'category', inverse: true, data: topItems.value.map((item) => item.blogger_name), axisTick: { show: false }, axisLine: { show: false }, axisLabel: { color: '#514b43', width: 78, overflow: 'truncate' } },
-  series: [{ type: 'bar', data: topItems.value.map((item) => item.win_rate), barWidth: 13, itemStyle: { color: '#b95e43', borderRadius: [0, 5, 5, 0] } }],
+  series: [
+    { name: '推荐胜率', type: 'bar', data: topItems.value.map((item) => item.win_rate), barWidth: 8, itemStyle: { color: '#b95e43', borderRadius: [0, 5, 5, 0] } },
+    { name: '文章胜率', type: 'bar', data: topItems.value.map((item) => (item.evaluated_article_count ? item.article_win_rate : null)), barWidth: 8, itemStyle: { color: '#4f6f8f', borderRadius: [0, 5, 5, 0] } },
+  ],
 }))
 
 const returnOption = computed(() => ({
@@ -77,7 +81,7 @@ const scatterOption = computed(() => ({
     backgroundColor: '#2e2b26',
     borderWidth: 0,
     textStyle: { color: '#fff8ef', fontSize: 11 },
-    formatter: (params: { data: { value: [number, number, number]; name: string } }) => `${params.data.name}<br/>样本 ${params.data.value[0]} · 收益 ${formatPercent(params.data.value[1])}<br/>胜率 ${formatPercent(params.data.value[2])}`,
+    formatter: (params: { data: { value: [number, number, number]; name: string; articleWinRate: number | null } }) => `${params.data.name}<br/>样本 ${params.data.value[0]} · 收益 ${formatPercent(params.data.value[1])}<br/>推荐胜率 ${formatPercent(params.data.value[2])} · 文章胜率 ${formatPercent(params.data.articleWinRate)}`,
   },
   grid: { left: 48, right: 24, top: 20, bottom: 38 },
   xAxis: { type: 'value', name: '可评估样本', nameTextStyle: { color: '#8a8278' }, ...axisStyle },
@@ -85,7 +89,7 @@ const scatterOption = computed(() => ({
   series: [{
     type: 'scatter',
     symbolSize: (value: [number, number, number]) => Math.max(10, Math.min(28, 9 + value[2] * 18)),
-    data: (data.value?.items || []).map((item) => ({ name: item.blogger_name, value: [item.evaluated_count, item.avg_return_ratio, item.win_rate], itemStyle: { color: item.avg_return_ratio >= 0 ? '#52725f' : '#bd674f', opacity: .75 } })),
+    data: (data.value?.items || []).map((item) => ({ name: item.blogger_name, value: [item.evaluated_count, item.avg_return_ratio, item.win_rate], articleWinRate: item.evaluated_article_count ? item.article_win_rate : null, itemStyle: { color: item.avg_return_ratio >= 0 ? '#52725f' : '#bd674f', opacity: .75 } })),
   }],
 }))
 
@@ -97,7 +101,7 @@ onMounted(load)
     <PageHeader
       eyebrow="Recommendation intelligence"
       title="谁的判断，经得起时间检验？"
-      description="以真实推荐事件为起点，用 T+1 开盘入场和固定交易日窗口回看表现。未到期、缺行情与未识别标的不进入胜率分母。"
+      description="以真实推荐事件为起点，用 T+1 开盘入场和固定交易日窗口回看表现。推荐胜率按单条推荐计，文章胜率按博主的每篇文章计；未到期、缺行情与未识别标的不进入胜率分母。"
     >
       <template #actions>
         <PageExportButton kind="dashboard" :query="reportFilters || {}" :dirty="reportDirty" :disabled="loading || !data || !!error" label="导出筛选榜单" />
@@ -120,31 +124,32 @@ onMounted(load)
 		<div class="field"><label>资产</label><select v-model="assetType"><option value="">全部</option><option value="A_SHARE">A 股</option><option value="ETF">ETF</option><option value="SECTOR">板块指数</option></select></div>
       <div class="field"><label>方向</label><select v-model="direction"><option value="">全部</option><option value="LONG">做多</option><option value="SHORT">做空</option></select></div>
       <div class="field"><label>最少样本</label><input v-model.number="minSampleCount" type="number" min="0" max="1000" /></div>
-      <div class="field"><label>排序</label><select v-model="sort"><option value="win_rate">胜率</option><option value="avg_return">平均收益</option><option value="performance_score">综合分</option><option value="sample_count">样本数</option></select></div>
+      <div class="field"><label>排序</label><select v-model="sort"><option value="win_rate">推荐胜率</option><option value="article_win_rate">文章胜率</option><option value="avg_return">平均收益</option><option value="performance_score">综合分</option><option value="sample_count">样本数</option></select></div>
       <button class="button primary" type="button" @click="load">应用筛选</button>
     </section>
 
     <div v-if="error" class="error-banner">{{ error }}</div>
 
     <template v-if="data">
-      <section class="metric-grid">
+      <section class="metric-grid" style="--metric-columns: 6">
         <MetricCard label="覆盖博主" :value="formatNumber(data.overview.total_bloggers, 0)" note="当前筛选范围" :icon="UsersRound" tone="accent" />
         <MetricCard label="可评估推荐" :value="formatNumber(data.overview.evaluated_recommendations, 0)" note="只计 READY 窗口" :icon="Activity" />
-        <MetricCard label="总体胜率" :value="formatPercent(data.overview.average_win_rate)" note="按全部可评估样本加权" :icon="CircleGauge" :tone="data.overview.average_win_rate >= .5 ? 'positive' : 'negative'" />
+        <MetricCard label="推荐胜率" :value="formatPercent(data.overview.evaluated_recommendations ? data.overview.average_win_rate : null)" note="按单条可评估推荐计" :icon="CircleGauge" :tone="data.overview.average_win_rate >= .5 ? 'positive' : 'negative'" />
+        <MetricCard label="文章胜率" :value="formatPercent(data.overview.evaluated_article_count ? data.overview.article_win_rate : null)" :note="`${data.overview.article_win_count} / ${data.overview.evaluated_article_count} 篇胜出 · 共 ${data.overview.article_count} 篇`" :icon="FileText" :tone="data.overview.article_win_rate >= .5 ? 'positive' : 'negative'" />
         <MetricCard label="平均方向收益" :value="formatPercent(data.overview.average_return_ratio)" note="LONG / SHORT 统一口径" :icon="ArrowRight" :tone="data.overview.average_return_ratio >= 0 ? 'positive' : 'negative'" />
         <MetricCard label="等待与缺口" :value="formatNumber(data.overview.pending_recommendations + data.overview.incomplete_recommendations, 0)" :note="`${data.overview.pending_recommendations} 未到期 · ${data.overview.incomplete_recommendations} 不完整`" :icon="Clock3" />
       </section>
 
       <section v-if="data.items.length" class="content-grid">
-        <ChartPanel class="span-6" title="胜率领先者" description="横向比较 Top 10，样本数仍需结合表格判断。" :option="winRateOption" />
+        <ChartPanel class="span-6" title="胜率领先者" description="按当前排序取 Top 10，对照推荐胜率与文章胜率；样本数仍需结合表格判断。" :option="winRateOption" />
         <ChartPanel class="span-6" title="平均方向收益" description="正负收益分色，避免只看胜率忽略盈亏幅度。" :option="returnOption" />
         <ChartPanel class="span-12" title="样本可靠性地图" description="横轴为可评估样本，纵轴为平均收益，点面积映射胜率。" :option="scatterOption" :height="350" />
 
         <article class="panel span-12">
-          <header class="panel-header"><div><h2>博主表现榜</h2><p>综合展示收益、胜率、样本与回撤，不把待评估样本混入分母。</p></div><span class="muted">{{ windowDays }} 个交易日</span></header>
+          <header class="panel-header"><div><h2>博主表现榜</h2><p>文章胜率：一篇文章里盈利票多于亏损票记为胜；收益为 0 不计盈亏，盈亏持平不算胜但计入分母。</p></div><span class="muted">{{ windowDays }} 个交易日</span></header>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>排名</th><th>博主</th><th>综合分</th><th>样本</th><th>胜率</th><th>平均收益</th><th>中位收益</th><th>最佳 / 最差</th><th>平均回撤</th><th>待评估</th></tr></thead>
+              <thead><tr><th>排名</th><th>博主</th><th>综合分</th><th>样本</th><th>推荐胜率</th><th>文章</th><th>文章胜率</th><th>平均收益</th><th>中位收益</th><th>最佳 / 最差</th><th>平均回撤</th><th>待评估</th></tr></thead>
               <tbody>
                 <tr v-for="item in data.items" :key="item.blogger_id" class="clickable" @click="router.push(`/bloggers/${item.blogger_id}`)">
                   <td><span class="rank-number" :class="{ top: item.rank <= 3 }">{{ item.rank }}</span></td>
@@ -152,6 +157,8 @@ onMounted(load)
                   <td><strong>{{ formatNumber(item.performance_score, 1) }}</strong></td>
                   <td>{{ item.evaluated_count }} <small class="muted">/ {{ item.sample_count }}</small></td>
                   <td><span class="return-value" :class="item.win_rate >= .5 ? 'positive' : 'negative'">{{ formatPercent(item.win_rate) }}</span></td>
+                  <td>{{ item.evaluated_article_count }} <small class="muted">/ {{ item.article_count }}</small></td>
+                  <td><span class="return-value" :class="item.article_win_rate >= .5 ? 'positive' : 'negative'">{{ formatPercent(item.evaluated_article_count ? item.article_win_rate : null) }}</span></td>
                   <td><span class="return-value" :class="returnTone(item.avg_return_ratio)">{{ formatPercent(item.avg_return_ratio) }}</span></td>
                   <td><span class="return-value" :class="returnTone(item.median_return_ratio)">{{ formatPercent(item.median_return_ratio) }}</span></td>
                   <td><span class="return-value positive">{{ formatPercent(item.best_return_ratio) }}</span> <span class="muted">/</span> <span class="return-value negative">{{ formatPercent(item.worst_return_ratio) }}</span></td>

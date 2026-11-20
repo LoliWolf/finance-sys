@@ -197,7 +197,7 @@ func parsePerformanceFilter(r *http.Request) (stats.Filter, error) {
 	if filter.Status != "" && !stringInSet(strings.ToUpper(filter.Status), "READY", "PENDING", "INCOMPLETE", "NO_SECURITY", "UNSUPPORTED", "FAILED") {
 		return filter, fmt.Errorf("invalid status %q", filter.Status)
 	}
-	if filter.Sort != "" && !stringInSet(filter.Sort, "win_rate", "avg_return", "sample_count", "performance_score") {
+	if filter.Sort != "" && !stringInSet(filter.Sort, "win_rate", "article_win_rate", "avg_return", "sample_count", "performance_score") {
 		return filter, fmt.Errorf("invalid sort %q", filter.Sort)
 	}
 	return filter, nil

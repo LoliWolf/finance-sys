@@ -136,3 +136,59 @@ func TestPageExportRecommendationReadsPriceAndEvidence(t *testing.T) {
 	require.Equal(t, "完整证据", report.Recommendation.Recommendation.Evidence[0].Text)
 	require.Len(t, report.Prices.Items, 1)
 }
+
+func TestBloggerStatsIncludeArticleWinRate(t *testing.T) {
+	s := pageReportFixture(t, 4)
+	ctx := context.Background()
+	for _, statement := range []string{
+		"UPDATE recommendation_events SET blogger_id=1",
+		"UPDATE recommendation_event_window_metrics SET blogger_id=1",
+		// Article 101: two profitable recommendations -> win.
+		"UPDATE recommendation_events SET source_document_id=101 WHERE id IN (1,2)",
+		"UPDATE recommendation_event_window_metrics SET direction_return_ratio=0.02 WHERE recommendation_event_id=2",
+		// Article 102: zero return only -> evaluated tie, not a win.
+		"UPDATE recommendation_events SET source_document_id=102 WHERE id=3",
+		"UPDATE recommendation_event_window_metrics SET direction_return_ratio=0, raw_return_ratio=0, win_flag=0 WHERE recommendation_event_id=3",
+		// Article 103: not matured -> outside the denominator.
+		"UPDATE recommendation_events SET source_document_id=103 WHERE id=4",
+		"UPDATE recommendation_event_window_metrics SET status='PENDING', direction_return_ratio=NULL, raw_return_ratio=NULL, win_flag=NULL WHERE recommendation_event_id=4",
+		// A metric whose event row is missing still counts and forms its own losing article.
+		`INSERT INTO recommendation_event_window_metrics(id,recommendation_event_id,blogger_id,security_master_id,ts_code,symbol,security_name,asset_type,market,industry,sector_type,direction,recommend_date,window_days,status,reason_code,reason_message,quote_source,calc_version,raw_return_ratio,direction_return_ratio,win_flag)
+			VALUES(999,999,1,1,'000001.SH','000001.SH','证券1','A_SHARE','SH','行业','','LONG','2026-09-01',30,'READY','','','TUSHARE','v3',-0.03,-0.03,0)`,
+	} {
+		require.NoError(t, s.db.Exec(statement).Error)
+	}
+	expected := ArticleWinStats{ArticleCount: 4, EvaluatedArticleCount: 3, ArticleWinCount: 1, ArticleWinRate: 0.33333333}
+
+	rankings, err := s.BloggerRankings(ctx, Filter{WindowDays: 30, MinSampleCount: -1, Sort: "article_win_rate"})
+	require.NoError(t, err)
+	require.Len(t, rankings.Items, 1)
+	require.Equal(t, expected, rankings.Overview.ArticleWinStats)
+	require.Equal(t, expected, rankings.Items[0].ArticleWinStats)
+	require.Equal(t, 5, rankings.Items[0].SampleCount)
+	require.Equal(t, 4, rankings.Items[0].EvaluatedCount)
+	require.Equal(t, 2, rankings.Items[0].WinCount)
+
+	summary, err := s.BloggerSummary(ctx, 1, Filter{})
+	require.NoError(t, err)
+	require.Equal(t, 30, summary.Windows[2].WindowDays)
+	require.Equal(t, expected, summary.Windows[2].ArticleWinStats)
+	require.Equal(t, ArticleWinStats{}, summary.Windows[0].ArticleWinStats)
+
+	timeseries, err := s.BloggerTimeseries(ctx, 1, Filter{WindowDays: 30})
+	require.NoError(t, err)
+	require.Len(t, timeseries.Items, 1)
+	require.Equal(t, expected, timeseries.Items[0].ArticleWinStats)
+
+	encoded, err := json.Marshal(rankings)
+	require.NoError(t, err)
+	var decoded struct {
+		Overview map[string]any   `json:"overview"`
+		Items    []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.EqualValues(t, 3, decoded.Overview["evaluated_article_count"])
+	require.EqualValues(t, 0.33333333, decoded.Items[0]["article_win_rate"])
+	require.EqualValues(t, 1, decoded.Items[0]["article_win_count"])
+	require.EqualValues(t, 4, decoded.Items[0]["article_count"])
+}
