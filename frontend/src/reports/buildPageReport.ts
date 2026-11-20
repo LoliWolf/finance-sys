@@ -1,5 +1,5 @@
 import type { PageExportSnapshot, PrintablePageReport, ReportSection } from './types'
-import type { RecommendationPerformanceList, WindowSummary } from '../api/types'
+import type { ArticleWinStats, BloggerWindowSummary, RecommendationPerformanceList } from '../api/types'
 import { assetTypeLabel, marketLabel, formatDate, formatNumber, formatPercent, formatCurrency } from '../utils/format'
 
 const statusLabels: Record<string,string> = { READY:'已有结果', PENDING:'未到期', INCOMPLETE:'行情不全', NO_SECURITY:'未识别', FAILED:'失败', UNSUPPORTED:'暂不支持', PLANNED:'分析完成', PARSED:'已解析', INGESTED:'已入库', ANALYZING:'分析中', INVALID:'无有效推荐', EMPTY:'无推荐', NEEDS_EVALUATION:'待补算', PARTIAL:'部分可用', QUEUED:'排队中', RUNNING:'运行中', SUCCEEDED:'成功', OPEN:'持有中', CLOSED:'已平仓', EXIT_PENDING:'待退出', BUY:'买入', SELL:'卖出', FILLED:'已成交', PARTIALLY_FILLED:'部分成交', REJECTED:'已拒绝', CANCELED:'已撤单' }
@@ -14,8 +14,11 @@ export const beijingTime = (v?:string|null) => v && Number.isFinite(Date.parse(v
 const requireData = <T>(v:T|null|undefined):T => { if(v==null) throw new Error('报告数据不完整，请刷新后重试'); return v }
 
 function table(title:string,columns:string[],rows:string[][],description?:string):ReportSection { return {title,columns,rows,description} }
-function summaryRows(items:WindowSummary[]) {
-  return items.map(i=>[`${i.window_days} 交易日`,`${i.evaluated_count} / ${i.sample_count}`,pct(i.win_rate,i.evaluated_count),pct(i.avg_return_ratio,i.evaluated_count),pct(i.median_return_ratio,i.evaluated_count),pct(i.best_return_ratio,i.evaluated_count)+' / '+pct(i.worst_return_ratio,i.evaluated_count),pct(i.avg_max_drawdown_ratio,i.evaluated_count),`${i.pending_count} / ${i.incomplete_count}`])
+const articleRate = (i:ArticleWinStats) => pct(i.article_win_rate,i.evaluated_article_count)
+const articleCounts = (i:ArticleWinStats) => `${num(i.article_win_count)} 胜 / ${num(i.evaluated_article_count)} 可评估 / ${num(i.article_count)} 篇`
+const articleMethod = '文章胜率按“博主 × 来源文章”统计：同一篇文章内盈利推荐多于亏损推荐记为胜；方向收益为 0 不计盈亏，盈亏持平不算胜但计入分母，没有可评估推荐的文章不进入分母。'
+function summaryRows(items:BloggerWindowSummary[]) {
+  return items.map(i=>[`${i.window_days} 交易日`,`${i.evaluated_count} / ${i.sample_count}`,pct(i.win_rate,i.evaluated_count),`${articleRate(i)}\n${articleCounts(i)}`,pct(i.avg_return_ratio,i.evaluated_count),pct(i.median_return_ratio,i.evaluated_count),pct(i.best_return_ratio,i.evaluated_count)+' / '+pct(i.worst_return_ratio,i.evaluated_count),pct(i.avg_max_drawdown_ratio,i.evaluated_count),`${i.pending_count} / ${i.incomplete_count}`])
 }
 function performanceSection(list:RecommendationPerformanceList):ReportSection {
   if((list.items || []).length !== list.total) throw new Error('推荐明细不完整，已停止导出')
@@ -23,7 +26,7 @@ function performanceSection(list:RecommendationPerformanceList):ReportSection {
 }
 function filterEntries(snapshot:PageExportSnapshot) {
   const labels:Record<string,string>={window_days:'观察窗口（交易日）',date_from:snapshot.kind==='documents'?'上传开始':'推荐开始',date_to:snapshot.kind==='documents'?'上传结束':'推荐结束',market:'市场',asset_type:'资产',direction:'方向',status:'状态',blogger_id:'博主 ID',min_sample_count:'最少可评估样本',sort:'排序',search:'标的关键词（全量匹配）',selected_ts_code:'选中标的',query:'文档关键词',event_id:'推荐事件 ID',scope:'记录范围'}
-  return Object.entries(snapshot.filters||{}).map(([key,value])=>({label:labels[key]||key,value:key==='market'?marketLabel(value):key==='asset_type'?assetTypeLabel(value):key==='direction'?direction(value):key==='status'?state(value):key==='sort'?({win_rate:'胜率',avg_return:'平均收益',sample_count:'可评估样本数',performance_score:'综合分'}[value]||value):value}))
+  return Object.entries(snapshot.filters||{}).map(([key,value])=>({label:labels[key]||key,value:key==='market'?marketLabel(value):key==='asset_type'?assetTypeLabel(value):key==='direction'?direction(value):key==='status'?state(value):key==='sort'?({win_rate:'推荐胜率',article_win_rate:'文章胜率',avg_return:'平均收益',sample_count:'可评估样本数',performance_score:'综合分'}[value]||value):value}))
 }
 
 export function buildPageReport(snapshot:PageExportSnapshot):PrintablePageReport {
@@ -39,20 +42,24 @@ export function buildPageReport(snapshot:PageExportSnapshot):PrintablePageReport
   switch(snapshot.kind) {
     case 'dashboard': {
       const data=requireData(snapshot.dashboard), o=data.overview
+      const byArticle=snapshot.filters?.sort==='article_win_rate'
       result.subtitle=`${data.window_days} 交易日窗口 · 当前筛选下全部 ${data.items.length} 位达标博主，非仅页面前 100 位。`
-      result.metrics=[{label:'覆盖博主',value:num(o.total_bloggers),note:'最少样本门槛前'},{label:'达标博主',value:num(data.items.length)},{label:'可评估推荐',value:num(o.evaluated_recommendations)},{label:'总体胜率',value:pct(o.average_win_rate,o.evaluated_recommendations)},{label:'平均方向收益',value:pct(o.average_return_ratio,o.evaluated_recommendations)}]
-      result.sections.push({title:'领先博主比较',chart:{type:'bar',title:'当前排序前 10 位 · 胜率',percent:true,points:data.items.slice(0,10).map(i=>({label:i.blogger_name,value:i.evaluated_count?number(i.win_rate):null}))}})
-      result.sections.push(table('完整博主表现榜',['排名 / 博主','机构','综合分','可评估 / 总样本','胜率','平均 / 中位收益','最佳 / 最差','平均回撤','未到期 / 缺口'],data.items.map(i=>[`${i.rank}. ${i.blogger_name}`,i.institution||'独立研究者',num(i.performance_score),`${i.evaluated_count} / ${i.sample_count}`,pct(i.win_rate,i.evaluated_count),`${pct(i.avg_return_ratio,i.evaluated_count)} / ${pct(i.median_return_ratio,i.evaluated_count)}`,`${pct(i.best_return_ratio,i.evaluated_count)} / ${pct(i.worst_return_ratio,i.evaluated_count)}`,pct(i.avg_max_drawdown_ratio,i.evaluated_count),`${i.pending_count} / ${i.incomplete_count}`]),`总览统计覆盖门槛前全部样本，榜单仅列达标博主。总计 ${o.pending_recommendations} 条未到期，${o.incomplete_recommendations} 条不完整。`))
+      result.metrics=[{label:'覆盖博主',value:num(o.total_bloggers),note:'最少样本门槛前'},{label:'达标博主',value:num(data.items.length)},{label:'可评估推荐',value:num(o.evaluated_recommendations)},{label:'推荐胜率',value:pct(o.average_win_rate,o.evaluated_recommendations),note:'按单条推荐计'},{label:'文章胜率',value:articleRate(o),note:articleCounts(o)},{label:'平均方向收益',value:pct(o.average_return_ratio,o.evaluated_recommendations)}]
+      result.sections.push({title:'领先博主比较',chart:{type:'bar',title:`当前排序前 10 位 · ${byArticle?'文章胜率':'推荐胜率'}`,percent:true,points:data.items.slice(0,10).map(i=>({label:i.blogger_name,value:byArticle?(i.evaluated_article_count?number(i.article_win_rate):null):(i.evaluated_count?number(i.win_rate):null)}))}})
+      result.sections.push(table('完整博主表现榜',['排名 / 博主','机构','综合分','可评估 / 总样本','推荐胜率','文章胜率 / 篇数','平均 / 中位收益','最佳 / 最差','平均回撤','未到期 / 缺口'],data.items.map(i=>[`${i.rank}. ${i.blogger_name}`,i.institution||'独立研究者',num(i.performance_score),`${i.evaluated_count} / ${i.sample_count}`,pct(i.win_rate,i.evaluated_count),`${articleRate(i)}\n${articleCounts(i)}`,`${pct(i.avg_return_ratio,i.evaluated_count)} / ${pct(i.median_return_ratio,i.evaluated_count)}`,`${pct(i.best_return_ratio,i.evaluated_count)} / ${pct(i.worst_return_ratio,i.evaluated_count)}`,pct(i.avg_max_drawdown_ratio,i.evaluated_count),`${i.pending_count} / ${i.incomplete_count}`]),`总览统计覆盖门槛前全部样本，榜单仅列达标博主。总计 ${o.pending_recommendations} 条未到期，${o.incomplete_recommendations} 条不完整。`))
+      result.statements.splice(1,0,articleMethod)
       break
     }
     case 'blogger': {
       const data=requireData(snapshot.blogger), trend=requireData(snapshot.timeseries), list=requireData(snapshot.recommendations)
       result.title=`${data.blogger_name} · 博主研究档案`
       result.subtitle=`${data.institution || '独立研究者'} · 四窗口对照、月度趋势与所选窗口全部推荐。`
-      result.sections.push(table('四窗口对照',['窗口','可评估 / 总样本','胜率','平均收益','中位收益','最佳 / 最差','平均回撤','未到期 / 缺口'],summaryRows(data.windows)))
+      result.sections.push(table('四窗口对照',['窗口','可评估 / 总样本','推荐胜率','文章胜率 / 篇数','平均收益','中位收益','最佳 / 最差','平均回撤','未到期 / 缺口'],summaryRows(data.windows)))
       result.sections.push({title:'月度表现趋势',chart:{type:'line',title:`${trend.window_days} 交易日窗口 · 月均方向收益`,percent:true,points:trend.items.map(i=>({label:i.period,value:i.evaluated_count?number(i.avg_return_ratio):null}))}})
-      result.sections.push(table('月度指标',['月份','总样本','可评估','未到期','胜率','平均方向收益'],trend.items.map(i=>[i.period,num(i.sample_count),num(i.evaluated_count),num(i.pending_count),pct(i.win_rate,i.evaluated_count),pct(i.avg_return_ratio,i.evaluated_count)])))
-      result.sections.push(performanceSection(list)); break
+      result.sections.push(table('月度指标',['月份','总样本','可评估','未到期','推荐胜率','文章胜率 / 篇数','平均方向收益'],trend.items.map(i=>[i.period,num(i.sample_count),num(i.evaluated_count),num(i.pending_count),pct(i.win_rate,i.evaluated_count),`${articleRate(i)}\n${articleCounts(i)}`,pct(i.avg_return_ratio,i.evaluated_count)])))
+      result.sections.push(performanceSection(list))
+      result.statements.splice(1,0,articleMethod)
+      break
     }
     case 'securities': {
       const data=requireData(snapshot.securities)

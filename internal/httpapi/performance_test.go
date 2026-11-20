@@ -19,3 +19,12 @@ func TestParsePerformanceFilterIncludesBloggerNameAndPagination(t *testing.T) {
 	require.Equal(t, 100, filter.Limit)
 	require.Equal(t, 200, filter.Offset)
 }
+
+func TestParsePerformanceFilterAcceptsArticleWinRateSort(t *testing.T) {
+	filter, err := parsePerformanceFilter(httptest.NewRequest("GET", "/api/v1/bloggers/rankings?sort=article_win_rate", nil))
+	require.NoError(t, err)
+	require.Equal(t, "article_win_rate", filter.Sort)
+
+	_, err = parsePerformanceFilter(httptest.NewRequest("GET", "/api/v1/bloggers/rankings?sort=article_rate", nil))
+	require.ErrorContains(t, err, "invalid sort")
+}

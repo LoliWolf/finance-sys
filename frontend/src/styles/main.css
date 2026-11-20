@@ -95,7 +95,7 @@ button { color: inherit; }
 .segmented button { min-width: 47px; height: 32px; padding: 0 10px; border: 0; border-radius: 7px; cursor: pointer; color: var(--ink-soft); background: transparent; font-size: 12px; font-weight: 650; }
 .segmented button.active { color: #fff8ef; background: #34312c; box-shadow: 0 3px 10px rgba(45,40,34,.18); }
 
-.metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin-bottom: 22px; }
+.metric-grid { display: grid; grid-template-columns: repeat(var(--metric-columns, 5), minmax(0, 1fr)); gap: 14px; margin-bottom: 22px; }
 .metric-card { min-height: 150px; padding: 20px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: rgba(250,247,241,.84); box-shadow: 0 10px 34px rgba(70,54,38,.045); }
 .metric-label { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 11px; font-weight: 650; }
 .metric-card > strong { margin-top: auto; font-family: "Iowan Old Style", "Songti SC", Georgia, serif; font-size: clamp(28px, 2.3vw, 40px); font-weight: 500; letter-spacing: -.035em; }
@@ -421,7 +421,7 @@ button { color: inherit; }
   body.document-report-printing .detail-hero p { color: var(--ink-soft); font-size: 11px; }
   body.document-report-printing .detail-meta { margin-top: 14px; gap: 7px 14px; }
   body.document-report-printing .detail-meta span { padding: 0; border: 0; border-radius: 0; color: var(--ink-soft); background: transparent; font-size: 9px; }
-  body.document-report-printing .metric-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; padding-bottom: 18px; border-bottom: 1px solid var(--line-strong); }
+  body.document-report-printing .metric-grid { grid-template-columns: repeat(var(--metric-columns, 5), minmax(0, 1fr)); gap: 0; padding-bottom: 18px; border-bottom: 1px solid var(--line-strong); }
   body.document-report-printing .metric-card { min-height: 86px; padding: 0 12px; color: var(--ink); }
   body.document-report-printing .metric-card:first-child { padding-left: 0; }
   body.document-report-printing .metric-card:last-child { padding-right: 0; }

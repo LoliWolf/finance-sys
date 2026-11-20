@@ -23,6 +23,7 @@ type Service struct {
 
 type metricRow struct {
 	RecommendationEventID   int64
+	SourceDocumentID        int64
 	BloggerID               int64
 	BloggerName             string
 	Institution             string
@@ -70,6 +71,7 @@ type aggregate struct {
 	favorableTotal  float64
 	adverseTotal    float64
 	drawdownTotal   float64
+	articles        map[articleKey]*articleTally
 }
 
 func NewService(db *gorm.DB, runtime *config.Runtime) *Service {
@@ -130,6 +132,7 @@ func (s *Service) bloggerRankings(ctx context.Context, filter Filter, exportLimi
 			PendingRecommendations:    overall.pendingCount,
 			IncompleteRecommendations: overall.incompleteCount,
 			AverageWinRate:            ratio(overall.winCount, overall.evaluatedCount),
+			ArticleWinStats:           articleWinStats(overall),
 			AverageReturnRatio:        average(overall.returns),
 		},
 		Items: items,
@@ -158,13 +161,16 @@ func (s *Service) BloggerSummary(ctx context.Context, bloggerID int64, filter Fi
 		addMetric(entry, row)
 	}
 	windows := configuredWindows(s.runtime)
-	items := make([]WindowSummary, 0, len(windows))
+	items := make([]BloggerWindowSummary, 0, len(windows))
 	for _, window := range windows {
 		values := aggregate{}
 		if existing := grouped[window]; existing != nil {
 			values = *existing
 		}
-		items = append(items, windowSummary(window, values))
+		items = append(items, BloggerWindowSummary{
+			WindowSummary:   windowSummary(window, values),
+			ArticleWinStats: articleWinStats(values),
+		})
 	}
 	return &BloggerSummaryResponse{
 		BloggerID:   blogger.ID,
@@ -203,14 +209,15 @@ func (s *Service) BloggerTimeseries(ctx context.Context, bloggerID int64, filter
 	for _, period := range periods {
 		values := grouped[period]
 		items = append(items, TimeseriesPoint{
-			Period:         period,
-			WindowDays:     filter.WindowDays,
-			SampleCount:    values.sampleCount,
-			EvaluatedCount: values.evaluatedCount,
-			PendingCount:   values.pendingCount,
-			WinCount:       values.winCount,
-			WinRate:        ratio(values.winCount, values.evaluatedCount),
-			AvgReturnRatio: average(values.returns),
+			Period:          period,
+			WindowDays:      filter.WindowDays,
+			SampleCount:     values.sampleCount,
+			EvaluatedCount:  values.evaluatedCount,
+			PendingCount:    values.pendingCount,
+			WinCount:        values.winCount,
+			WinRate:         ratio(values.winCount, values.evaluatedCount),
+			ArticleWinStats: articleWinStats(*values),
+			AvgReturnRatio:  average(values.returns),
 		})
 	}
 	return &BloggerTimeseriesResponse{BloggerID: bloggerID, WindowDays: filter.WindowDays, Items: items}, nil
@@ -579,13 +586,17 @@ func (s *Service) SecuritySummary(ctx context.Context, tsCode string, filter Fil
 
 func (s *Service) metricRows(ctx context.Context, filter Filter) ([]metricRow, error) {
 	var rows []metricRow
+	// The LEFT JOIN only adds the source document for article statistics and
+	// must not drop any metric from the existing recommendation-level counts.
 	tx := s.db.WithContext(ctx).
 		Table("recommendation_event_window_metrics AS m").
-		Select(`m.recommendation_event_id, m.blogger_id, b.name AS blogger_name, b.institution,
+		Select(`m.recommendation_event_id, COALESCE(re.source_document_id, 0) AS source_document_id,
+			m.blogger_id, b.name AS blogger_name, b.institution,
 			m.security_master_id, m.ts_code, m.symbol, m.security_name, m.asset_type, m.market, m.industry, m.sector_type,
 			m.direction, m.recommend_date, m.window_days, m.status, m.direction_return_ratio,
 			m.max_favorable_return_ratio, m.max_adverse_return_ratio, m.max_drawdown_ratio, m.win_flag`).
-		Joins("JOIN bloggers AS b ON b.id = m.blogger_id")
+		Joins("JOIN bloggers AS b ON b.id = m.blogger_id").
+		Joins("LEFT JOIN recommendation_events AS re ON re.id = m.recommendation_event_id")
 	tx = applyMetricFilters(tx, filter)
 	if err := tx.Scan(&rows).Error; err != nil {
 		return nil, err
@@ -725,6 +736,7 @@ func normalizePagination(filter Filter) Filter {
 
 func addMetric(values *aggregate, row metricRow) {
 	values.sampleCount++
+	addArticleMetric(values, row)
 	switch evaluation.Status(row.Status) {
 	case evaluation.StatusReady:
 		values.evaluatedCount++
@@ -761,6 +773,7 @@ func bloggerRankingItem(bloggerID int64, name string, institution string, values
 		IncompleteCount:            values.incompleteCount,
 		WinCount:                   values.winCount,
 		WinRate:                    ratio(values.winCount, values.evaluatedCount),
+		ArticleWinStats:            articleWinStats(values),
 		AvgReturnRatio:             average(values.returns),
 		MedianReturnRatio:          median(values.returns),
 		BestReturnRatio:            maxFloat(values.returns),
@@ -815,6 +828,13 @@ func sortBloggerRankings(items []BloggerRankingItem, field string) {
 		case "performance_score":
 			if items[i].PerformanceScore != items[j].PerformanceScore {
 				return items[i].PerformanceScore > items[j].PerformanceScore
+			}
+		case "article_win_rate":
+			if items[i].ArticleWinRate != items[j].ArticleWinRate {
+				return items[i].ArticleWinRate > items[j].ArticleWinRate
+			}
+			if items[i].EvaluatedArticleCount != items[j].EvaluatedArticleCount {
+				return items[i].EvaluatedArticleCount > items[j].EvaluatedArticleCount
 			}
 		default:
 			if items[i].WinRate != items[j].WinRate {

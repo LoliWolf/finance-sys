@@ -481,6 +481,7 @@ func validateRecommendationPerformance(cfg RecommendationPerformanceConfig, requ
 	require(cfg.Ranking.DefaultMinSampleCount >= 0, "evaluation.recommendation_performance.ranking.default_min_sample_count must be zero or positive")
 	allowedSorts := map[string]struct{}{
 		"win_rate":          {},
+		"article_win_rate":  {},
 		"avg_return":        {},
 		"sample_count":      {},
 		"performance_score": {},

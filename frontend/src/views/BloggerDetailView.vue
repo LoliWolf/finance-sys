@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, BarChart2, CalendarRange, Layers3, RefreshCw } from 'lucide-vue-next'
+import { ArrowLeft, BarChart2, CalendarRange, FileText, Layers3, RefreshCw } from 'lucide-vue-next'
 import { api } from '../api/client'
 import type { BloggerSummaryResponse, BloggerTimeseriesResponse, RecommendationPerformanceList } from '../api/types'
 import ChartPanel from '../components/ChartPanel.vue'
@@ -63,7 +63,8 @@ const windowOption = computed(() => ({
     { type: 'value', axisLabel: { formatter: (value: number) => `${Math.round(value * 100)}%`, color: '#776f65' }, splitLine: { show: false } },
   ],
   series: [
-    { name: '胜率', type: 'bar', data: summary.value?.windows.map((item) => item.win_rate) || [], barWidth: 28, itemStyle: { color: '#b95e43', borderRadius: [5, 5, 0, 0] } },
+    { name: '推荐胜率', type: 'bar', data: summary.value?.windows.map((item) => (item.evaluated_count ? item.win_rate : null)) || [], barWidth: 16, itemStyle: { color: '#b95e43', borderRadius: [5, 5, 0, 0] } },
+    { name: '文章胜率', type: 'bar', data: summary.value?.windows.map((item) => (item.evaluated_article_count ? item.article_win_rate : null)) || [], barWidth: 16, itemStyle: { color: '#4f6f8f', borderRadius: [5, 5, 0, 0] } },
     { name: '平均收益', type: 'line', yAxisIndex: 1, data: summary.value?.windows.map((item) => item.avg_return_ratio) || [], smooth: true, symbolSize: 8, lineStyle: { color: '#4f7160', width: 2 }, itemStyle: { color: '#4f7160' } },
   ],
 }))
@@ -78,7 +79,8 @@ const trendOption = computed(() => ({
     { type: 'value', axisLabel: { formatter: (value: number) => `${Math.round(value * 100)}%`, color: '#776f65' }, splitLine: { show: false } },
   ],
   series: [
-    { name: '月度胜率', type: 'line', data: timeseries.value?.items.map((item) => item.win_rate) || [], smooth: true, symbolSize: 7, areaStyle: { color: 'rgba(185,94,67,.08)' }, lineStyle: { color: '#b95e43', width: 2 }, itemStyle: { color: '#b95e43' } },
+    { name: '月度推荐胜率', type: 'line', data: timeseries.value?.items.map((item) => (item.evaluated_count ? item.win_rate : null)) || [], smooth: true, symbolSize: 7, areaStyle: { color: 'rgba(185,94,67,.08)' }, lineStyle: { color: '#b95e43', width: 2 }, itemStyle: { color: '#b95e43' } },
+    { name: '月度文章胜率', type: 'line', data: timeseries.value?.items.map((item) => (item.evaluated_article_count ? item.article_win_rate : null)) || [], smooth: true, symbolSize: 7, lineStyle: { color: '#4f6f8f', width: 2, type: 'dashed' }, itemStyle: { color: '#4f6f8f' } },
     { name: '月均收益', type: 'line', yAxisIndex: 1, data: timeseries.value?.items.map((item) => item.avg_return_ratio) || [], smooth: true, symbolSize: 7, lineStyle: { color: '#4f7160', width: 2 }, itemStyle: { color: '#4f7160' } },
   ],
 }))
@@ -109,16 +111,17 @@ onMounted(load)
         <button class="button" type="button" @click="load"><RefreshCw :size="15" />应用日期</button>
       </section>
 
-      <section class="metric-grid">
+      <section class="metric-grid" style="--metric-columns: 6">
         <MetricCard label="可评估样本" :value="formatNumber(currentWindow.evaluated_count, 0)" :note="`总样本 ${currentWindow.sample_count}`" :icon="Layers3" tone="accent" />
-        <MetricCard label="窗口胜率" :value="formatPercent(currentWindow.win_rate)" :note="`${currentWindow.win_count} 次正向`" :icon="BarChart2" :tone="currentWindow.win_rate >= .5 ? 'positive' : 'negative'" />
+        <MetricCard label="推荐胜率" :value="formatPercent(currentWindow.evaluated_count ? currentWindow.win_rate : null)" :note="`${currentWindow.win_count} 次正向 · 按单条推荐计`" :icon="BarChart2" :tone="currentWindow.win_rate >= .5 ? 'positive' : 'negative'" />
+        <MetricCard label="文章胜率" :value="formatPercent(currentWindow.evaluated_article_count ? currentWindow.article_win_rate : null)" :note="`${currentWindow.article_win_count} / ${currentWindow.evaluated_article_count} 篇胜出 · 共 ${currentWindow.article_count} 篇`" :icon="FileText" :tone="currentWindow.article_win_rate >= .5 ? 'positive' : 'negative'" />
         <MetricCard label="平均收益" :value="formatPercent(currentWindow.avg_return_ratio)" note="方向收益均值" :tone="currentWindow.avg_return_ratio >= 0 ? 'positive' : 'negative'" />
         <MetricCard label="中位收益" :value="formatPercent(currentWindow.median_return_ratio)" note="降低极值干扰" :tone="currentWindow.median_return_ratio >= 0 ? 'positive' : 'negative'" />
         <MetricCard label="等待 / 缺口" :value="formatNumber(currentWindow.pending_count + currentWindow.incomplete_count, 0)" :note="`${currentWindow.pending_count} 未到期 · ${currentWindow.incomplete_count} 不完整`" :icon="CalendarRange" />
       </section>
 
       <section class="content-grid">
-        <ChartPanel class="span-6" title="四窗口能力曲线" description="胜率与平均收益使用双轴，对比短中长期稳定性。" :option="windowOption" />
+        <ChartPanel class="span-6" title="四窗口能力曲线" description="推荐胜率、文章胜率与平均收益使用双轴，对比短中长期稳定性。" :option="windowOption" />
         <ChartPanel class="span-6" title="月度表现趋势" :description="`${windowDays} 日窗口，按推荐月份聚合。`" :option="trendOption" />
 
         <article class="panel span-12">

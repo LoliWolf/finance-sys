@@ -1,4 +1,13 @@
-export interface Overview {
+// Article win rate: one blogger's recommendations in one source document form
+// an article, which wins when profitable recommendations outnumber losing ones.
+export interface ArticleWinStats {
+  article_count: number
+  evaluated_article_count: number
+  article_win_count: number
+  article_win_rate: number
+}
+
+export interface Overview extends ArticleWinStats {
   total_bloggers: number
   evaluated_recommendations: number
   pending_recommendations: number
@@ -7,7 +16,7 @@ export interface Overview {
   average_return_ratio: number
 }
 
-export interface BloggerRankingItem {
+export interface BloggerRankingItem extends ArticleWinStats {
   rank: number
   blogger_id: number
   blogger_name: string
@@ -53,14 +62,16 @@ export interface WindowSummary {
   avg_max_drawdown_ratio: number
 }
 
+export interface BloggerWindowSummary extends WindowSummary, ArticleWinStats {}
+
 export interface BloggerSummaryResponse {
   blogger_id: number
   blogger_name: string
   institution: string
-  windows: WindowSummary[]
+  windows: BloggerWindowSummary[]
 }
 
-export interface TimeseriesPoint {
+export interface TimeseriesPoint extends ArticleWinStats {
   period: string
   window_days: number
   sample_count: number
