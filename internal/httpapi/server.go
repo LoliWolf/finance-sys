@@ -30,13 +30,15 @@ type ConfigReloader interface {
 	Reload(context.Context) error
 }
 
-// xueqiuRunEnqueuer queues manual Xueqiu ingestion runs (AutomaticScheduler).
-type xueqiuRunEnqueuer interface {
-	EnqueueManualXueqiuRun(context.Context, service.XueqiuDocumentIngestionRequest) (*db_model.ScheduledTaskRun, error)
+// wireDeskRunEnqueuer queues manual wire desk (Xueqiu, THS) ingestion runs
+// (AutomaticScheduler).
+type wireDeskRunEnqueuer interface {
+	EnqueueManualXueqiuRun(context.Context, service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error)
+	EnqueueManualTHSRun(context.Context, service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error)
 }
 
 type Server struct {
-	xueqiuRuns    xueqiuRunEnqueuer
+	wireDeskRuns  wireDeskRunEnqueuer
 	db            *gorm.DB
 	runtime       *config.Runtime
 	documents     *service.DocumentService
@@ -93,7 +95,7 @@ func NewServer(
 	evaluation recommendationEvaluationService,
 	performanceStats performanceStatsService,
 	trading *tradingservice.Service,
-	xueqiuRuns xueqiuRunEnqueuer,
+	wireDeskRuns wireDeskRunEnqueuer,
 	reloader ConfigReloader,
 	logger *slog.Logger,
 ) *Server {
@@ -111,7 +113,7 @@ func NewServer(
 		evaluation:    evaluation,
 		stats:         performanceStats,
 		trading:       trading,
-		xueqiuRuns:    xueqiuRuns,
+		wireDeskRuns:  wireDeskRuns,
 		reloader:      reloader,
 		logger:        logger,
 		bridgeNonces:  make(map[string]time.Time),
@@ -175,6 +177,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/internal/security/verify", s.handleVerifySecurity)
 		r.Post("/admin/config/reload", s.handleReloadConfig)
 		r.Post("/admin/external-documents/xueqiu/runs", s.handleEnqueueXueqiuRun)
+		r.Post("/admin/external-documents/ths/runs", s.handleEnqueueTHSRun)
 		r.Get("/admin/scheduled-task-runs/{id}", s.handleGetScheduledTaskRun)
 		r.Post("/trading/agent-runs", s.handleCreateTradingAgentRun)
 		r.Get("/trading/agent-runs/{id}", s.handleGetTradingAgentRun)

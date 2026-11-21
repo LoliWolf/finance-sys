@@ -1,13 +1,13 @@
-// Package xueqiudesk reads the Xueqiu wire desk (xueqiu-tool) pending-ACK
-// queue and ACKs posts once FinanceSys has stored them. The desk only keeps
-// original posts (no reposts or replies).
-package xueqiudesk
+// Package wiredesk reads the pending-ACK queue of a subscription wire desk
+// (the Xueqiu desk xueqiu-tool and the Tonghuashun desk ths-wire-desk share
+// one API contract) and ACKs posts once FinanceSys has stored them. Desks only
+// keep original posts (no reposts or replies).
+package wiredesk
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +22,7 @@ import (
 // maxAckBatch mirrors the desk's POST /api/acks limit.
 const maxAckBatch = 500
 
-// Author is the post's Xueqiu author.
+// Author is the post's author on the source platform.
 type Author struct {
 	ID     int64  `json:"id"`
 	Name   string `json:"name"`
@@ -68,22 +68,29 @@ type AckResult struct {
 
 // Client talks to one wire desk.
 type Client struct {
+	name    string
 	baseURL *url.URL
 	token   string
 	http    *http.Client
 }
 
-// New builds a client from the FinanceSys source config.
-func New(cfg config.XueqiuDocumentSourceConfig) (*Client, error) {
+// New builds a client from the FinanceSys source config; name labels errors
+// (for example "xueqiu desk").
+func New(name string, cfg config.WireDeskDocumentSourceConfig) (*Client, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "wire desk"
+	}
 	raw := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	base, err := url.Parse(raw)
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
-		return nil, fmt.Errorf("xueqiu desk base_url %q must be an absolute http(s) URL", cfg.BaseURL)
+		return nil, fmt.Errorf("%s base_url %q must be an absolute http(s) URL", name, cfg.BaseURL)
 	}
 	if cfg.RequestTimeoutMS <= 0 {
-		return nil, errors.New("xueqiu desk request_timeout_ms must be positive")
+		return nil, fmt.Errorf("%s request_timeout_ms must be positive", name)
 	}
 	return &Client{
+		name:    name,
 		baseURL: base,
 		token:   strings.TrimSpace(cfg.APIToken),
 		http:    &http.Client{Timeout: time.Duration(cfg.RequestTimeoutMS) * time.Millisecond},
@@ -131,13 +138,13 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("xueqiu desk %s %s: encode body: %w", method, path, err)
+			return fmt.Errorf("%s %s %s: encode body: %w", c.name, method, path, err)
 		}
 		reader = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target.String(), reader)
 	if err != nil {
-		return fmt.Errorf("xueqiu desk %s %s: %w", method, path, err)
+		return fmt.Errorf("%s %s %s: %w", c.name, method, path, err)
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -148,18 +155,18 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("xueqiu desk %s %s: %w", method, path, err)
+		return fmt.Errorf("%s %s %s: %w", c.name, method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return fmt.Errorf("xueqiu desk %s %s: read body: %w", method, path, err)
+		return fmt.Errorf("%s %s %s: read body: %w", c.name, method, path, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("xueqiu desk %s %s: http %d: %s", method, path, resp.StatusCode, snippet(raw))
+		return fmt.Errorf("%s %s %s: http %d: %s", c.name, method, path, resp.StatusCode, snippet(raw))
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("xueqiu desk %s %s: decode: %w", method, path, err)
+		return fmt.Errorf("%s %s %s: decode: %w", c.name, method, path, err)
 	}
 	return nil
 }

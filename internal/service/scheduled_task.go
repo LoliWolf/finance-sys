@@ -107,6 +107,7 @@ func (s *ScheduledTaskService) execute(ctx context.Context, run *db_model.Schedu
 	skipCheck := map[domain.ScheduledTaskType]func(*db_model.ScheduledTaskRun, *config.Config, time.Time) (string, error){
 		domain.ScheduledTaskTypeOpenListDocuments: openListScheduledRunSkipReason,
 		domain.ScheduledTaskTypeXueqiuDocuments:   xueqiuScheduledRunSkipReason,
+		domain.ScheduledTaskTypeTHSDocuments:      thsScheduledRunSkipReason,
 	}[taskType]
 	if skipCheck != nil {
 		if s.runtime == nil || s.runtime.Config() == nil {

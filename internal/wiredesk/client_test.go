@@ -1,4 +1,4 @@
-package xueqiudesk
+package wiredesk
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"finance-sys/internal/config"
 
@@ -17,7 +18,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc, token string) *Client
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	client, err := New(config.XueqiuDocumentSourceConfig{BaseURL: server.URL + "/", APIToken: token, RequestTimeoutMS: 2000})
+	client, err := New("xueqiu desk", config.WireDeskDocumentSourceConfig{BaseURL: server.URL + "/", APIToken: token, RequestTimeoutMS: 2000})
 	require.NoError(t, err)
 	return client
 }
@@ -78,11 +79,38 @@ func TestErrorsCarryStatusAndBody(t *testing.T) {
 	_, err := client.Pending(context.Background(), 0, 10)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "http 401") && strings.Contains(err.Error(), "invalid API token"), err.Error())
+	require.True(t, strings.HasPrefix(err.Error(), "xueqiu desk GET /api/articles"), err.Error())
+}
+
+// The Tonghuashun desk returns the same contract with avatar/thumb fields and
+// no symbols; unknown fields must not break decoding.
+func TestPendingDecodesTonghuashunDeskArticles(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[{"id":3,"status_id":728850093,"title":"盘前提示","display_title":"盘前提示",
+			"author":{"id":429085934,"name":"首创证券伍彩云","avatar":"https://u.thsi.cn/avatar/1.gif"},
+			"text":"关注半导体设备","html":"<p>关注半导体设备</p>","url":"https://t.10jqka.com.cn/lgt/short_view/index.html?contentId=x",
+			"images":[{"url":"https://u.thsi.cn/a.png","thumb":"https://u.thsi.cn/a.png"}],"origin":"new",
+			"published_at":"2026-11-20T08:45:01+08:00","synced_at":"2026-11-20T08:50:00+08:00","acked":false,"partial":false}],
+			"has_more":true,"next_after_id":3}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := New("ths desk", config.WireDeskDocumentSourceConfig{BaseURL: server.URL, RequestTimeoutMS: 2000})
+	require.NoError(t, err)
+	page, err := client.Pending(context.Background(), 0, 20)
+	require.NoError(t, err)
+	require.True(t, page.HasMore)
+	require.Len(t, page.Items, 1)
+	item := page.Items[0]
+	require.Equal(t, int64(728850093), item.StatusID)
+	require.Equal(t, "首创证券伍彩云", item.Author.Name)
+	require.Len(t, item.Images, 1)
+	require.Empty(t, item.Symbols)
+	require.Equal(t, "2026-11-20T00:45:01Z", item.PublishedAt.UTC().Format(time.RFC3339))
 }
 
 func TestNewValidatesConfig(t *testing.T) {
-	_, err := New(config.XueqiuDocumentSourceConfig{BaseURL: "127.0.0.1:30010", RequestTimeoutMS: 1})
-	require.Error(t, err)
-	_, err = New(config.XueqiuDocumentSourceConfig{BaseURL: "http://127.0.0.1:30010"})
-	require.Error(t, err)
+	_, err := New("ths desk", config.WireDeskDocumentSourceConfig{BaseURL: "127.0.0.1:30013", RequestTimeoutMS: 1})
+	require.ErrorContains(t, err, "ths desk base_url")
+	_, err = New("ths desk", config.WireDeskDocumentSourceConfig{BaseURL: "http://127.0.0.1:30013"})
+	require.ErrorContains(t, err, "ths desk request_timeout_ms")
 }

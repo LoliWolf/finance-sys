@@ -18,6 +18,12 @@ func TestScheduledTaskTypeValuesAreStable(t *testing.T) {
 	if !ScheduledTaskTypeStockDailyPreviousDay.Valid() || !ScheduledTaskTypeEvaluationRecent.Valid() || !ScheduledTaskTypeOpenListDocuments.Valid() || !ScheduledTaskTypeSecurityMasterRefresh.Valid() {
 		t.Fatal("known scheduled task types must be valid")
 	}
+	if ScheduledTaskTypeXueqiuDocuments != 11 || ScheduledTaskTypeTHSDocuments != 12 {
+		t.Fatalf("wire desk task types changed: xueqiu=%d ths=%d", ScheduledTaskTypeXueqiuDocuments, ScheduledTaskTypeTHSDocuments)
+	}
+	if !ScheduledTaskTypeTHSDocuments.Valid() || ScheduledTaskTypeTHSDocuments.String() != "THS_DOCUMENTS" {
+		t.Fatal("THS document task type must be valid")
+	}
 	if ScheduledTaskType(99).Valid() {
 		t.Fatal("unknown scheduled task type must be invalid")
 	}

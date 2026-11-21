@@ -50,8 +50,8 @@ type ExternalDocumentIngestionService struct {
 	documents externalDocumentPipeline
 	logger    *slog.Logger
 	now       func() time.Time
-	// newXueqiuDesk builds the desk client; tests replace it.
-	newXueqiuDesk func(config.XueqiuDocumentSourceConfig) (xueqiuDesk, error)
+	// newWireDesk builds a wire desk client (Xueqiu, THS); tests replace it.
+	newWireDesk func(wireDeskSource, config.WireDeskDocumentSourceConfig) (wireDesk, error)
 	// sleep waits between analyses; tests replace it.
 	sleep func(context.Context, time.Duration) error
 }
@@ -64,12 +64,12 @@ type openListArticleResult struct {
 
 func NewExternalDocumentIngestionService(db *gorm.DB, runtime *config.Runtime, documents *DocumentService, logger *slog.Logger) *ExternalDocumentIngestionService {
 	service := &ExternalDocumentIngestionService{
-		db:            db,
-		runtime:       runtime,
-		logger:        logger,
-		now:           time.Now,
-		newXueqiuDesk: newXueqiuDeskClient,
-		sleep:         sleepContext,
+		db:          db,
+		runtime:     runtime,
+		logger:      logger,
+		now:         time.Now,
+		newWireDesk: newWireDeskClient,
+		sleep:       sleepContext,
 	}
 	// Keep a nil *DocumentService out of the interface so availability checks work.
 	if documents != nil {
