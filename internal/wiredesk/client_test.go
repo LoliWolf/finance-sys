@@ -47,6 +47,17 @@ func TestPendingQueriesAscendingPendingPage(t *testing.T) {
 	require.Equal(t, int64(8), page.NextAfterID)
 }
 
+func TestEastmoneyAuthorIDsAreDecodedWithoutFloatingPointRounding(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[{"id":1,"status_id":1799500915,"author":{"id":9688305908969519,"uid":"9688305908969519","name":"东方财富作者"},"text":"看好中际旭创","images":[{"url":"https://gbres.dfcfw.com/a.jpg"}],"published_at":"2026-11-21T09:00:00+08:00"}],"has_more":false}`))
+	}, "")
+	page, err := client.Pending(context.Background(), 0, 20)
+	require.NoError(t, err)
+	require.Equal(t, int64(9688305908969519), page.Items[0].Author.ID)
+	require.Equal(t, "东方财富作者", page.Items[0].Author.Name)
+	require.Len(t, page.Items[0].Images, 1)
+}
+
 func TestAckSplitsIntoDeskSizedBatches(t *testing.T) {
 	var batches []int
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

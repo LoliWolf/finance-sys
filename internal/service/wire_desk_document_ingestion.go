@@ -21,7 +21,7 @@ import (
 )
 
 // WireDeskIngestionRequest is the scheduled-task input of a wire desk run
-// (Xueqiu daily at 04:00, Tonghuashun at 06:00). Daily runs use the zero
+// (Xueqiu daily at 04:00, Tonghuashun at 06:00, East Money at 07:00). Daily runs use the zero
 // value; the admin API sets Manual.
 type WireDeskIngestionRequest struct {
 	Manual bool `json:"manual,omitempty"`
@@ -57,7 +57,7 @@ func newWireDeskClient(source wireDeskSource, cfg config.WireDeskDocumentSourceC
 	return wiredesk.New(source.deskName(), cfg)
 }
 
-// wireDeskSource describes one desk-backed external source. Both desks share
+// wireDeskSource describes one desk-backed external source. The desks share
 // the API contract; only configuration, provenance and labels differ.
 type wireDeskSource struct {
 	// label names the source in errors and logs ("Xueqiu", "THS").
@@ -97,6 +97,17 @@ var (
 			return fmt.Sprintf("https://t.10jqka.com.cn/pid_%d.shtml", a.StatusID)
 		},
 	}
+	eastmoneyWireDesk = wireDeskSource{
+		label: "Eastmoney", skipPrefix: "EASTMONEY", platform: "东方财富", filePrefix: "eastmoney",
+		sourceType: domain.ExternalDocumentSourceTypeEastmoney,
+		config:     func(c *config.Config) config.WireDeskDocumentSourceConfig { return c.ExternalDocuments.Eastmoney },
+		schedule:   func(c *config.Config) config.DailyTaskScheduleConfig { return c.Scheduler.EastmoneyDocumentIngestion },
+		// Guba post ids uniquely identify both short posts and 财富号 articles;
+		// the original URL stays in the provenance header.
+		sourcePath: func(a wiredesk.Article) string {
+			return fmt.Sprintf("https://guba.eastmoney.com/news,cfhpl,%d.html", a.StatusID)
+		},
+	}
 )
 
 func (s wireDeskSource) deskName() string { return strings.ToLower(s.label) + " desk" }
@@ -124,6 +135,11 @@ func (s *ExternalDocumentIngestionService) SyncTHS(ctx context.Context, request 
 	return s.syncWireDesk(ctx, thsWireDesk, request)
 }
 
+// SyncEastmoney runs the anonymous East Money wire desk source.
+func (s *ExternalDocumentIngestionService) SyncEastmoney(ctx context.Context, request WireDeskIngestionRequest) (*WireDeskIngestionResponse, error) {
+	return s.syncWireDesk(ctx, eastmoneyWireDesk, request)
+}
+
 // syncWireDesk reads every pending post from a wire desk (oldest first),
 // stores each as a document, analyzes up to analysis_concurrency at a time,
 // and ACKs every post that is stored in FinanceSys, whether or not its
@@ -149,7 +165,7 @@ func (s *ExternalDocumentIngestionService) syncWireDesk(ctx context.Context, des
 		return nil, err
 	}
 	limit := source.MaxArticlesPerRun
-	if request.MaxArticles > 0 && request.MaxArticles < limit {
+	if request.MaxArticles > 0 && (limit == 0 || request.MaxArticles < limit) {
 		limit = request.MaxArticles
 	}
 	gate := &analysisSpacing{interval: time.Duration(source.AnalysisIntervalMS) * time.Millisecond, now: s.now, sleep: s.sleep}
@@ -157,9 +173,9 @@ func (s *ExternalDocumentIngestionService) syncWireDesk(ctx context.Context, des
 	response := &WireDeskIngestionResponse{DocumentIDs: []int64{}}
 	documentIDs := make(map[int64]struct{})
 	var afterID int64
-	for response.FetchedCount < limit {
+	for limit == 0 || response.FetchedCount < limit {
 		pageSize := source.PageSize
-		if remaining := limit - response.FetchedCount; remaining < pageSize {
+		if remaining := limit - response.FetchedCount; limit > 0 && remaining < pageSize {
 			pageSize = remaining
 		}
 		page, err := desk.Pending(ctx, afterID, pageSize)
@@ -211,7 +227,7 @@ func (s *ExternalDocumentIngestionService) syncWireDesk(ctx context.Context, des
 		if !page.HasMore {
 			break
 		}
-		response.Truncated = response.FetchedCount >= limit
+		response.Truncated = limit > 0 && response.FetchedCount >= limit
 	}
 	response.finish(documentIDs)
 	if s.logger != nil {
@@ -471,6 +487,10 @@ func xueqiuScheduledRunSkipReason(run *db_model.ScheduledTaskRun, cfg *config.Co
 
 func thsScheduledRunSkipReason(run *db_model.ScheduledTaskRun, cfg *config.Config, now time.Time) (string, error) {
 	return wireDeskScheduledRunSkipReason(thsWireDesk, run, cfg, now)
+}
+
+func eastmoneyScheduledRunSkipReason(run *db_model.ScheduledTaskRun, cfg *config.Config, now time.Time) (string, error) {
+	return wireDeskScheduledRunSkipReason(eastmoneyWireDesk, run, cfg, now)
 }
 
 // wireDeskScheduledRunSkipReason mirrors the OpenList rules for the daily

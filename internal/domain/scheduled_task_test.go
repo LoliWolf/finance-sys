@@ -28,3 +28,9 @@ func TestScheduledTaskTypeValuesAreStable(t *testing.T) {
 		t.Fatal("unknown scheduled task type must be invalid")
 	}
 }
+
+func TestEastmoneyTaskTypeIsStable(t *testing.T) {
+	if ScheduledTaskTypeEastmoneyDocuments != 13 || !ScheduledTaskTypeEastmoneyDocuments.Valid() || ScheduledTaskTypeEastmoneyDocuments.String() != "EASTMONEY_DOCUMENTS" {
+		t.Fatal("East Money task type must be 13 / EASTMONEY_DOCUMENTS")
+	}
+}

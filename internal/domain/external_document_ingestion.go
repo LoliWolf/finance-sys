@@ -14,10 +14,12 @@ const (
 	// ExternalDocumentSourceTypeTHS is one post pulled from the Tonghuashun
 	// wire desk (ths-wire-desk) ACK queue.
 	ExternalDocumentSourceTypeTHS ExternalDocumentSourceType = 3
+	// ExternalDocumentSourceTypeEastmoney is a post from the East Money desk.
+	ExternalDocumentSourceTypeEastmoney ExternalDocumentSourceType = 4
 )
 
 func (t ExternalDocumentSourceType) Valid() bool {
-	return t == ExternalDocumentSourceTypeOpenList || t == ExternalDocumentSourceTypeXueqiu || t == ExternalDocumentSourceTypeTHS
+	return t == ExternalDocumentSourceTypeOpenList || t == ExternalDocumentSourceTypeXueqiu || t == ExternalDocumentSourceTypeTHS || t == ExternalDocumentSourceTypeEastmoney
 }
 
 func (t ExternalDocumentSourceType) String() string {
@@ -28,6 +30,8 @@ func (t ExternalDocumentSourceType) String() string {
 		return "XUEQIU"
 	case ExternalDocumentSourceTypeTHS:
 		return "THS"
+	case ExternalDocumentSourceTypeEastmoney:
+		return "EASTMONEY"
 	default:
 		return "UNKNOWN_" + strconv.FormatUint(uint64(t), 10)
 	}

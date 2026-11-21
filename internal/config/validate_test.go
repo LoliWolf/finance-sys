@@ -423,7 +423,7 @@ func TestValidateXueqiuDocumentSource(t *testing.T) {
 	for name, mutate := range map[string]func(*config.Config){
 		"external_documents.xueqiu.base_url":             func(c *config.Config) { c.ExternalDocuments.Xueqiu.BaseURL = "127.0.0.1:30010" },
 		"external_documents.xueqiu.page_size":            func(c *config.Config) { c.ExternalDocuments.Xueqiu.PageSize = 201 },
-		"external_documents.xueqiu.max_articles_per_run": func(c *config.Config) { c.ExternalDocuments.Xueqiu.MaxArticlesPerRun = 0 },
+		"external_documents.xueqiu.max_articles_per_run": func(c *config.Config) { c.ExternalDocuments.Xueqiu.MaxArticlesPerRun = -1 },
 		"external_documents.xueqiu.analysis_interval_ms": func(c *config.Config) { c.ExternalDocuments.Xueqiu.AnalysisIntervalMS = -1 },
 		"external_documents.xueqiu.analysis_concurrency": func(c *config.Config) { c.ExternalDocuments.Xueqiu.AnalysisConcurrency = 0 },
 		"external_documents.xueqiu.ack_by":               func(c *config.Config) { c.ExternalDocuments.Xueqiu.AckBy = " " },
@@ -474,5 +474,45 @@ func TestValidateTHSDocumentSource(t *testing.T) {
 	cfg = load()
 	cfg.ExternalDocuments.THS = config.WireDeskDocumentSourceConfig{}
 	cfg.Scheduler.THSDocumentIngestion.Enabled = false
+	require.NoError(t, config.Validate(&cfg))
+}
+
+func TestValidateEastmoneyDocumentSource(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	load := func() config.Config {
+		var cfg config.Config
+		require.NoError(t, json.Unmarshal(raw, &cfg))
+		cfg.ExternalDocuments.Eastmoney.Enabled = true
+		cfg.Scheduler.Enabled = true
+		cfg.Scheduler.EastmoneyDocumentIngestion.Enabled = true
+		return cfg
+	}
+	cfg := load()
+	require.NoError(t, config.Validate(&cfg))
+	require.Equal(t, 7, cfg.Scheduler.EastmoneyDocumentIngestion.Hour, "the example schedules the Eastmoney run at 07:00")
+	require.Equal(t, "东方财富", cfg.ExternalDocuments.Eastmoney.Institution)
+
+	for name, mutate := range map[string]func(*config.Config){
+		"external_documents.eastmoney.base_url":             func(c *config.Config) { c.ExternalDocuments.Eastmoney.BaseURL = "127.0.0.1:30015" },
+		"external_documents.eastmoney.request_timeout_ms":   func(c *config.Config) { c.ExternalDocuments.Eastmoney.RequestTimeoutMS = 0 },
+		"external_documents.eastmoney.page_size":            func(c *config.Config) { c.ExternalDocuments.Eastmoney.PageSize = 0 },
+		"external_documents.eastmoney.max_articles_per_run": func(c *config.Config) { c.ExternalDocuments.Eastmoney.MaxArticlesPerRun = -1 },
+		"external_documents.eastmoney.analysis_interval_ms": func(c *config.Config) { c.ExternalDocuments.Eastmoney.AnalysisIntervalMS = -5 },
+		"external_documents.eastmoney.analysis_concurrency": func(c *config.Config) { c.ExternalDocuments.Eastmoney.AnalysisConcurrency = 33 },
+		"external_documents.eastmoney.ack_by":               func(c *config.Config) { c.ExternalDocuments.Eastmoney.AckBy = "" },
+		"external_documents.eastmoney.institution":          func(c *config.Config) { c.ExternalDocuments.Eastmoney.Institution = " " },
+		"scheduler.eastmoney_document_ingestion.minute":     func(c *config.Config) { c.Scheduler.EastmoneyDocumentIngestion.Minute = 60 },
+		"external_documents.eastmoney must be enabled":      func(c *config.Config) { c.ExternalDocuments.Eastmoney.Enabled = false },
+	} {
+		cfg := load()
+		mutate(&cfg)
+		require.ErrorContains(t, config.Validate(&cfg), name)
+	}
+
+	// A disabled source is not validated, so an empty block is fine.
+	cfg = load()
+	cfg.ExternalDocuments.Eastmoney = config.WireDeskDocumentSourceConfig{}
+	cfg.Scheduler.EastmoneyDocumentIngestion.Enabled = false
 	require.NoError(t, config.Validate(&cfg))
 }

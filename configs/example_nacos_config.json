@@ -131,6 +131,18 @@
       "analysis_concurrency": 2,
       "analysis_interval_ms": 3000,
       "ack_by": "financesys"
+    },
+    "eastmoney": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:30015",
+      "api_token": "",
+      "institution": "东方财富",
+      "request_timeout_ms": 30000,
+      "page_size": 20,
+      "max_articles_per_run": 0,
+      "analysis_concurrency": 1,
+      "analysis_interval_ms": 5000,
+      "ack_by": "financesys"
     }
   },
   "llm": {
@@ -315,6 +327,11 @@
     "ths_document_ingestion": {
       "enabled": false,
       "hour": 6,
+      "minute": 0
+    },
+    "eastmoney_document_ingestion": {
+      "enabled": false,
+      "hour": 7,
       "minute": 0
     }
   },

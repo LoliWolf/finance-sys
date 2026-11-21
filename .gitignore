@@ -46,6 +46,9 @@ testdata/guziyuanpdf
 # Local Tonghuashun article source experiment, deliberately untracked.
 /ths_article_tool/
 
+# Local East Money (东方财富) article tool and wire desk, its own private repository.
+/eastmoney_tool/
+
 # Local credentials, trust material, data stores, and generated work files.
 .env
 .env.*

@@ -38,6 +38,10 @@ func (f *fakeWireDeskRuns) EnqueueManualTHSRun(_ context.Context, request servic
 	return f.record("ths", request)
 }
 
+func (f *fakeWireDeskRuns) EnqueueManualEastmoneyRun(_ context.Context, request service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {
+	return f.record("eastmoney", request)
+}
+
 func TestEnqueueWireDeskRunsRouteToTheirSource(t *testing.T) {
 	fake := &fakeWireDeskRuns{}
 	s := &Server{wireDeskRuns: fake}
@@ -75,4 +79,21 @@ func TestEnqueueTHSRunRejectsBadInput(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	(&Server{}).handleEnqueueTHSRun(recorder, httptest.NewRequest(http.MethodPost, "/", http.NoBody))
 	require.Equal(t, http.StatusNotImplemented, recorder.Code)
+}
+
+func TestEnqueueEastmoneyRun(t *testing.T) {
+	fake := &fakeWireDeskRuns{}
+	s := &Server{wireDeskRuns: fake}
+	w := httptest.NewRecorder()
+	s.handleEnqueueEastmoneyRun(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"max_articles":3,"skip_ack":true}`)))
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	require.Equal(t, []string{"eastmoney"}, fake.calls)
+	require.Equal(t, service.WireDeskIngestionRequest{MaxArticles: 3, SkipAck: true}, fake.got[0])
+	w = httptest.NewRecorder()
+	s.handleEnqueueEastmoneyRun(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"typo":1}`)))
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Len(t, fake.calls, 1)
+	w = httptest.NewRecorder()
+	(&Server{}).handleEnqueueEastmoneyRun(w, httptest.NewRequest(http.MethodPost, "/", http.NoBody))
+	require.Equal(t, http.StatusNotImplemented, w.Code)
 }

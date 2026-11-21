@@ -145,6 +145,21 @@
       "analysis_concurrency": 2,
       "analysis_interval_ms": 3000,
       "ack_by": "financesys"
+    },
+    "eastmoney": {
+      // 东方财富订阅台，匿名股吧/财富号文章。与其他订阅台共用持久化后 ACK 的契约。
+      "enabled": false,
+      "base_url": "http://127.0.0.1:30015",
+      "api_token": "",
+      "institution": "东方财富",
+      "request_timeout_ms": 30000,
+      "page_size": 20,
+      // 0 = 读取本轮遍历到的全部待 ACK 内容，不设每日篇数截断；正数可设安全上限。
+      "max_articles_per_run": 0,
+      // 刻意慢速：单篇串行，分析起跑至少间隔 5 秒，仍经过全局 processing.llm_max_qps。
+      "analysis_concurrency": 1,
+      "analysis_interval_ms": 5000,
+      "ack_by": "financesys"
     }
   },
   "llm": {
@@ -331,6 +346,12 @@
       // 北京时间每天 06:00 读取同花顺订阅台全部待 ACK 内容并全部 ACK；独立 ths 调度通道，不等雪球跑完。错过该分钟不补跑，内容留在队列等次日。
       "enabled": false,
       "hour": 6,
+      "minute": 0
+    },
+    "eastmoney_document_ingestion": {
+      // 北京时间每天 07:00 独立 eastmoney 通道执行；错过启动分钟不补跑，待 ACK 留到次日。
+      "enabled": false,
+      "hour": 7,
       "minute": 0
     }
   },

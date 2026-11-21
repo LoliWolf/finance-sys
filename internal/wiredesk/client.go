@@ -1,6 +1,6 @@
 // Package wiredesk reads the pending-ACK queue of a subscription wire desk
-// (the Xueqiu desk xueqiu-tool and the Tonghuashun desk ths-wire-desk share
-// one API contract) and ACKs posts once FinanceSys has stored them. Desks only
+// (the Xueqiu, Tonghuashun and East Money desks share one API contract)
+// and ACKs posts once FinanceSys has stored them. Desks only
 // keep original posts (no reposts or replies).
 package wiredesk
 
