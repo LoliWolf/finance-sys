@@ -19,6 +19,7 @@ const (
 	ScheduledTaskTypeTradingCancelOpen      ScheduledTaskType = 10
 	ScheduledTaskTypeXueqiuDocuments        ScheduledTaskType = 11
 	ScheduledTaskTypeTHSDocuments           ScheduledTaskType = 12
+	ScheduledTaskTypeEastmoneyDocuments     ScheduledTaskType = 13
 )
 
 func (t ScheduledTaskType) Valid() bool {
@@ -26,7 +27,7 @@ func (t ScheduledTaskType) Valid() bool {
 	case ScheduledTaskTypeStockDailyPreviousDay, ScheduledTaskTypeEvaluationRecent, ScheduledTaskTypeOpenListDocuments, ScheduledTaskTypeSecurityMasterRefresh,
 		ScheduledTaskTypeTradingPreopenDecision, ScheduledTaskTypeTradingExitMonitor, ScheduledTaskTypeTradingReconciliation, ScheduledTaskTypeTradingEODSnapshot:
 		return true
-	case ScheduledTaskTypeTradingPreflight, ScheduledTaskTypeTradingCancelOpen, ScheduledTaskTypeXueqiuDocuments, ScheduledTaskTypeTHSDocuments:
+	case ScheduledTaskTypeTradingPreflight, ScheduledTaskTypeTradingCancelOpen, ScheduledTaskTypeXueqiuDocuments, ScheduledTaskTypeTHSDocuments, ScheduledTaskTypeEastmoneyDocuments:
 		return true
 	default:
 		return false
@@ -59,6 +60,8 @@ func (t ScheduledTaskType) String() string {
 		return "XUEQIU_DOCUMENTS"
 	case ScheduledTaskTypeTHSDocuments:
 		return "THS_DOCUMENTS"
+	case ScheduledTaskTypeEastmoneyDocuments:
+		return "EASTMONEY_DOCUMENTS"
 	default:
 		return "UNKNOWN_" + strconv.FormatUint(uint64(t), 10)
 	}

@@ -9,8 +9,8 @@ func TestExternalDocumentEnumValuesAreStable(t *testing.T) {
 	if ExternalDocumentSourceTypeXueqiu != 2 || ExternalDocumentSourceTypeTHS != 3 {
 		t.Fatalf("wire desk source types changed: xueqiu=%d ths=%d", ExternalDocumentSourceTypeXueqiu, ExternalDocumentSourceTypeTHS)
 	}
-	if !ExternalDocumentSourceTypeTHS.Valid() || ExternalDocumentSourceTypeTHS.String() != "THS" || ExternalDocumentSourceType(4).Valid() {
-		t.Fatal("THS must be the only valid source type after Xueqiu")
+	if !ExternalDocumentSourceTypeTHS.Valid() || ExternalDocumentSourceTypeTHS.String() != "THS" || ExternalDocumentSourceType(5).Valid() {
+		t.Fatal("THS remains a valid source type")
 	}
 	wantStatuses := []ExternalDocumentIngestionStatus{
 		ExternalDocumentIngestionStatusDiscovered,
@@ -28,5 +28,11 @@ func TestExternalDocumentEnumValuesAreStable(t *testing.T) {
 	}
 	if !ExternalDocumentIngestionStatusSucceeded.Terminal() || ExternalDocumentIngestionStatusFailed.Terminal() {
 		t.Fatal("only succeeded ingestion rows should be terminal")
+	}
+}
+
+func TestEastmoneySourceTypeIsStable(t *testing.T) {
+	if ExternalDocumentSourceTypeEastmoney != 4 || !ExternalDocumentSourceTypeEastmoney.Valid() || ExternalDocumentSourceTypeEastmoney.String() != "EASTMONEY" {
+		t.Fatal("East Money source type must be 4 / EASTMONEY")
 	}
 }

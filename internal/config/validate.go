@@ -108,6 +108,9 @@ func Validate(cfg *Config) error {
 	if cfg.ExternalDocuments.THS.Enabled {
 		validateWireDeskDocumentSource("external_documents.ths", cfg.ExternalDocuments.THS, require)
 	}
+	if cfg.ExternalDocuments.Eastmoney.Enabled {
+		validateWireDeskDocumentSource("external_documents.eastmoney", cfg.ExternalDocuments.Eastmoney, require)
+	}
 	if cfg.MarketData.Enabled {
 		require(cfg.MarketData.Provider == "tushare", "market_data.provider must be tushare when market_data.enabled is true")
 		require(cfg.MarketData.Tushare.Enabled, "market_data.tushare.enabled must be true when market_data.enabled is true")
@@ -158,6 +161,10 @@ func Validate(cfg *Config) error {
 		if cfg.Scheduler.XueqiuDocumentIngestion.Enabled {
 			validateDailySchedule("scheduler.xueqiu_document_ingestion", cfg.Scheduler.XueqiuDocumentIngestion, require)
 			require(cfg.ExternalDocuments.Xueqiu.Enabled, "external_documents.xueqiu must be enabled when scheduler.xueqiu_document_ingestion is enabled")
+		}
+		if cfg.Scheduler.EastmoneyDocumentIngestion.Enabled {
+			validateDailySchedule("scheduler.eastmoney_document_ingestion", cfg.Scheduler.EastmoneyDocumentIngestion, require)
+			require(cfg.ExternalDocuments.Eastmoney.Enabled, "external_documents.eastmoney must be enabled when scheduler.eastmoney_document_ingestion is enabled")
 		}
 		if cfg.Scheduler.THSDocumentIngestion.Enabled {
 			validateDailySchedule("scheduler.ths_document_ingestion", cfg.Scheduler.THSDocumentIngestion, require)
@@ -384,7 +391,7 @@ func validateWireDeskDocumentSource(name string, cfg WireDeskDocumentSourceConfi
 	require(strings.TrimSpace(cfg.Institution) != "", name+".institution is required when enabled")
 	require(cfg.RequestTimeoutMS > 0, name+".request_timeout_ms must be positive when enabled")
 	require(cfg.PageSize >= 1 && cfg.PageSize <= 200, name+".page_size must be in [1,200] when enabled")
-	require(cfg.MaxArticlesPerRun > 0, name+".max_articles_per_run must be positive when enabled")
+	require(cfg.MaxArticlesPerRun >= 0, name+".max_articles_per_run must be zero (all pending) or positive when enabled")
 	require(cfg.AnalysisConcurrency >= 1 && cfg.AnalysisConcurrency <= 32, name+".analysis_concurrency must be in [1,32] when enabled")
 	require(cfg.AnalysisIntervalMS >= 0, name+".analysis_interval_ms must be zero or positive")
 	require(strings.TrimSpace(cfg.AckBy) != "", name+".ack_by is required when enabled")

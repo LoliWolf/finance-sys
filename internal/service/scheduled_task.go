@@ -105,9 +105,10 @@ func (s *ScheduledTaskService) execute(ctx context.Context, run *db_model.Schedu
 	// Model-calling document sources decide right before running whether the
 	// run is still wanted (schedule changed, start window missed, retried).
 	skipCheck := map[domain.ScheduledTaskType]func(*db_model.ScheduledTaskRun, *config.Config, time.Time) (string, error){
-		domain.ScheduledTaskTypeOpenListDocuments: openListScheduledRunSkipReason,
-		domain.ScheduledTaskTypeXueqiuDocuments:   xueqiuScheduledRunSkipReason,
-		domain.ScheduledTaskTypeTHSDocuments:      thsScheduledRunSkipReason,
+		domain.ScheduledTaskTypeOpenListDocuments:  openListScheduledRunSkipReason,
+		domain.ScheduledTaskTypeXueqiuDocuments:    xueqiuScheduledRunSkipReason,
+		domain.ScheduledTaskTypeTHSDocuments:       thsScheduledRunSkipReason,
+		domain.ScheduledTaskTypeEastmoneyDocuments: eastmoneyScheduledRunSkipReason,
 	}[taskType]
 	if skipCheck != nil {
 		if s.runtime == nil || s.runtime.Config() == nil {

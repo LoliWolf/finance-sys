@@ -35,6 +35,7 @@ type ConfigReloader interface {
 type wireDeskRunEnqueuer interface {
 	EnqueueManualXueqiuRun(context.Context, service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error)
 	EnqueueManualTHSRun(context.Context, service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error)
+	EnqueueManualEastmoneyRun(context.Context, service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error)
 }
 
 type Server struct {
@@ -178,6 +179,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/admin/config/reload", s.handleReloadConfig)
 		r.Post("/admin/external-documents/xueqiu/runs", s.handleEnqueueXueqiuRun)
 		r.Post("/admin/external-documents/ths/runs", s.handleEnqueueTHSRun)
+		r.Post("/admin/external-documents/eastmoney/runs", s.handleEnqueueEastmoneyRun)
 		r.Get("/admin/scheduled-task-runs/{id}", s.handleGetScheduledTaskRun)
 		r.Post("/trading/agent-runs", s.handleCreateTradingAgentRun)
 		r.Get("/trading/agent-runs/{id}", s.handleGetTradingAgentRun)

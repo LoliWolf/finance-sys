@@ -71,6 +71,9 @@ func NewAutomaticScheduler(
 	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeTHSDocuments, scheduler.handleTHSDocuments); err != nil {
 		return nil, err
 	}
+	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeEastmoneyDocuments, scheduler.handleEastmoneyDocuments); err != nil {
+		return nil, err
+	}
 	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeSecurityMasterRefresh, scheduler.handleSecurityMasterRefresh); err != nil {
 		return nil, err
 	}
@@ -100,7 +103,7 @@ func (s *AutomaticScheduler) Run(ctx context.Context) {
 		return
 	}
 	var lanes sync.WaitGroup
-	for _, lane := range []string{"enqueue", "general", "trading", "xueqiu", "ths"} {
+	for _, lane := range []string{"enqueue", "general", "trading", "xueqiu", "ths", "eastmoney"} {
 		lanes.Add(1)
 		go func(lane string) { defer lanes.Done(); s.runLane(ctx, lane) }(lane)
 	}
@@ -139,6 +142,9 @@ func (s *AutomaticScheduler) runLane(ctx context.Context, lane string) {
 				}
 				if lane == "ths" {
 					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeTHSDocuments}
+				}
+				if lane == "eastmoney" {
+					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeEastmoneyDocuments}
 				}
 				for n := 0; n < maxScheduledTasksPerTick; n++ {
 					var claimed bool
@@ -289,6 +295,22 @@ func (s *AutomaticScheduler) enqueueDueTasks(ctx context.Context, cfg *config.Co
 		}
 	}
 
+	eastmoneySchedule := cfg.Scheduler.EastmoneyDocumentIngestion
+	if eastmoneySchedule.Enabled {
+		scheduledAt := dailyScheduledAt(now, eastmoneySchedule.Hour, eastmoneySchedule.Minute)
+		if withinScheduledMinute(now, scheduledAt) {
+			if _, _, err := s.tasks.Enqueue(
+				ctx,
+				domain.ScheduledTaskTypeEastmoneyDocuments,
+				scheduledAt.Format(time.DateOnly),
+				scheduledAt,
+				WireDeskIngestionRequest{},
+			); err != nil {
+				return fmt.Errorf("enqueue Eastmoney document ingestion task: %w", err)
+			}
+		}
+	}
+
 	tradingOpen, calendarErr := cfg.Trading.Calendar.IsOpen(now)
 	if cfg.Trading.Scheduler.Enabled && calendarErr == nil && tradingOpen {
 		preflight := cfg.Trading.Scheduler.Preflight
@@ -420,6 +442,17 @@ func (s *AutomaticScheduler) handleTHSDocuments(ctx context.Context, rawInput js
 	return s.externalDocuments.SyncTHS(ctx, request)
 }
 
+func (s *AutomaticScheduler) handleEastmoneyDocuments(ctx context.Context, rawInput json.RawMessage) (any, error) {
+	if s.externalDocuments == nil {
+		return nil, fmt.Errorf("external document ingestion service is unavailable")
+	}
+	var request WireDeskIngestionRequest
+	if err := json.Unmarshal(rawInput, &request); err != nil {
+		return nil, fmt.Errorf("decode Eastmoney document ingestion scheduled task input: %w", err)
+	}
+	return s.externalDocuments.SyncEastmoney(ctx, request)
+}
+
 // EnqueueManualXueqiuRun queues an out-of-schedule Xueqiu run for the xueqiu
 // lane (admin API). It never runs inline in the HTTP request.
 func (s *AutomaticScheduler) EnqueueManualXueqiuRun(ctx context.Context, request WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {
@@ -430,6 +463,12 @@ func (s *AutomaticScheduler) EnqueueManualXueqiuRun(ctx context.Context, request
 // lane (admin API). It never runs inline in the HTTP request.
 func (s *AutomaticScheduler) EnqueueManualTHSRun(ctx context.Context, request WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {
 	return s.enqueueManualWireDeskRun(ctx, thsWireDesk, domain.ScheduledTaskTypeTHSDocuments, request)
+}
+
+// EnqueueManualEastmoneyRun queues an out-of-schedule East Money run for the eastmoney
+// lane (admin API). It never runs inline in the HTTP request.
+func (s *AutomaticScheduler) EnqueueManualEastmoneyRun(ctx context.Context, request WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {
+	return s.enqueueManualWireDeskRun(ctx, eastmoneyWireDesk, domain.ScheduledTaskTypeEastmoneyDocuments, request)
 }
 
 func (s *AutomaticScheduler) enqueueManualWireDeskRun(ctx context.Context, desc wireDeskSource, taskType domain.ScheduledTaskType, request WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {

@@ -132,11 +132,13 @@ type ExternalDocumentsConfig struct {
 	Xueqiu WireDeskDocumentSourceConfig `json:"xueqiu"`
 	// THS reads the Tonghuashun wire desk (ths-wire-desk).
 	THS WireDeskDocumentSourceConfig `json:"ths"`
+	// Eastmoney reads the anonymous East Money wire desk.
+	Eastmoney WireDeskDocumentSourceConfig `json:"eastmoney"`
 }
 
 // WireDeskDocumentSourceConfig reads original posts from a subscription wire
-// desk's pending-ACK queue and ACKs them once they are stored. The Xueqiu and
-// Tonghuashun desks share the same API contract.
+// desk's pending-ACK queue and ACKs them once they are stored. The Xueqiu,
+// Tonghuashun and East Money desks share the same API contract.
 type WireDeskDocumentSourceConfig struct {
 	Enabled bool `json:"enabled"`
 	// BaseURL is the wire desk root, e.g. http://127.0.0.1:30010.
@@ -146,10 +148,10 @@ type WireDeskDocumentSourceConfig struct {
 	Institution      string `json:"institution"`
 	RequestTimeoutMS int    `json:"request_timeout_ms"`
 	PageSize         int    `json:"page_size"`
-	// MaxArticlesPerRun bounds one run; the rest stays pending for the next.
+	// MaxArticlesPerRun bounds one run; zero drains all pending posts. A
+	// positive limit leaves the rest pending for the next run.
 	MaxArticlesPerRun int `json:"max_articles_per_run"`
-	// AnalysisConcurrency is how many posts are analyzed at once (an agent
-	// analysis takes minutes, so one at a time cannot finish a day's posts).
+	// AnalysisConcurrency is how many posts are analyzed at once.
 	AnalysisConcurrency int `json:"analysis_concurrency"`
 	// AnalysisIntervalMS is the minimum gap between two analysis starts of
 	// this source.
@@ -313,6 +315,7 @@ type SchedulerConfig struct {
 	OpenListDocumentIngestion      DailyTaskScheduleConfig                `json:"openlist_document_ingestion"`
 	XueqiuDocumentIngestion        DailyTaskScheduleConfig                `json:"xueqiu_document_ingestion"`
 	THSDocumentIngestion           DailyTaskScheduleConfig                `json:"ths_document_ingestion"`
+	EastmoneyDocumentIngestion     DailyTaskScheduleConfig                `json:"eastmoney_document_ingestion"`
 }
 
 type DailyTaskScheduleConfig struct {

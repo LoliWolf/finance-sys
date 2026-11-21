@@ -34,6 +34,14 @@ func (s *Server) handleEnqueueTHSRun(w http.ResponseWriter, r *http.Request) {
 	s.enqueueWireDeskRun(w, r, s.wireDeskRuns.EnqueueManualTHSRun)
 }
 
+func (s *Server) handleEnqueueEastmoneyRun(w http.ResponseWriter, r *http.Request) {
+	if s.wireDeskRuns == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("Eastmoney ingestion is not available"))
+		return
+	}
+	s.enqueueWireDeskRun(w, r, s.wireDeskRuns.EnqueueManualEastmoneyRun)
+}
+
 func (s *Server) enqueueWireDeskRun(w http.ResponseWriter, r *http.Request, enqueue func(context.Context, service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error)) {
 	var request service.WireDeskIngestionRequest
 	if r.Body != nil {
