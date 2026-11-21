@@ -128,12 +128,16 @@ type PDFOCRConfig struct {
 
 type ExternalDocumentsConfig struct {
 	OpenList OpenListDocumentSourceConfig `json:"openlist"`
-	Xueqiu   XueqiuDocumentSourceConfig   `json:"xueqiu"`
+	// Xueqiu reads the Xueqiu wire desk (xueqiu-tool).
+	Xueqiu WireDeskDocumentSourceConfig `json:"xueqiu"`
+	// THS reads the Tonghuashun wire desk (ths-wire-desk).
+	THS WireDeskDocumentSourceConfig `json:"ths"`
 }
 
-// XueqiuDocumentSourceConfig reads original posts from the Xueqiu wire desk
-// (xueqiu-tool) pending-ACK queue and ACKs them once they are stored.
-type XueqiuDocumentSourceConfig struct {
+// WireDeskDocumentSourceConfig reads original posts from a subscription wire
+// desk's pending-ACK queue and ACKs them once they are stored. The Xueqiu and
+// Tonghuashun desks share the same API contract.
+type WireDeskDocumentSourceConfig struct {
 	Enabled bool `json:"enabled"`
 	// BaseURL is the wire desk root, e.g. http://127.0.0.1:30010.
 	BaseURL string `json:"base_url"`
@@ -308,6 +312,7 @@ type SchedulerConfig struct {
 	RecommendationEvaluationRecent RecommendationEvaluationScheduleConfig `json:"recommendation_evaluation_recent"`
 	OpenListDocumentIngestion      DailyTaskScheduleConfig                `json:"openlist_document_ingestion"`
 	XueqiuDocumentIngestion        DailyTaskScheduleConfig                `json:"xueqiu_document_ingestion"`
+	THSDocumentIngestion           DailyTaskScheduleConfig                `json:"ths_document_ingestion"`
 }
 
 type DailyTaskScheduleConfig struct {

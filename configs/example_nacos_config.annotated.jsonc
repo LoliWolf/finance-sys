@@ -121,10 +121,29 @@
       "page_size": 20,
       // 单轮上限，剩余留到次日。
       "max_articles_per_run": 2000,
-      // Agent 单篇分析约 5–10 分钟，串行跑不完一天的帖子；6 篇并行时请求速率仍远低于 1 QPS。
+      // 同时在分析的篇数。短帖单篇分析实测平均 5–11 秒、最长约 45 秒；6 篇并行约 5 分钟处理 250 篇。
       "analysis_concurrency": 6,
       // 两次分析启动至少间隔 1 秒；全局另有 processing.llm_max_qps 兜底。
       "analysis_interval_ms": 1000,
+      "ack_by": "financesys"
+    },
+    "ths": {
+      // 同花顺订阅台（ths-wire-desk）待 ACK 队列：短观点、讨论帖、长文和投顾图文直播中的本人消息；不含问答、纯视频和付费内容。
+      // 与雪球同一套契约：入库成功即 ACK（含分析失败、纯图片跳过），入库失败的留在队列等下一轮。
+      "enabled": false,
+      // 订阅台与 FinanceSys 同在 Mac Server，走回环地址。
+      "base_url": "http://127.0.0.1:30013",
+      // 订阅台按用户决定不设鉴权。
+      "api_token": "",
+      "institution": "同花顺",
+      "request_timeout_ms": 30000,
+      "page_size": 20,
+      // 单轮上限，剩余留在队列到次日。
+      "max_articles_per_run": 1500,
+      // 刻意放慢：同时最多 2 篇在分析，两次分析启动至少间隔 3 秒（本来源 ≤0.34 次分析起跑/秒）。
+      // 与雪球、OpenList 同时运行时由全局 processing.llm_max_qps（<5）兜底，下游模型网关不超过 5 QPS。
+      "analysis_concurrency": 2,
+      "analysis_interval_ms": 3000,
       "ack_by": "financesys"
     }
   },
@@ -306,6 +325,12 @@
       // 北京时间每天 04:00 读取订阅台全部待 ACK 原创帖；独立调度通道，不阻塞 05:00 的 OpenList。错过该分钟不补跑，帖子留在队列等次日。
       "enabled": false,
       "hour": 4,
+      "minute": 0
+    },
+    "ths_document_ingestion": {
+      // 北京时间每天 06:00 读取同花顺订阅台全部待 ACK 内容并全部 ACK；独立 ths 调度通道，不等雪球跑完。错过该分钟不补跑，内容留在队列等次日。
+      "enabled": false,
+      "hour": 6,
       "minute": 0
     }
   },

@@ -436,3 +436,43 @@ func TestValidateXueqiuDocumentSource(t *testing.T) {
 		require.ErrorContains(t, config.Validate(&cfg), name)
 	}
 }
+
+func TestValidateTHSDocumentSource(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/example_nacos_config.json")
+	require.NoError(t, err)
+	load := func() config.Config {
+		var cfg config.Config
+		require.NoError(t, json.Unmarshal(raw, &cfg))
+		cfg.ExternalDocuments.THS.Enabled = true
+		cfg.Scheduler.Enabled = true
+		cfg.Scheduler.THSDocumentIngestion.Enabled = true
+		return cfg
+	}
+	cfg := load()
+	require.NoError(t, config.Validate(&cfg))
+	require.Equal(t, 6, cfg.Scheduler.THSDocumentIngestion.Hour, "the example schedules the THS run at 06:00")
+	require.Equal(t, "同花顺", cfg.ExternalDocuments.THS.Institution)
+
+	for name, mutate := range map[string]func(*config.Config){
+		"external_documents.ths.base_url":             func(c *config.Config) { c.ExternalDocuments.THS.BaseURL = "127.0.0.1:30013" },
+		"external_documents.ths.request_timeout_ms":   func(c *config.Config) { c.ExternalDocuments.THS.RequestTimeoutMS = 0 },
+		"external_documents.ths.page_size":            func(c *config.Config) { c.ExternalDocuments.THS.PageSize = 0 },
+		"external_documents.ths.max_articles_per_run": func(c *config.Config) { c.ExternalDocuments.THS.MaxArticlesPerRun = -1 },
+		"external_documents.ths.analysis_interval_ms": func(c *config.Config) { c.ExternalDocuments.THS.AnalysisIntervalMS = -5 },
+		"external_documents.ths.analysis_concurrency": func(c *config.Config) { c.ExternalDocuments.THS.AnalysisConcurrency = 33 },
+		"external_documents.ths.ack_by":               func(c *config.Config) { c.ExternalDocuments.THS.AckBy = "" },
+		"external_documents.ths.institution":          func(c *config.Config) { c.ExternalDocuments.THS.Institution = " " },
+		"scheduler.ths_document_ingestion.minute":     func(c *config.Config) { c.Scheduler.THSDocumentIngestion.Minute = 60 },
+		"external_documents.ths must be enabled":      func(c *config.Config) { c.ExternalDocuments.THS.Enabled = false },
+	} {
+		cfg := load()
+		mutate(&cfg)
+		require.ErrorContains(t, config.Validate(&cfg), name)
+	}
+
+	// A disabled source is not validated, so an empty block is fine.
+	cfg = load()
+	cfg.ExternalDocuments.THS = config.WireDeskDocumentSourceConfig{}
+	cfg.Scheduler.THSDocumentIngestion.Enabled = false
+	require.NoError(t, config.Validate(&cfg))
+}

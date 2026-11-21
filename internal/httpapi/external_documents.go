@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,20 +9,33 @@ import (
 
 	"finance-sys/internal/dal"
 	"finance-sys/internal/domain"
+	"finance-sys/internal/domain/db_model"
 	"finance-sys/internal/service"
 
 	"github.com/go-chi/chi/v5"
 )
 
-// handleEnqueueXueqiuRun queues an out-of-schedule Xueqiu ingestion run. The
-// run executes in the scheduler's xueqiu lane; poll it via
-// GET /admin/scheduled-task-runs/{id}.
+// handleEnqueueXueqiuRun and handleEnqueueTHSRun queue an out-of-schedule
+// wire desk ingestion run. The run executes in the scheduler's xueqiu / ths
+// lane; poll it via GET /admin/scheduled-task-runs/{id}.
 func (s *Server) handleEnqueueXueqiuRun(w http.ResponseWriter, r *http.Request) {
-	if s.xueqiuRuns == nil {
+	if s.wireDeskRuns == nil {
 		writeError(w, http.StatusNotImplemented, errors.New("Xueqiu ingestion is not available"))
 		return
 	}
-	var request service.XueqiuDocumentIngestionRequest
+	s.enqueueWireDeskRun(w, r, s.wireDeskRuns.EnqueueManualXueqiuRun)
+}
+
+func (s *Server) handleEnqueueTHSRun(w http.ResponseWriter, r *http.Request) {
+	if s.wireDeskRuns == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("THS ingestion is not available"))
+		return
+	}
+	s.enqueueWireDeskRun(w, r, s.wireDeskRuns.EnqueueManualTHSRun)
+}
+
+func (s *Server) enqueueWireDeskRun(w http.ResponseWriter, r *http.Request, enqueue func(context.Context, service.WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error)) {
+	var request service.WireDeskIngestionRequest
 	if r.Body != nil {
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
@@ -30,7 +44,7 @@ func (s *Server) handleEnqueueXueqiuRun(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	run, err := s.xueqiuRuns.EnqueueManualXueqiuRun(r.Context(), request)
+	run, err := enqueue(r.Context(), request)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

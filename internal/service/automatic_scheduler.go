@@ -68,6 +68,9 @@ func NewAutomaticScheduler(
 	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeXueqiuDocuments, scheduler.handleXueqiuDocuments); err != nil {
 		return nil, err
 	}
+	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeTHSDocuments, scheduler.handleTHSDocuments); err != nil {
+		return nil, err
+	}
 	if err := tasks.RegisterHandler(domain.ScheduledTaskTypeSecurityMasterRefresh, scheduler.handleSecurityMasterRefresh); err != nil {
 		return nil, err
 	}
@@ -97,7 +100,7 @@ func (s *AutomaticScheduler) Run(ctx context.Context) {
 		return
 	}
 	var lanes sync.WaitGroup
-	for _, lane := range []string{"enqueue", "general", "trading", "xueqiu"} {
+	for _, lane := range []string{"enqueue", "general", "trading", "xueqiu", "ths"} {
 		lanes.Add(1)
 		go func(lane string) { defer lanes.Done(); s.runLane(ctx, lane) }(lane)
 	}
@@ -127,10 +130,15 @@ func (s *AutomaticScheduler) runLane(ctx context.Context, lane string) {
 				if lane == "trading" {
 					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeTradingPreopenDecision, domain.ScheduledTaskTypeTradingExitMonitor, domain.ScheduledTaskTypeTradingReconciliation, domain.ScheduledTaskTypeTradingEODSnapshot, domain.ScheduledTaskTypeTradingPreflight, domain.ScheduledTaskTypeTradingCancelOpen}
 				}
-				// The Xueqiu run analyzes posts one by one for up to an hour or
-				// more; its own lane keeps it from delaying the 05:00 OpenList start.
+				// Wire desk runs analyze posts for an hour or more; their own
+				// lanes keep them from delaying the 05:00 OpenList start or each
+				// other (a THS run queued behind Xueqiu would miss its start
+				// minute and be skipped).
 				if lane == "xueqiu" {
 					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeXueqiuDocuments}
+				}
+				if lane == "ths" {
+					types = []domain.ScheduledTaskType{domain.ScheduledTaskTypeTHSDocuments}
 				}
 				for n := 0; n < maxScheduledTasksPerTick; n++ {
 					var claimed bool
@@ -258,9 +266,25 @@ func (s *AutomaticScheduler) enqueueDueTasks(ctx context.Context, cfg *config.Co
 				domain.ScheduledTaskTypeXueqiuDocuments,
 				scheduledAt.Format(time.DateOnly),
 				scheduledAt,
-				XueqiuDocumentIngestionRequest{},
+				WireDeskIngestionRequest{},
 			); err != nil {
 				return fmt.Errorf("enqueue Xueqiu document ingestion task: %w", err)
+			}
+		}
+	}
+
+	thsSchedule := cfg.Scheduler.THSDocumentIngestion
+	if thsSchedule.Enabled {
+		scheduledAt := dailyScheduledAt(now, thsSchedule.Hour, thsSchedule.Minute)
+		if withinScheduledMinute(now, scheduledAt) {
+			if _, _, err := s.tasks.Enqueue(
+				ctx,
+				domain.ScheduledTaskTypeTHSDocuments,
+				scheduledAt.Format(time.DateOnly),
+				scheduledAt,
+				WireDeskIngestionRequest{},
+			); err != nil {
+				return fmt.Errorf("enqueue THS document ingestion task: %w", err)
 			}
 		}
 	}
@@ -378,19 +402,40 @@ func (s *AutomaticScheduler) handleXueqiuDocuments(ctx context.Context, rawInput
 	if s.externalDocuments == nil {
 		return nil, fmt.Errorf("external document ingestion service is unavailable")
 	}
-	var request XueqiuDocumentIngestionRequest
+	var request WireDeskIngestionRequest
 	if err := json.Unmarshal(rawInput, &request); err != nil {
 		return nil, fmt.Errorf("decode Xueqiu document ingestion scheduled task input: %w", err)
 	}
 	return s.externalDocuments.SyncXueqiu(ctx, request)
 }
 
+func (s *AutomaticScheduler) handleTHSDocuments(ctx context.Context, rawInput json.RawMessage) (any, error) {
+	if s.externalDocuments == nil {
+		return nil, fmt.Errorf("external document ingestion service is unavailable")
+	}
+	var request WireDeskIngestionRequest
+	if err := json.Unmarshal(rawInput, &request); err != nil {
+		return nil, fmt.Errorf("decode THS document ingestion scheduled task input: %w", err)
+	}
+	return s.externalDocuments.SyncTHS(ctx, request)
+}
+
 // EnqueueManualXueqiuRun queues an out-of-schedule Xueqiu run for the xueqiu
 // lane (admin API). It never runs inline in the HTTP request.
-func (s *AutomaticScheduler) EnqueueManualXueqiuRun(ctx context.Context, request XueqiuDocumentIngestionRequest) (*db_model.ScheduledTaskRun, error) {
+func (s *AutomaticScheduler) EnqueueManualXueqiuRun(ctx context.Context, request WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {
+	return s.enqueueManualWireDeskRun(ctx, xueqiuWireDesk, domain.ScheduledTaskTypeXueqiuDocuments, request)
+}
+
+// EnqueueManualTHSRun queues an out-of-schedule Tonghuashun run for the ths
+// lane (admin API). It never runs inline in the HTTP request.
+func (s *AutomaticScheduler) EnqueueManualTHSRun(ctx context.Context, request WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {
+	return s.enqueueManualWireDeskRun(ctx, thsWireDesk, domain.ScheduledTaskTypeTHSDocuments, request)
+}
+
+func (s *AutomaticScheduler) enqueueManualWireDeskRun(ctx context.Context, desc wireDeskSource, taskType domain.ScheduledTaskType, request WireDeskIngestionRequest) (*db_model.ScheduledTaskRun, error) {
 	cfg := s.runtime.Config()
-	if cfg == nil || !cfg.ExternalDocuments.Xueqiu.Enabled {
-		return nil, fmt.Errorf("Xueqiu document ingestion is disabled")
+	if cfg == nil || !desc.config(cfg).Enabled {
+		return nil, fmt.Errorf("%s document ingestion is disabled", desc.label)
 	}
 	if request.MaxArticles < 0 {
 		return nil, fmt.Errorf("max_articles must not be negative")
@@ -398,7 +443,7 @@ func (s *AutomaticScheduler) EnqueueManualXueqiuRun(ctx context.Context, request
 	request.Manual = true
 	now := s.now()
 	key := "manual-" + now.UTC().Format("20060102T150405.000000000Z")
-	_, run, err := s.tasks.Enqueue(ctx, domain.ScheduledTaskTypeXueqiuDocuments, key, now, request)
+	_, run, err := s.tasks.Enqueue(ctx, taskType, key, now, request)
 	return run, err
 }
 

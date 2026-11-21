@@ -119,6 +119,18 @@
       "analysis_concurrency": 6,
       "analysis_interval_ms": 1000,
       "ack_by": "financesys"
+    },
+    "ths": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:30013",
+      "api_token": "",
+      "institution": "同花顺",
+      "request_timeout_ms": 30000,
+      "page_size": 20,
+      "max_articles_per_run": 1500,
+      "analysis_concurrency": 2,
+      "analysis_interval_ms": 3000,
+      "ack_by": "financesys"
     }
   },
   "llm": {
@@ -298,6 +310,11 @@
     "xueqiu_document_ingestion": {
       "enabled": false,
       "hour": 4,
+      "minute": 0
+    },
+    "ths_document_ingestion": {
+      "enabled": false,
+      "hour": 6,
       "minute": 0
     }
   },

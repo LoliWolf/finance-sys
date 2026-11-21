@@ -6,6 +6,12 @@ func TestExternalDocumentEnumValuesAreStable(t *testing.T) {
 	if ExternalDocumentSourceTypeOpenList != 1 {
 		t.Fatalf("OpenList source type changed: %d", ExternalDocumentSourceTypeOpenList)
 	}
+	if ExternalDocumentSourceTypeXueqiu != 2 || ExternalDocumentSourceTypeTHS != 3 {
+		t.Fatalf("wire desk source types changed: xueqiu=%d ths=%d", ExternalDocumentSourceTypeXueqiu, ExternalDocumentSourceTypeTHS)
+	}
+	if !ExternalDocumentSourceTypeTHS.Valid() || ExternalDocumentSourceTypeTHS.String() != "THS" || ExternalDocumentSourceType(4).Valid() {
+		t.Fatal("THS must be the only valid source type after Xueqiu")
+	}
 	wantStatuses := []ExternalDocumentIngestionStatus{
 		ExternalDocumentIngestionStatusDiscovered,
 		ExternalDocumentIngestionStatusDownloading,
